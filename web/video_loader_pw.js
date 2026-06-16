@@ -56,7 +56,6 @@ app.registerExtension({
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
                 const node = this;
                 
-                // Store accurate metadata from backend to enforce limits
                 node.accurateFrameCount = 0;
                 node.accurateDuration = 0;
 
@@ -107,13 +106,11 @@ app.registerExtension({
                 node.syncFramesFromTime = function () {
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
-                    // FIX 2: Default fallback framerate changed to 25
                     const fr = frameRateWidget.value || 25;
                     
                     if (startTimeWidget && startFrameWidget) startFrameWidget.value = Math.max(0, Math.round(startTimeWidget.value * fr));
                     
                     let calcEndFrame = Math.round(endTimeWidget.value * fr);
-                    // FIX 3: Clamp end_frame to not exceed accurate video length
                     if (node.accurateFrameCount > 0 && calcEndFrame > node.accurateFrameCount) {
                         calcEndFrame = node.accurateFrameCount;
                         if (endTimeWidget) endTimeWidget.value = parseFloat((calcEndFrame / fr).toFixed(3));
@@ -124,7 +121,6 @@ app.registerExtension({
                         let calcDurFrames = Math.round(durationWidget.value * fr);
                         const startF = parseInt(startFrameWidget.value) || 0;
                         const endF = parseInt(endFrameWidget.value) || 0;
-                        // FIX 4: Clamp duration to not exceed (end - start)
                         const maxDurFrames = Math.max(0, endF - startF);
                         
                         if (calcDurFrames > maxDurFrames) {
@@ -139,13 +135,11 @@ app.registerExtension({
                 node.syncTimeFromFrames = function () {
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
-                    // FIX 2: Default fallback framerate changed to 25
                     const fr = frameRateWidget.value || 25;
                     
                     if (startTimeWidget && startFrameWidget) startTimeWidget.value = parseFloat(Math.max(0, startFrameWidget.value / fr).toFixed(3));
                     
                     let calcEndTime = endFrameWidget.value / fr;
-                    // FIX 3: Clamp end_time to not exceed accurate video duration
                     if (node.accurateDuration > 0 && calcEndTime > node.accurateDuration) {
                         calcEndTime = node.accurateDuration;
                         if (endFrameWidget) endFrameWidget.value = Math.round(calcEndTime * fr);
@@ -156,7 +150,6 @@ app.registerExtension({
                         let calcDur = durationFramesWidget.value / fr;
                         const startT = parseFloat(startTimeWidget.value) || 0;
                         const endT = parseFloat(endTimeWidget.value) || 0;
-                        // FIX 4: Clamp duration to not exceed (end - start)
                         const maxDur = Math.max(0, endT - startT);
                         
                         if (calcDur > maxDur) {
@@ -203,13 +196,16 @@ app.registerExtension({
                     };
                 }
 
-                const applyVideoPath = (rawPath) => {
+                // FIX: Added 'force' parameter to allow manual refresh even if the path hasn't changed
+                const applyVideoPath = (rawPath, force = false) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
-                    const isNewFile = (p !== node._lastLoadedVideoPath);
+                    const isNewFile = force || (p !== node._lastLoadedVideoPath);
                     node._lastLoadedVideoPath = p;
+
                     if (videoWidget) videoWidget.value = p;
-                    if (isNewFile) {
+
+                    if (isNewFile || force) {
                         if (node.updatePreview) node.updatePreview(p);
                         if (startTimeWidget) startTimeWidget.value = 0;
                         if (endTimeWidget) endTimeWidget.value = 0;
@@ -235,7 +231,7 @@ app.registerExtension({
                             
                             if (info.source_frame_count !== undefined && endFrameWidget && durationFramesWidget) {
                                 node.accurateFrameCount = info.source_frame_count;
-                                node.accurateDuration = info.source_duration || 0; // Store accurate duration
+                                node.accurateDuration = info.source_duration || 0;
                                 
                                 const fr = info.loaded_fps || frameRateWidget.value || 25;
                                 const currentEndFrame = parseInt(endFrameWidget.value) || 0;
@@ -308,7 +304,21 @@ app.registerExtension({
                 fileInput.style.display = "none";
                 document.body.appendChild(fileInput);
 
-                const btnWidget = this.addWidget("button", "choose file to upload", null, () => { fileInput.click(); });
+                const btnWidget = this.addWidget("button", "choose file to upload", null, () => { 
+                    fileInput.click(); 
+                });
+
+                // NEW: Add a Refresh button right below the upload button
+                const refreshBtnWidget = this.addWidget("button", "Refresh Video", null, () => {
+                    if (videoWidget && videoWidget.value) {
+                        // Force re-apply the video path to instantly refresh preview and timeline
+                        applyVideoPath(videoWidget.value, true);
+                        
+                        // Optional: If you want this button to also trigger the entire ComfyUI workflow execution, 
+                        // uncomment the line below. By default, it only refreshes the frontend UI state.
+                        // app.queuePrompt(0); 
+                    }
+                });
 
                 const uploadFile = async (file) => {
                     try {
@@ -474,7 +484,7 @@ app.registerExtension({
 
                 const trimLength = document.createElement("span");
                 Object.assign(trimLength.style, { display: "flex", alignItems: "center", fontSize: "12px", color: "#38bdf8", fontWeight: "bold", background: "rgba(56, 189, 248, 0.1)", padding: "0 6px", borderRadius: "4px", whiteSpace: "nowrap", height: "22px", boxSizing: "border-box", cursor: "pointer" });
-                trimLength.textContent = "Trimmed: 0:00";
+                trimLength.textContent = "Trimmed: 0.00s";
 
                 const cropBtn = document.createElement("button");
                 cropBtn.textContent = "Crop";
@@ -867,7 +877,6 @@ app.registerExtension({
                         let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
                         let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
                         
-                        // FIX 4: Limit duration to not exceed (end_time - start_time)
                         let maxDur = Math.max(0, e - s);
                         if (d > maxDur) d = maxDur;
                         if (d < 0) d = 0;
@@ -903,7 +912,6 @@ app.registerExtension({
                         let s = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
                         let e = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
                         
-                        // FIX 4: Limit duration frames to not exceed (end_frame - start_frame)
                         let maxDurFrames = Math.max(0, e - s);
                         if (d > maxDurFrames) d = maxDurFrames;
                         if (d < 0) d = 0;
@@ -928,15 +936,8 @@ app.registerExtension({
                     };
                 }
 
-                // FIX 1: Ensure time formatting strictly uses seconds/minutes/hours
                 const formatTime = (secs) => {
-                    const h = Math.floor(secs / 3600);
-                    const m = Math.floor((secs % 3600) / 60);
-                    const s = Math.floor(secs % 60);
-                    const mStr = m.toString().padStart(2, '0');
-                    const sStr = s.toString().padStart(2, '0');
-                    if (h > 0) return `${h}:${mStr}:${sStr}`;
-                    return `${m}:${sStr}`;
+                    return `${secs.toFixed(2)}s`;
                 };
 
                 const updateRuler = () => {
@@ -961,7 +962,6 @@ app.registerExtension({
                         tickWrapper.appendChild(line);
                         if (isMajor) {
                             const label = document.createElement("div");
-                            // FIX 1: Show seconds format when not in frames mode
                             label.textContent = isFrames ? Math.round(t * fr) : formatTime(t);
                             tickWrapper.appendChild(label);
                         }
@@ -991,7 +991,6 @@ app.registerExtension({
                     const isFrames = displayModeWidget && displayModeWidget.value === "frames";
                     const fr = frameRateWidget ? frameRateWidget.value : 25;
 
-                    // FIX 1: Show seconds format for Trimmed when not in frames mode
                     trimLength.textContent = isFrames ? `Trimmed: ${Math.round(currentDur * fr)} frames` : `Trimmed: ${formatTime(currentDur)}`;
 
                     if (duration > 0 && !isUpdatingDuration) {
@@ -1007,7 +1006,7 @@ app.registerExtension({
 
                 videoPreview.onloadedmetadata = () => {
                     duration = videoPreview.duration;
-                    node.accurateDuration = duration; // FIX 3: Store accurate duration on load
+                    node.accurateDuration = duration;
                     if (endTimeWidget && (endTimeWidget.value === 0 || endTimeWidget.value > duration)) {
                         endTimeWidget.value = duration;
                         node.syncFramesFromTime();
