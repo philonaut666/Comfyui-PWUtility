@@ -480,11 +480,10 @@ app.registerExtension({
             if (enable && this.properties.toggleRestriction === 'always_one' && !opts.skipAlwaysOne) {
                 const filteredNames = this.filterGroups(this.getWorkflowGroups()).map(g => g.title);
                 const enabledOthers = this.properties.groups.filter(g => g.enabled && g.group_name !== groupName && filteredNames.includes(g.group_name));
-                const switchMode = this.properties.switchMode || 'bypass';
-                const muteMode = switchMode === 'bypass' ? 4 : 2;
+                
+                // 【核心修复】通过正常流程关闭其他组，以触发它们的 When Group OFF 联动规则
                 enabledOthers.forEach(g => {
-                    const otherGroup = app.graph._groups.find(grp => grp.title === g.group_name);
-                    if (otherGroup) { changeModeOfNodes(getNodesInGroupGlobal(otherGroup), muteMode); g.enabled = false; }
+                    this.toggleGroup(g.group_name, false, { skipAlwaysOne: true, skipUIUpdate: true });
                 });
             }
 
@@ -550,10 +549,12 @@ app.registerExtension({
                 }
             }
             
-            const allAdvNodes = app.graph._nodes.filter(n => n.type === "GroupSwitchADV" || n.comfyClass === "GroupSwitchADV");
-            for (const node of allAdvNodes) node.refreshWidgets();
-            app.graph.setDirtyCanvas(true, true);
-            window.dispatchEvent(new CustomEvent('group-mute-changed', { detail: { sourceId: this._gsaId } }));
+            if (!opts.skipUIUpdate) {
+                const allAdvNodes = app.graph._nodes.filter(n => n.type === "GroupSwitchADV" || n.comfyClass === "GroupSwitchADV");
+                for (const node of allAdvNodes) node.refreshWidgets();
+                app.graph.setDirtyCanvas(true, true);
+                window.dispatchEvent(new CustomEvent('group-mute-changed', { detail: { sourceId: this._gsaId } }));
+            }
         };
 
         nodeType.prototype.navigateTo = function (group) {
