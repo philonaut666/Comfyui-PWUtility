@@ -46,7 +46,7 @@ app.registerExtension({
                         for (let w of this.widgets) {
                             if (w === this.domWidget) break;
                             yOffset += (w.computeSize ? w.computeSize()[1] : 20) + 4;
-                }
+                        }
                     }
                     this.domWidget.element.style.height = `${Math.max(150, size[1] - yOffset - 18)}px`;
                 }
@@ -55,7 +55,10 @@ app.registerExtension({
             nodeType.prototype.onNodeCreated = function () {
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
                 const node = this;
-                node.accurateFrameCount = 0; // Store accurate frame count from backend
+                
+                // Store accurate metadata from backend to enforce limits
+                node.accurateFrameCount = 0;
+                node.accurateDuration = 0;
 
                 const videoWidget = this.widgets.find((w) => w.name === "video");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
@@ -104,21 +107,25 @@ app.registerExtension({
                 node.syncFramesFromTime = function () {
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
-                    const fr = frameRateWidget.value || 24;
+                    // FIX 2: Default fallback framerate changed to 25
+                    const fr = frameRateWidget.value || 25;
+                    
                     if (startTimeWidget && startFrameWidget) startFrameWidget.value = Math.max(0, Math.round(startTimeWidget.value * fr));
                     
                     let calcEndFrame = Math.round(endTimeWidget.value * fr);
-                    // FIX: Clamp calculated end frame to the accurate frame count to prevent +1 float rounding errors
+                    // FIX 3: Clamp end_frame to not exceed accurate video length
                     if (node.accurateFrameCount > 0 && calcEndFrame > node.accurateFrameCount) {
                         calcEndFrame = node.accurateFrameCount;
                         if (endTimeWidget) endTimeWidget.value = parseFloat((calcEndFrame / fr).toFixed(3));
                     }
-                    if (endTimeWidget && endFrameWidget) endFrameWidget.value = calcEndFrame;
+                    if (endTimeWidget && endFrameWidget) endFrameWidget.value = Math.max(0, calcEndFrame);
                     
                     if (durationWidget && durationFramesWidget) {
                         let calcDurFrames = Math.round(durationWidget.value * fr);
                         const startF = parseInt(startFrameWidget.value) || 0;
-                        const maxDurFrames = Math.max(0, (node.accurateFrameCount > 0 ? node.accurateFrameCount : 999999) - startF);
+                        const endF = parseInt(endFrameWidget.value) || 0;
+                        // FIX 4: Clamp duration to not exceed (end - start)
+                        const maxDurFrames = Math.max(0, endF - startF);
                         
                         if (calcDurFrames > maxDurFrames) {
                             calcDurFrames = maxDurFrames;
@@ -132,10 +139,32 @@ app.registerExtension({
                 node.syncTimeFromFrames = function () {
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
-                    const fr = frameRateWidget.value || 24;
-                    if (startTimeWidget && startFrameWidget) startTimeWidget.value = parseFloat((startFrameWidget.value / fr).toFixed(3));
-                    if (endTimeWidget && endFrameWidget) endTimeWidget.value = parseFloat((endFrameWidget.value / fr).toFixed(3));
-                    if (durationWidget && durationFramesWidget) durationWidget.value = parseFloat((durationFramesWidget.value / fr).toFixed(3));
+                    // FIX 2: Default fallback framerate changed to 25
+                    const fr = frameRateWidget.value || 25;
+                    
+                    if (startTimeWidget && startFrameWidget) startTimeWidget.value = parseFloat(Math.max(0, startFrameWidget.value / fr).toFixed(3));
+                    
+                    let calcEndTime = endFrameWidget.value / fr;
+                    // FIX 3: Clamp end_time to not exceed accurate video duration
+                    if (node.accurateDuration > 0 && calcEndTime > node.accurateDuration) {
+                        calcEndTime = node.accurateDuration;
+                        if (endFrameWidget) endFrameWidget.value = Math.round(calcEndTime * fr);
+                    }
+                    if (endTimeWidget && endFrameWidget) endTimeWidget.value = parseFloat(Math.max(0, calcEndTime).toFixed(3));
+                    
+                    if (durationWidget && durationFramesWidget) {
+                        let calcDur = durationFramesWidget.value / fr;
+                        const startT = parseFloat(startTimeWidget.value) || 0;
+                        const endT = parseFloat(endTimeWidget.value) || 0;
+                        // FIX 4: Clamp duration to not exceed (end - start)
+                        const maxDur = Math.max(0, endT - startT);
+                        
+                        if (calcDur > maxDur) {
+                            calcDur = maxDur;
+                            if (durationFramesWidget) durationFramesWidget.value = Math.round(calcDur * fr);
+                        }
+                        durationWidget.value = parseFloat(calcDur.toFixed(3));
+                    }
                     isSyncing = false;
                 };
 
@@ -195,7 +224,6 @@ app.registerExtension({
                         applyVideoPath(out.video_path[0]);
                     }
                     
-                    // FIX: Parse video_info from the 'ui' output to get accurate metadata and fix FPS display
                     if (out && out.video_info) {
                         try {
                             const infoStr = Array.isArray(out.video_info) ? out.video_info[0] : out.video_info;
@@ -207,11 +235,12 @@ app.registerExtension({
                             
                             if (info.source_frame_count !== undefined && endFrameWidget && durationFramesWidget) {
                                 node.accurateFrameCount = info.source_frame_count;
-                                const fr = info.loaded_fps || frameRateWidget.value || 24;
+                                node.accurateDuration = info.source_duration || 0; // Store accurate duration
+                                
+                                const fr = info.loaded_fps || frameRateWidget.value || 25;
                                 const currentEndFrame = parseInt(endFrameWidget.value) || 0;
                                 const autoCalcEndFrame = Math.round((info.source_duration || 0) * fr);
                                 
-                                // Auto-correct if the current values look like default/auto-calculated ones (prevents overwriting manual crops)
                                 if (currentEndFrame === 0 || Math.abs(currentEndFrame - autoCalcEndFrame) <= 2 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
                                     endFrameWidget.value = node.accurateFrameCount;
                                     const startF = parseInt(startFrameWidget.value) || 0;
@@ -250,8 +279,10 @@ app.registerExtension({
                             }
                             if (info.source_frame_count !== undefined && endFrameWidget && durationFramesWidget) {
                                 node.accurateFrameCount = info.source_frame_count;
+                                node.accurateDuration = info.source_duration || 0;
+                                
                                 const currentEndFrame = parseInt(endFrameWidget.value) || 0;
-                                const fr = info.loaded_fps || frameRateWidget.value || 24;
+                                const fr = info.loaded_fps || frameRateWidget.value || 25;
                                 const autoCalcEndFrame = Math.round((info.source_duration || 0) * fr);
                                 
                                 if (currentEndFrame === 0 || Math.abs(currentEndFrame - autoCalcEndFrame) <= 2 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
@@ -431,12 +462,10 @@ app.registerExtension({
                 toggleWrapper.appendChild(toggleTitle);
                 toggleWrapper.appendChild(segmentedToggle);
 
-                // --- FPS Display ---
                 const fpsDisplay = document.createElement("span");
                 Object.assign(fpsDisplay.style, { fontSize: "12px", color: "#38bdf8", fontWeight: "bold", whiteSpace: "nowrap", marginLeft: "10px" });
                 fpsDisplay.textContent = "fps: -";
                 toggleWrapper.appendChild(fpsDisplay);
-                // -------------------
 
                 const leftContainer = document.createElement("div");
                 Object.assign(leftContainer.style, { flex: "1 1 0%", display: "flex", justifyContent: "flex-start", minWidth: "max-content" });
@@ -833,17 +862,28 @@ app.registerExtension({
                     durationWidget.callback = function (v) {
                         if (isUpdatingDuration) { if (origCallback) origCallback.apply(this, arguments); return; }
                         isUpdatingDuration = true;
-                        const activeDur = getActiveDuration();
+                        
                         let d = parseFloat(v) || 0;
-                        if (d < 0) d = 0;
-                        if (d > activeDur) d = activeDur;
                         let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
+                        let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
+                        
+                        // FIX 4: Limit duration to not exceed (end_time - start_time)
+                        let maxDur = Math.max(0, e - s);
+                        if (d > maxDur) d = maxDur;
+                        if (d < 0) d = 0;
+                        
                         let newStart = s;
                         let newEnd = s + d;
-                        if (newEnd > activeDur) { newEnd = activeDur; newStart = activeDur - d; }
+                        
+                        if (node.accurateDuration > 0 && newEnd > node.accurateDuration) {
+                            newEnd = node.accurateDuration;
+                            newStart = Math.max(0, newEnd - d);
+                        }
+
                         if (startTimeWidget) startTimeWidget.value = parseFloat(newStart.toFixed(2));
                         if (endTimeWidget) endTimeWidget.value = parseFloat(newEnd.toFixed(2));
                         node.syncFramesFromTime();
+                        
                         if (duration === 0) updateRuler();
                         updateUI(true);
                         app.graph.setDirtyCanvas(true, false);
@@ -857,18 +897,29 @@ app.registerExtension({
                     durationFramesWidget.callback = function (v) {
                         if (isUpdatingDuration || !frameRateWidget) { if (origCallback) origCallback.apply(this, arguments); return; }
                         isUpdatingDuration = true;
-                        const fr = frameRateWidget.value || 24;
-                        const activeDurFrames = Math.round(getActiveDuration() * fr);
+                        const fr = frameRateWidget.value || 25;
+                        
                         let d = parseInt(v) || 0;
-                        if (d < 0) d = 0;
-                        if (d > activeDurFrames) d = activeDurFrames;
                         let s = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
+                        let e = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
+                        
+                        // FIX 4: Limit duration frames to not exceed (end_frame - start_frame)
+                        let maxDurFrames = Math.max(0, e - s);
+                        if (d > maxDurFrames) d = maxDurFrames;
+                        if (d < 0) d = 0;
+                        
                         let newStart = s;
                         let newEnd = s + d;
-                        if (newEnd > activeDurFrames) { newEnd = activeDurFrames; newStart = activeDurFrames - d; }
+                        
+                        if (node.accurateFrameCount > 0 && newEnd > node.accurateFrameCount) {
+                            newEnd = node.accurateFrameCount;
+                            newStart = Math.max(0, newEnd - d);
+                        }
+
                         if (startFrameWidget) startFrameWidget.value = newStart;
                         if (endFrameWidget) endFrameWidget.value = newEnd;
                         node.syncTimeFromFrames();
+                        
                         if (duration === 0) updateRuler();
                         updateUI(true);
                         app.graph.setDirtyCanvas(true, false);
@@ -877,6 +928,7 @@ app.registerExtension({
                     };
                 }
 
+                // FIX 1: Ensure time formatting strictly uses seconds/minutes/hours
                 const formatTime = (secs) => {
                     const h = Math.floor(secs / 3600);
                     const m = Math.floor((secs % 3600) / 60);
@@ -894,7 +946,7 @@ app.registerExtension({
                     const subTicks = 4;
                     const totalTicks = (numMajorTicks - 1) * subTicks;
                     const isFrames = displayModeWidget && displayModeWidget.value === "frames";
-                    const fr = frameRateWidget ? frameRateWidget.value : 24;
+                    const fr = frameRateWidget ? frameRateWidget.value : 25;
 
                     for (let i = 0; i <= totalTicks; i++) {
                         const pct = i / totalTicks;
@@ -909,6 +961,7 @@ app.registerExtension({
                         tickWrapper.appendChild(line);
                         if (isMajor) {
                             const label = document.createElement("div");
+                            // FIX 1: Show seconds format when not in frames mode
                             label.textContent = isFrames ? Math.round(t * fr) : formatTime(t);
                             tickWrapper.appendChild(label);
                         }
@@ -936,8 +989,9 @@ app.registerExtension({
 
                     const currentDur = parseFloat((visualEnd - s).toFixed(2));
                     const isFrames = displayModeWidget && displayModeWidget.value === "frames";
-                    const fr = frameRateWidget ? frameRateWidget.value : 24;
+                    const fr = frameRateWidget ? frameRateWidget.value : 25;
 
+                    // FIX 1: Show seconds format for Trimmed when not in frames mode
                     trimLength.textContent = isFrames ? `Trimmed: ${Math.round(currentDur * fr)} frames` : `Trimmed: ${formatTime(currentDur)}`;
 
                     if (duration > 0 && !isUpdatingDuration) {
@@ -953,6 +1007,7 @@ app.registerExtension({
 
                 videoPreview.onloadedmetadata = () => {
                     duration = videoPreview.duration;
+                    node.accurateDuration = duration; // FIX 3: Store accurate duration on load
                     if (endTimeWidget && (endTimeWidget.value === 0 || endTimeWidget.value > duration)) {
                         endTimeWidget.value = duration;
                         node.syncFramesFromTime();
