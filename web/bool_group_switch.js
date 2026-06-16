@@ -118,7 +118,6 @@ function changeModeOfNodes(nodeOrNodes, mode) {
     reduceNodesDepthFirst(nodeOrNodes, (n) => { n.mode = mode; });
 }
 
-// ================= 全局防死锁与分阶段执行 (Multi-pass) 逻辑 =================
 let __bgsIsApplyingStates = false;
 let executedNodesInCurrentPrompt = new Set();
 let pendingInterrupts = new Set();
@@ -155,14 +154,13 @@ async function applyNodeModesEvent(event) {
         
         let statesMismatch = false; 
 
-        // 【核心动作】检查并应用状态
         const applyModeAndCheck = (n, expectedMode) => {
             if (!n) return;
             const currentMode = n.mode !== undefined ? n.mode : 0;
             if (currentMode !== expectedMode) {
-                statesMismatch = true; // 发现不一致
+                statesMismatch = true; 
             }
-            n.mode = expectedMode; // 应用状态
+            n.mode = expectedMode; 
             
             if (n.isSubgraphNode?.() && n.subgraph) {
                 for (const child of n.subgraph.nodes) {
@@ -208,13 +206,10 @@ async function applyNodeModesEvent(event) {
             app.graph?.setDirtyCanvas?.(true, true);
         }
 
-        // ================= 严格遵循您的 3 条分阶段执行逻辑 =================
         if (interruptNodeId !== "0" && interruptNodeId !== "") {
             if (!statesMismatch) {
-                // 【逻辑 1 & 第二次运行】状态完全一致，直接输出 trigger，不做任何改变和打断
                 console.log(`[BoolGroupSwitch] ✨ 状态已一致，直接输出 trigger，不进行分阶段执行。`);
             } else {
-                // 【逻辑 2】状态不一致，需要分阶段执行
                 console.log(`[BoolGroupSwitch] ⏳ 状态不一致，已变更组状态。准备在 Node ${interruptNodeId} 执行后打断...`);
                 if (!isInterrupting) {
                     if (executedNodesInCurrentPrompt.has(interruptNodeId)) {
@@ -225,7 +220,6 @@ async function applyNodeModesEvent(event) {
                 }
             }
         } else {
-            // 【逻辑 3】Node ID = 0，不进行打断，由 ComfyUI 继续执行当前工作流
             if (statesMismatch) {
                 console.log(`[BoolGroupSwitch] 🔄 状态不一致，但 Node ID=0，不打断，由 ComfyUI 继续执行当前工作流。`);
             }
