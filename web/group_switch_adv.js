@@ -509,7 +509,6 @@ app.registerExtension({
                     }
                 }
 
-                // 【核心重构】支持 Active/Bypass/Mute 三种状态的 BFS 联动推演
                 const finalStates = {};
                 const pendingActions = [];
                 const sourceRules = globalRules[groupName];
