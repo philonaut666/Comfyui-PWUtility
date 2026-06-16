@@ -60,6 +60,7 @@ app.registerExtension({
                 node.accurateDuration = 0;
 
                 const videoWidget = this.widgets.find((w) => w.name === "video");
+                const pathWidget = this.widgets.find((w) => w.name === "path"); // NEW: Find path widget
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
                 const displayModeWidget = this.widgets.find((w) => w.name === "display_mode");
                 const startTimeWidget = this.widgets.find((w) => w.name === "start_time");
@@ -196,13 +197,14 @@ app.registerExtension({
                     };
                 }
 
-                // FIX: Added 'force' parameter to allow manual refresh even if the path hasn't changed
+                // FIX: Added 'force' parameter and improved path handling
                 const applyVideoPath = (rawPath, force = false) => {
-                    if (!rawPath || !rawPath.trim()) return;
-                    const p = rawPath.trim();
+                    if (!rawPath || !String(rawPath).trim()) return;
+                    const p = String(rawPath).trim();
                     const isNewFile = force || (p !== node._lastLoadedVideoPath);
                     node._lastLoadedVideoPath = p;
 
+                    // Sync to video widget so the user sees what is currently loaded
                     if (videoWidget) videoWidget.value = p;
 
                     if (isNewFile || force) {
@@ -212,6 +214,17 @@ app.registerExtension({
                         if (node.syncFramesFromTime) node.syncFramesFromTime();
                     }
                 };
+
+                // NEW: Automatically trigger refresh when 'path' widget value changes (e.g., from a connected node)
+                if (pathWidget) {
+                    const origPathCallback = pathWidget.callback;
+                    pathWidget.callback = function () {
+                        if (origPathCallback) origPathCallback.apply(this, arguments);
+                        if (this.value && typeof this.value === 'string' && this.value.trim()) {
+                            applyVideoPath(this.value.trim(), true);
+                        }
+                    };
+                }
 
                 const _videoExecHandler = ({ detail }) => {
                     if (!detail || String(detail.node) !== String(node.id)) return;
@@ -308,15 +321,17 @@ app.registerExtension({
                     fileInput.click(); 
                 });
 
-                // NEW: Add a Refresh button right below the upload button
+                // NEW: Enhanced Refresh Video button that prioritizes the 'path' input
                 const refreshBtnWidget = this.addWidget("button", "Refresh Video", null, () => {
-                    if (videoWidget && videoWidget.value) {
-                        // Force re-apply the video path to instantly refresh preview and timeline
-                        applyVideoPath(videoWidget.value, true);
+                    // Prioritize 'path' widget (from连线), fallback to 'video' widget (manual input)
+                    const targetPath = (pathWidget && pathWidget.value && String(pathWidget.value).trim()) 
+                        ? String(pathWidget.value).trim() 
+                        : (videoWidget ? String(videoWidget.value).trim() : "");
                         
-                        // Optional: If you want this button to also trigger the entire ComfyUI workflow execution, 
-                        // uncomment the line below. By default, it only refreshes the frontend UI state.
-                        // app.queuePrompt(0); 
+                    if (targetPath) {
+                        applyVideoPath(targetPath, true);
+                    } else {
+                        console.warn("[VideoLoaderPW] No video path found to refresh.");
                     }
                 });
 
