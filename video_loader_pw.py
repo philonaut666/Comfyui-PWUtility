@@ -45,7 +45,8 @@ class VideoLoaderPW:
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "end_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "duration_frames": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
-                "frame_rate": ("INT", {"default": 24, "min": 1, "max": 120, "step": 1, "tooltip": "Force the video to a specific frame rate for extraction."}),
+                # FIX 2: Default frame_rate changed from 24 to 25
+                "frame_rate": ("INT", {"default": 25, "min": 1, "max": 120, "step": 1, "tooltip": "Force the video to a specific frame rate for extraction."}),
                 "display_mode": (["seconds", "frames"], {"default": "seconds"}),
                 "crop_x": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_y": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
@@ -137,7 +138,7 @@ class VideoLoaderPW:
         manual_crop_bottom = max(0, min(manual_crop_bottom, orig_h - manual_crop_top - 1))
 
         if display_mode == "frames":
-            fr = float(frame_rate) if frame_rate > 0 else 24.0
+            fr = float(frame_rate) if frame_rate > 0 else 25.0
             actual_start_time = float(start_frame) / fr
             actual_end_time = float(end_frame) / fr if (end_frame > 0 and end_frame > start_frame) else video_duration
         else:
@@ -160,7 +161,7 @@ class VideoLoaderPW:
             
             container.seek(seek_pts, stream=video_stream, backward=True)
             
-            frame_interval = 1.0 / float(frame_rate) if frame_rate > 0 else 1.0/24.0
+            frame_interval = 1.0 / float(frame_rate) if frame_rate > 0 else 1.0/25.0
             expected_target_time = actual_start_time
             
             alloc_end_time = actual_end_time if actual_end_time != float('inf') else video_duration
@@ -198,7 +199,6 @@ class VideoLoaderPW:
                 if manual_crop_left > 0 or manual_crop_top > 0 or manual_crop_right > 0 or manual_crop_bottom > 0:
                     frame_rgb = frame_rgb[manual_crop_top:orig_h-manual_crop_bottom, manual_crop_left:orig_w-manual_crop_right, :]
                 
-                # FIX: Relaxed floating point boundary conditions to prevent dropping the exact last frame
                 while expected_target_time <= frame_time + 1e-5 and expected_target_time <= actual_end_time + 1e-5:
                     if image_tensor is None and expected_frames > 0:
                         height, width = frame_rgb.shape[:2]
@@ -295,12 +295,12 @@ class VideoLoaderPW:
         final_duration_sec = float(max(0.0, actual_end_time - actual_start_time))
         frame_count = image_tensor.shape[0] if (frames_loaded > 0 or len(frames) > 0) else 0
         if frame_count == 0 and final_duration_sec > 0:
-            calc_fr = float(frame_rate) if frame_rate > 0 else 24.0
+            calc_fr = float(frame_rate) if frame_rate > 0 else 25.0
             frame_count = int(np.floor(final_duration_sec * calc_fr))
 
         loaded_h = int(image_tensor.shape[1]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
         loaded_w = int(image_tensor.shape[2]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
-        loaded_fps = float(frame_rate) if frame_rate > 0 else 24.0
+        loaded_fps = float(frame_rate) if frame_rate > 0 else 25.0
         
         video_info = json.dumps({
              "source_fps":         source_fps,
@@ -315,7 +315,6 @@ class VideoLoaderPW:
              "loaded_height":      loaded_h,
         }, indent=4)
 
-        # FIX: Include video_info in the 'ui' dictionary so the frontend 'executed' event can reliably access it
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
             "result": (image_tensor, audio_dict, final_duration_sec, frame_count, video_info)
