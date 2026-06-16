@@ -2,7 +2,6 @@ import json
 from server import PromptServer
 
 class BoolGroupSwitch:
-    # ... (保持您之前的 BoolGroupSwitch 代码完全不变) ...
     @classmethod
     def INPUT_TYPES(s):
         inputs = {
@@ -55,7 +54,6 @@ class GroupSwitchADV:
         return {
             "required": {},
             "optional": {},
-            # 【核心修复 1】加入 hidden 字段，确保 ComfyUI 触发完整的序列化生命周期
             "hidden": {
                 "unique_id": "UNIQUE_ID"
             }
