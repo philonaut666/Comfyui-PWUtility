@@ -11,9 +11,7 @@ app.registerExtension({
             const onDrawForeground = nodeType.prototype.onDrawForeground;
 
             nodeType.prototype.onConfigure = function (info) {
-                if (onConfigure) {
-                    onConfigure.apply(this, arguments);
-                }
+                if (onConfigure) onConfigure.apply(this, arguments);
                 if (this.syncFramesFromTime) this.syncFramesFromTime();
                 if (this.toggleWidgetVisibility) this.toggleWidgetVisibility();
                 if (this.syncToggleVisual) this.syncToggleVisual();
@@ -28,12 +26,10 @@ app.registerExtension({
 
             nodeType.prototype.onDrawForeground = function (ctx) {
                 if (onDrawForeground) onDrawForeground.apply(this, arguments);
-
                 if (this.domWidget && this.domWidget.element && this.domWidget.last_y) {
                     const remainingHeight = this.size[1] - this.domWidget.last_y - 18;
                     const currentHeight = parseFloat(this.domWidget.element.style.height);
                     const targetHeight = Math.max(150, remainingHeight);
-
                     if (isNaN(currentHeight) || Math.abs(currentHeight - targetHeight) > 1) {
                         this.domWidget.element.style.height = `${targetHeight}px`;
                     }
@@ -45,39 +41,31 @@ app.registerExtension({
                 if (this.domWidget && this.domWidget.element) {
                     this.domWidget.element.style.width = "100%";
                     this.domWidget.element.style.margin = "0";
-
-                    let yOffset = this.domWidget.last_y;
-                    if (!yOffset) {
-                        yOffset = 30;
-                        if (this.widgets) {
-                            for (let w of this.widgets) {
-                                if (w === this.domWidget) break;
-                                yOffset += (w.computeSize ? w.computeSize()[1] : 20) + 4;
-                            }
-                        }
+                    let yOffset = this.domWidget.last_y || 30;
+                    if (!this.domWidget.last_y && this.widgets) {
+                        for (let w of this.widgets) {
+                            if (w === this.domWidget) break;
+                            yOffset += (w.computeSize ? w.computeSize()[1] : 20) + 4;
+                }
                     }
-
-                    const remainingHeight = size[1] - yOffset - 18;
-                    this.domWidget.element.style.height = `${Math.max(150, remainingHeight)}px`;
+                    this.domWidget.element.style.height = `${Math.max(150, size[1] - yOffset - 18)}px`;
                 }
             };
 
             nodeType.prototype.onNodeCreated = function () {
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
                 const node = this;
+                node.accurateFrameCount = 0; // Store accurate frame count from backend
 
                 const videoWidget = this.widgets.find((w) => w.name === "video");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
                 const displayModeWidget = this.widgets.find((w) => w.name === "display_mode");
-
                 const startTimeWidget = this.widgets.find((w) => w.name === "start_time");
                 const endTimeWidget = this.widgets.find((w) => w.name === "end_time");
                 const durationWidget = this.widgets.find((w) => w.name === "duration");
-
                 const startFrameWidget = this.widgets.find((w) => w.name === "start_frame");
                 const endFrameWidget = this.widgets.find((w) => w.name === "end_frame");
                 const durationFramesWidget = this.widgets.find((w) => w.name === "duration_frames");
-
                 const cropXWidget = this.widgets.find((w) => w.name === "crop_x");
                 const cropYWidget = this.widgets.find((w) => w.name === "crop_y");
                 const cropWWidget = this.widgets.find((w) => w.name === "crop_w");
@@ -88,13 +76,8 @@ app.registerExtension({
                 function setWidgetVisibility(w, visible, typeStr) {
                     if (!w) return;
                     w.hidden = !visible;
-                    if (!visible) {
-                        w.type = "hidden";
-                        w.computeSize = () => [0, -4];
-                    } else {
-                        w.type = typeStr;
-                        delete w.computeSize;
-                    }
+                    if (!visible) { w.type = "hidden"; w.computeSize = () => [0, -4]; } 
+                    else { w.type = typeStr; delete w.computeSize; }
                 }
 
                 node.toggleWidgetVisibility = function () {
@@ -106,7 +89,6 @@ app.registerExtension({
                     setWidgetVisibility(endFrameWidget, isFrames, "INT");
                     setWidgetVisibility(durationFramesWidget, isFrames, "INT");
                     setWidgetVisibility(displayModeWidget, false, "combo");
-
                     setWidgetVisibility(cropXWidget, false, "FLOAT");
                     setWidgetVisibility(cropYWidget, false, "FLOAT");
                     setWidgetVisibility(cropWWidget, false, "FLOAT");
@@ -115,7 +97,6 @@ app.registerExtension({
                     const minSize = node.computeSize();
                     node.size[0] = Math.max(node.size[0], minSize[0]);
                     node.size[1] = Math.max(node.size[1], minSize[1]);
-
                     if (node.onResize) node.onResize(node.size);
                     app.graph.setDirtyCanvas(true, true);
                 };
@@ -124,9 +105,27 @@ app.registerExtension({
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
                     const fr = frameRateWidget.value || 24;
-                    if (startTimeWidget && startFrameWidget) startFrameWidget.value = Math.round(startTimeWidget.value * fr);
-                    if (endTimeWidget && endFrameWidget) endFrameWidget.value = Math.round(endTimeWidget.value * fr);
-                    if (durationWidget && durationFramesWidget) durationFramesWidget.value = Math.round(durationWidget.value * fr);
+                    if (startTimeWidget && startFrameWidget) startFrameWidget.value = Math.max(0, Math.round(startTimeWidget.value * fr));
+                    
+                    let calcEndFrame = Math.round(endTimeWidget.value * fr);
+                    // FIX: Clamp calculated end frame to the accurate frame count to prevent +1 float rounding errors
+                    if (node.accurateFrameCount > 0 && calcEndFrame > node.accurateFrameCount) {
+                        calcEndFrame = node.accurateFrameCount;
+                        if (endTimeWidget) endTimeWidget.value = parseFloat((calcEndFrame / fr).toFixed(3));
+                    }
+                    if (endTimeWidget && endFrameWidget) endFrameWidget.value = calcEndFrame;
+                    
+                    if (durationWidget && durationFramesWidget) {
+                        let calcDurFrames = Math.round(durationWidget.value * fr);
+                        const startF = parseInt(startFrameWidget.value) || 0;
+                        const maxDurFrames = Math.max(0, (node.accurateFrameCount > 0 ? node.accurateFrameCount : 999999) - startF);
+                        
+                        if (calcDurFrames > maxDurFrames) {
+                            calcDurFrames = maxDurFrames;
+                            if (durationWidget) durationWidget.value = parseFloat((calcDurFrames / fr).toFixed(3));
+                        }
+                        durationFramesWidget.value = calcDurFrames;
+                    }
                     isSyncing = false;
                 };
 
@@ -147,7 +146,6 @@ app.registerExtension({
                         if (orig) orig.apply(this, arguments);
                         if (isFrame) node.syncTimeFromFrames();
                         else node.syncFramesFromTime();
-
                         if (duration === 0 || isFrameRate) updateRuler();
                         updateUI(true);
                     };
@@ -163,11 +161,8 @@ app.registerExtension({
                     if (!filename) return;
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
-                    if (isAbsolute) {
-                        url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
-                    } else {
-                        url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
-                    }
+                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
+                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
                     if (videoPreview) videoPreview.src = url;
                 };
 
@@ -184,9 +179,7 @@ app.registerExtension({
                     const p = rawPath.trim();
                     const isNewFile = (p !== node._lastLoadedVideoPath);
                     node._lastLoadedVideoPath = p;
-
                     if (videoWidget) videoWidget.value = p;
-
                     if (isNewFile) {
                         if (node.updatePreview) node.updatePreview(p);
                         if (startTimeWidget) startTimeWidget.value = 0;
@@ -202,25 +195,27 @@ app.registerExtension({
                         applyVideoPath(out.video_path[0]);
                     }
                     
-                    // FIX: Parse video_info to correct frontend frame count display inaccuracies
+                    // FIX: Parse video_info from the 'ui' output to get accurate metadata and fix FPS display
                     if (out && out.video_info) {
                         try {
-                            const info = JSON.parse(out.video_info);
-                            if (info.source_fps !== undefined && fpsDisplay) {
+                            const infoStr = Array.isArray(out.video_info) ? out.video_info[0] : out.video_info;
+                            const info = JSON.parse(infoStr);
+                            
+                            if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
                             
-                            // Auto-correct end_frame and duration_frames if they were miscalculated by frontend float rounding
                             if (info.source_frame_count !== undefined && endFrameWidget && durationFramesWidget) {
+                                node.accurateFrameCount = info.source_frame_count;
                                 const fr = info.loaded_fps || frameRateWidget.value || 24;
-                                const autoCalcEndFrame = Math.round((info.source_duration || 0) * fr);
                                 const currentEndFrame = parseInt(endFrameWidget.value) || 0;
+                                const autoCalcEndFrame = Math.round((info.source_duration || 0) * fr);
                                 
-                                // Only override if it looks like an auto-calculated default value (prevents overwriting manual user crops)
-                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - autoCalcEndFrame) <= 2 || Math.abs(currentEndFrame - info.source_frame_count) <= 1) {
-                                    endFrameWidget.value = info.source_frame_count;
+                                // Auto-correct if the current values look like default/auto-calculated ones (prevents overwriting manual crops)
+                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - autoCalcEndFrame) <= 2 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
+                                    endFrameWidget.value = node.accurateFrameCount;
                                     const startF = parseInt(startFrameWidget.value) || 0;
-                                    durationFramesWidget.value = info.source_frame_count - startF;
+                                    durationFramesWidget.value = Math.max(0, node.accurateFrameCount - startF);
                                     
                                     if (endTimeWidget) endTimeWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     if (durationWidget) durationWidget.value = parseFloat(info.source_duration.toFixed(3));
@@ -246,22 +241,23 @@ app.registerExtension({
                     if (output && output.video_path && output.video_path.length > 0) {
                         applyVideoPath(output.video_path[0]);
                     }
-                    // Fallback sync for video_info
                     if (output && output.video_info) {
                         try {
-                            const info = JSON.parse(output.video_info);
-                            if (info.source_fps !== undefined && fpsDisplay) {
+                            const infoStr = Array.isArray(output.video_info) ? output.video_info[0] : output.video_info;
+                            const info = JSON.parse(infoStr);
+                            if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
                             if (info.source_frame_count !== undefined && endFrameWidget && durationFramesWidget) {
+                                node.accurateFrameCount = info.source_frame_count;
                                 const currentEndFrame = parseInt(endFrameWidget.value) || 0;
                                 const fr = info.loaded_fps || frameRateWidget.value || 24;
                                 const autoCalcEndFrame = Math.round((info.source_duration || 0) * fr);
                                 
-                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - autoCalcEndFrame) <= 2 || Math.abs(currentEndFrame - info.source_frame_count) <= 1) {
-                                    endFrameWidget.value = info.source_frame_count;
+                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - autoCalcEndFrame) <= 2 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
+                                    endFrameWidget.value = node.accurateFrameCount;
                                     const startF = parseInt(startFrameWidget.value) || 0;
-                                    durationFramesWidget.value = info.source_frame_count - startF;
+                                    durationFramesWidget.value = Math.max(0, node.accurateFrameCount - startF);
                                     if (endTimeWidget) endTimeWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     if (durationWidget) durationWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     updateRuler();
@@ -281,9 +277,7 @@ app.registerExtension({
                 fileInput.style.display = "none";
                 document.body.appendChild(fileInput);
 
-                const btnWidget = this.addWidget("button", "choose file to upload", null, () => {
-                    fileInput.click();
-                });
+                const btnWidget = this.addWidget("button", "choose file to upload", null, () => { fileInput.click(); });
 
                 const uploadFile = async (file) => {
                     try {
@@ -296,7 +290,6 @@ app.registerExtension({
                             node.syncFramesFromTime();
                             return;
                         }
-
                         btnWidget.name = "Uploading...";
                         node.setDirtyCanvas(true, false);
                         const CHUNK_SIZE = 10 * 1024 * 1024;
@@ -305,7 +298,6 @@ app.registerExtension({
                             const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
                             const safeFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
                             const safeName = Date.now() + "_" + safeFileName;
-
                             for (let i = 0; i < totalChunks; i++) {
                                 btnWidget.name = `Uploading... ${Math.round((i / totalChunks) * 100)}%`;
                                 node.setDirtyCanvas(true, false);
@@ -315,10 +307,8 @@ app.registerExtension({
                                 formData.append("filename", safeName);
                                 formData.append("chunk_index", i);
                                 formData.append("total_chunks", totalChunks);
-
                                 const resp = await api.fetchApi("/video_ui_upload_chunk", { method: "POST", body: formData });
                                 if (resp.status !== 200) throw new Error("Chunk upload failed");
-
                                 if (i === totalChunks - 1) {
                                     const data = await resp.json();
                                     videoWidget.value = data.name;
@@ -346,10 +336,7 @@ app.registerExtension({
                         }
                     } catch (error) {
                         console.error("Upload failed", error);
-                        if (errorMsg) {
-                            errorMsg.textContent = "Upload failed. Check console.";
-                            errorMsg.style.display = "block";
-                        }
+                        if (errorMsg) { errorMsg.textContent = "Upload failed. Check console."; errorMsg.style.display = "block"; }
                     } finally {
                         btnWidget.name = "choose file to upload";
                         node.setDirtyCanvas(true, false);
@@ -357,10 +344,7 @@ app.registerExtension({
                     }
                 };
 
-                fileInput.addEventListener("change", (e) => {
-                    if (e.target.files.length) uploadFile(e.target.files[0]);
-                });
-
+                fileInput.addEventListener("change", (e) => { if (e.target.files.length) uploadFile(e.target.files[0]); });
                 node.onDropFile = function (file) {
                     if (file.type.startsWith('video/') || file.name.toLowerCase().match(/\.(mp4|webm|mkv|avi|mov|m4v|flv|wmv)$/)) {
                         uploadFile(file);
@@ -377,47 +361,29 @@ app.registerExtension({
 
                 const container = document.createElement("div");
                 const defaultBg = "rgba(30, 30, 30, 0.9)";
-                Object.assign(container.style, {
-                    display: "flex", flexDirection: "column", gap: "10px", width: "100%", margin: "0", padding: "10px",
-                    boxSizing: "border-box", background: defaultBg, borderRadius: "6px", color: "white",
-                    fontFamily: "sans-serif", marginTop: "8px", flexShrink: "0", transition: "background 0.2s"
-                });
+                Object.assign(container.style, { display: "flex", flexDirection: "column", gap: "10px", width: "100%", margin: "0", padding: "10px", boxSizing: "border-box", background: defaultBg, borderRadius: "6px", color: "white", fontFamily: "sans-serif", marginTop: "8px", flexShrink: "0", transition: "background 0.2s" });
 
                 const errorMsg = document.createElement("div");
                 Object.assign(errorMsg.style, { color: "#ff6b6b", fontSize: "12px", display: "none", marginBottom: "4px", flexShrink: "0", boxSizing: "border-box" });
                 container.appendChild(errorMsg);
 
                 const playerTop = document.createElement("div");
-                Object.assign(playerTop.style, {
-                    display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 2px",
-                    marginBottom: "-4px", flexShrink: "0", boxSizing: "border-box", flexWrap: "wrap", gap: "6px", position: "relative"
-                });
+                Object.assign(playerTop.style, { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 2px", marginBottom: "-4px", flexShrink: "0", boxSizing: "border-box", flexWrap: "wrap", gap: "6px", position: "relative" });
 
                 const toggleWrapper = document.createElement("div");
-                Object.assign(toggleWrapper.style, {
-                    display: "flex", alignItems: "center", gap: "6px", background: "rgba(0, 0, 0, 0.2)",
-                    padding: "0 8px", borderRadius: "4px", height: "22px", boxSizing: "border-box"
-                });
+                Object.assign(toggleWrapper.style, { display: "flex", alignItems: "center", gap: "6px", background: "rgba(0, 0, 0, 0.2)", padding: "0 8px", borderRadius: "4px", height: "22px", boxSizing: "border-box" });
 
                 const toggleTitle = document.createElement("span");
                 toggleTitle.textContent = "Display Mode";
                 Object.assign(toggleTitle.style, { fontSize: "12px", color: "#38bdf8", fontWeight: "bold", whiteSpace: "nowrap" });
 
                 const segmentedToggle = document.createElement("div");
-                Object.assign(segmentedToggle.style, {
-                    display: "flex", alignItems: "center", background: "rgba(0, 0, 0, 0.35)",
-                    border: "1px solid rgba(56, 189, 248, 0.3)", borderRadius: "4px", overflow: "hidden",
-                    height: "18px", flexShrink: "0", cursor: "pointer"
-                });
+                Object.assign(segmentedToggle.style, { display: "flex", alignItems: "center", background: "rgba(0, 0, 0, 0.35)", border: "1px solid rgba(56, 189, 248, 0.3)", borderRadius: "4px", overflow: "hidden", height: "18px", flexShrink: "0", cursor: "pointer" });
 
                 const createSegBtn = (label) => {
                     const btn = document.createElement("span");
                     btn.textContent = label;
-                    Object.assign(btn.style, {
-                        fontSize: "11px", fontWeight: "bold", padding: "0 8px", lineHeight: "18px",
-                        color: "rgba(255,255,255,0.45)", background: "transparent", transition: "background 0.2s, color 0.2s",
-                        userSelect: "none", whiteSpace: "nowrap"
-                    });
+                    Object.assign(btn.style, { fontSize: "11px", fontWeight: "bold", padding: "0 8px", lineHeight: "18px", color: "rgba(255,255,255,0.45)", background: "transparent", transition: "background 0.2s, color 0.2s", userSelect: "none", whiteSpace: "nowrap" });
                     return btn;
                 };
 
@@ -425,7 +391,6 @@ app.registerExtension({
                 const segDivider = document.createElement("span");
                 segDivider.style.cssText = "width:1px;height:12px;background:rgba(56,189,248,0.25);flex-shrink:0;";
                 const segFrames = createSegBtn("Frames");
-
                 segmentedToggle.appendChild(segTime);
                 segmentedToggle.appendChild(segDivider);
                 segmentedToggle.appendChild(segFrames);
@@ -479,19 +444,12 @@ app.registerExtension({
                 playerTop.appendChild(leftContainer);
 
                 const trimLength = document.createElement("span");
-                Object.assign(trimLength.style, {
-                    display: "flex", alignItems: "center", fontSize: "12px", color: "#38bdf8", fontWeight: "bold",
-                    background: "rgba(56, 189, 248, 0.1)", padding: "0 6px", borderRadius: "4px",
-                    whiteSpace: "nowrap", height: "22px", boxSizing: "border-box", cursor: "pointer"
-                });
+                Object.assign(trimLength.style, { display: "flex", alignItems: "center", fontSize: "12px", color: "#38bdf8", fontWeight: "bold", background: "rgba(56, 189, 248, 0.1)", padding: "0 6px", borderRadius: "4px", whiteSpace: "nowrap", height: "22px", boxSizing: "border-box", cursor: "pointer" });
                 trimLength.textContent = "Trimmed: 0:00";
 
                 const cropBtn = document.createElement("button");
                 cropBtn.textContent = "Crop";
-                Object.assign(cropBtn.style, {
-                    background: "rgba(255, 255, 255, 0.1)", color: "white", border: "none", borderRadius: "4px",
-                    padding: "0 8px", height: "22px", fontSize: "12px", fontWeight: "bold", cursor: "pointer"
-                });
+                Object.assign(cropBtn.style, { background: "rgba(255, 255, 255, 0.1)", color: "white", border: "none", borderRadius: "4px", padding: "0 8px", height: "22px", fontSize: "12px", fontWeight: "bold", cursor: "pointer" });
 
                 let isCropVisible = false;
                 const cropUIContainer = document.createElement("div");
@@ -504,10 +462,7 @@ app.registerExtension({
                 Object.assign(cropEditContainer.style, { display: "none", alignItems: "center", gap: "4px" });
 
                 const arSelect = document.createElement("select");
-                Object.assign(arSelect.style, {
-                    background: "#222", color: "#fff", border: "1px solid #555", borderRadius: "3px",
-                    fontSize: "12px", padding: "2px", outline: "none", cursor: "pointer"
-                });
+                Object.assign(arSelect.style, { background: "#222", color: "#fff", border: "1px solid #555", borderRadius: "3px", fontSize: "12px", padding: "2px", outline: "none", cursor: "pointer" });
                 const ratios = [
                     { name: "Freeform", val: 0 }, { name: "Original", val: -1 }, { name: "1:1", val: 1 },
                     { name: "4:5", val: 4 / 5 }, { name: "5:4", val: 5 / 4 }, { name: "16:9", val: 16 / 9 },
@@ -516,26 +471,18 @@ app.registerExtension({
                 ];
                 ratios.forEach(r => {
                     const opt = document.createElement("option");
-                    opt.textContent = r.name;
-                    opt.value = r.val;
-                    arSelect.appendChild(opt);
+                    opt.textContent = r.name; opt.value = r.val; arSelect.appendChild(opt);
                 });
 
                 const wInput = document.createElement("input");
                 const hInput = document.createElement("input");
-                const inputStyle = {
-                    width: "40px", background: "rgba(0,0,0,0.5)", color: "#38bdf8", border: "1px solid #555",
-                    borderRadius: "3px", fontSize: "12px", textAlign: "center", padding: "2px", outline: "none"
-                };
+                const inputStyle = { width: "40px", background: "rgba(0,0,0,0.5)", color: "#38bdf8", border: "1px solid #555", borderRadius: "3px", fontSize: "12px", textAlign: "center", padding: "2px", outline: "none" };
                 Object.assign(wInput.style, inputStyle);
                 Object.assign(hInput.style, inputStyle);
-                wInput.type = "text";
-                hInput.type = "text";
+                wInput.type = "text"; hInput.type = "text";
 
                 const xSpan = document.createElement("span");
-                xSpan.textContent = "x";
-                xSpan.style.color = "#888";
-                xSpan.style.fontSize = "12px";
+                xSpan.textContent = "x"; xSpan.style.color = "#888"; xSpan.style.fontSize = "12px";
 
                 cropEditContainer.appendChild(arSelect);
                 cropEditContainer.appendChild(wInput);
@@ -558,31 +505,24 @@ app.registerExtension({
                     const vw = videoPreview.videoWidth;
                     const vh = videoPreview.videoHeight;
                     if (!vw || !vh) return;
-
                     let newW = parseInt(wInput.value) || Math.round((cropWWidget ? parseFloat(cropWWidget.value) || 1 : 1) * vw);
                     let newH = parseInt(hInput.value) || Math.round((cropHWidget ? parseFloat(cropHWidget.value) || 1 : 1) * vh);
-
                     if (currentAspectRatio > 0) {
                         if (isWidth) newH = Math.round(newW / currentAspectRatio);
                         else newW = Math.round(newH * currentAspectRatio);
                     }
-
                     newW = Math.max(1, Math.min(newW, vw));
                     newH = Math.max(1, Math.min(newH, vh));
-
                     let cw_val = newW / vw;
                     let ch_val = newH / vh;
                     let cx = cropXWidget ? parseFloat(cropXWidget.value) || 0 : 0;
                     let cy = cropYWidget ? parseFloat(cropYWidget.value) || 0 : 0;
-
                     if (cx + cw_val > 1) cx = 1 - cw_val;
                     if (cy + ch_val > 1) cy = 1 - ch_val;
-
                     if (cropXWidget) cropXWidget.value = parseFloat(cx.toFixed(3));
                     if (cropYWidget) cropYWidget.value = parseFloat(cy.toFixed(3));
                     if (cropWWidget) cropWWidget.value = parseFloat(cw_val.toFixed(3));
                     if (cropHWidget) cropHWidget.value = parseFloat(ch_val.toFixed(3));
-
                     updateCropUI();
                     app.graph.setDirtyCanvas(true, false);
                 };
@@ -601,24 +541,16 @@ app.registerExtension({
                         let cw_val = cropWWidget ? parseFloat(cropWWidget.value) || 1 : 1;
                         let cx = cropXWidget ? parseFloat(cropXWidget.value) || 0 : 0;
                         let cy = cropYWidget ? parseFloat(cropYWidget.value) || 0 : 0;
-
                         const actualW = cw_val * vw;
                         let actualH = actualW / currentAspectRatio;
                         let ch_val = actualH / vh;
-
-                        if (ch_val > 1) {
-                            ch_val = 1;
-                            const newActualW = vh * currentAspectRatio;
-                            cw_val = newActualW / vw;
-                        }
+                        if (ch_val > 1) { ch_val = 1; const newActualW = vh * currentAspectRatio; cw_val = newActualW / vw; }
                         if (cy + ch_val > 1) cy = 1 - ch_val;
                         if (cx + cw_val > 1) cx = 1 - cw_val;
-
                         if (cropXWidget) cropXWidget.value = parseFloat(cx.toFixed(3));
                         if (cropYWidget) cropYWidget.value = parseFloat(cy.toFixed(3));
                         if (cropWWidget) cropWWidget.value = parseFloat(cw_val.toFixed(3));
                         if (cropHWidget) cropHWidget.value = parseFloat(ch_val.toFixed(3));
-
                         updateCropUI();
                         app.graph.setDirtyCanvas(true, false);
                     }
@@ -636,22 +568,15 @@ app.registerExtension({
                         cropBox.style.display = "none";
                         cropEditContainer.style.display = "none";
                     }
-                    if (isCropVisible) {
-                        videoPreview.pause();
-                        videoPreview.controls = false;
-                    } else {
-                        videoPreview.controls = true;
-                    }
+                    if (isCropVisible) { videoPreview.pause(); videoPreview.controls = false; } 
+                    else { videoPreview.controls = true; }
                     updateCropUI();
                 };
 
                 container.appendChild(playerTop);
 
                 const videoWrapper = document.createElement("div");
-                Object.assign(videoWrapper.style, {
-                    position: "relative", width: "100%", flexGrow: "1", minHeight: "0px", display: "flex",
-                    alignItems: "center", justifyContent: "center", background: "#000", borderRadius: "4px", overflow: "hidden"
-                });
+                Object.assign(videoWrapper.style, { position: "relative", width: "100%", flexGrow: "1", minHeight: "0px", display: "flex", alignItems: "center", justifyContent: "center", background: "#000", borderRadius: "4px", overflow: "hidden" });
 
                 const videoPreview = document.createElement("video");
                 Object.assign(videoPreview.style, { width: "100%", height: "100%", objectFit: "contain", outline: "none", boxSizing: "border-box" });
@@ -661,10 +586,7 @@ app.registerExtension({
                 videoWrapper.appendChild(videoPreview);
 
                 const cropBox = document.createElement("div");
-                Object.assign(cropBox.style, {
-                    position: "absolute", border: "2px dashed #38bdf8", display: "none", pointerEvents: "auto",
-                    cursor: "move", boxSizing: "border-box", boxShadow: "0 0 0 9999px rgba(0, 0, 0, 0.5)", zIndex: "10", overflow: "hidden"
-                });
+                Object.assign(cropBox.style, { position: "absolute", border: "2px dashed #38bdf8", display: "none", pointerEvents: "auto", cursor: "move", boxSizing: "border-box", boxShadow: "0 0 0 9999px rgba(0, 0, 0, 0.5)", zIndex: "10", overflow: "hidden" });
 
                 for (let i = 1; i <= 2; i++) {
                     const vLine = document.createElement("div");
@@ -696,24 +618,14 @@ app.registerExtension({
                 container.appendChild(videoWrapper);
 
                 const trimArea = document.createElement("div");
-                Object.assign(trimArea.style, {
-                    display: "flex", flexDirection: "column", gap: "6px", background: "rgba(0, 0, 0, 0.35)",
-                    padding: "12px", borderRadius: "6px", border: "1px solid rgba(255, 255, 255, 0.05)",
-                    flexShrink: "0", boxSizing: "border-box"
-                });
+                Object.assign(trimArea.style, { display: "flex", flexDirection: "column", gap: "6px", background: "rgba(0, 0, 0, 0.35)", padding: "12px", borderRadius: "6px", border: "1px solid rgba(255, 255, 255, 0.05)", flexShrink: "0", boxSizing: "border-box" });
 
                 const timeRuler = document.createElement("div");
-                Object.assign(timeRuler.style, {
-                    position: "relative", width: "100%", height: "22px", fontSize: "11px", color: "#aaa",
-                    pointerEvents: "none", userSelect: "none", boxSizing: "border-box"
-                });
+                Object.assign(timeRuler.style, { position: "relative", width: "100%", height: "22px", fontSize: "11px", color: "#aaa", pointerEvents: "none", userSelect: "none", boxSizing: "border-box" });
                 trimArea.appendChild(timeRuler);
 
                 const sliderBox = document.createElement("div");
-                Object.assign(sliderBox.style, {
-                    position: "relative", width: "100%", height: "24px", background: "#111", borderRadius: "4px",
-                    cursor: "pointer", userSelect: "none", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)", boxSizing: "border-box"
-                });
+                Object.assign(sliderBox.style, { position: "relative", width: "100%", height: "24px", background: "#111", borderRadius: "4px", cursor: "pointer", userSelect: "none", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)", boxSizing: "border-box" });
 
                 const fill = document.createElement("div");
                 Object.assign(fill.style, { position: "absolute", height: "100%", background: "rgba(14, 165, 233, 0.35)", pointerEvents: "none" });
@@ -721,10 +633,7 @@ app.registerExtension({
 
                 const createHandle = (color) => {
                     const h = document.createElement("div");
-                    Object.assign(h.style, {
-                        position: "absolute", top: "0", width: "8px", height: "100%", background: color,
-                        transform: "translateX(-50%)", pointerEvents: "none", boxShadow: "0 0 4px rgba(0,0,0,0.8)", borderRadius: "2px"
-                    });
+                    Object.assign(h.style, { position: "absolute", top: "0", width: "8px", height: "100%", background: color, transform: "translateX(-50%)", pointerEvents: "none", boxShadow: "0 0 4px rgba(0,0,0,0.8)", borderRadius: "2px" });
                     return h;
                 };
 
@@ -738,7 +647,6 @@ app.registerExtension({
                 setTimeout(() => {
                     node.domWidget = node.addDOMWidget("VideoUI", "div", container);
                     node.domWidget.computeSize = function () { return [360, 250]; };
-
                     requestAnimationFrame(() => {
                         if (node.size[0] < 690) node.size[0] = 690;
                         if (node.size[1] < 740) node.size[1] = 740;
@@ -756,7 +664,6 @@ app.registerExtension({
                 let dragOffset = 0;
                 let dragSelectionWidth = 0;
                 let isUpdatingDuration = false;
-
                 let cropDragging = null;
                 let dragStartX = 0;
                 let dragStartY = 0;
@@ -772,7 +679,6 @@ app.registerExtension({
                     let cy = cropYWidget ? parseFloat(cropYWidget.value) || 0 : 0;
                     let cw_val = cropWWidget ? parseFloat(cropWWidget.value) || 1 : 1;
                     let ch_val = cropHWidget ? parseFloat(cropHWidget.value) || 1 : 1;
-
                     const actualW = vw ? Math.round(cw_val * vw) : 0;
                     const actualH = vh ? Math.round(ch_val * vh) : 0;
 
@@ -782,19 +688,14 @@ app.registerExtension({
                         if (cw_val < 0.999 || ch_val < 0.999 || cx > 0.001 || cy > 0.001) {
                             cropDims.textContent = `Crop: ${actualW}x${actualH}`;
                             cropDims.style.display = "inline-block";
-                        } else {
-                            cropDims.style.display = "none";
-                        }
+                        } else { cropDims.style.display = "none"; }
                         return;
                     }
-
                     cropDims.style.display = "none";
                     cropEditContainer.style.display = "flex";
                     cropBox.style.display = "block";
-
                     if (document.activeElement !== wInput) wInput.value = actualW;
                     if (document.activeElement !== hInput) hInput.value = actualH;
-
                     const cw = videoPreview.clientWidth;
                     const ch = videoPreview.clientHeight;
                     const ratio = Math.min(cw / vw, ch / vh);
@@ -802,7 +703,6 @@ app.registerExtension({
                     const renderedH = vh * ratio;
                     const xOffset = (cw - renderedW) / 2;
                     const yOffset = (ch - renderedH) / 2;
-
                     cropBox.style.left = `${xOffset + cx * renderedW}px`;
                     cropBox.style.top = `${yOffset + cy * renderedH}px`;
                     cropBox.style.width = `${cw_val * renderedW}px`;
@@ -811,12 +711,10 @@ app.registerExtension({
 
                 const onCropPointerDown = (e, handle) => {
                     if (!isCropVisible) return;
-                    e.preventDefault();
-                    e.stopPropagation();
+                    e.preventDefault(); e.stopPropagation();
                     cropDragging = handle;
                     e.target.setPointerCapture(e.pointerId);
-                    dragStartX = e.clientX;
-                    dragStartY = e.clientY;
+                    dragStartX = e.clientX; dragStartY = e.clientY;
                     dragStartCropX = cropXWidget ? parseFloat(cropXWidget.value) || 0 : 0;
                     dragStartCropY = cropYWidget ? parseFloat(cropYWidget.value) || 0 : 0;
                     dragStartCropW = cropWWidget ? parseFloat(cropWWidget.value) || 1 : 1;
@@ -892,7 +790,6 @@ app.registerExtension({
                     if (cropYWidget) cropYWidget.value = parseFloat(new_cy.toFixed(3));
                     if (cropWWidget) cropWWidget.value = parseFloat(new_cw.toFixed(3));
                     if (cropHWidget) cropHWidget.value = parseFloat(new_ch.toFixed(3));
-
                     updateCropUI();
                     app.graph.setDirtyCanvas(true, false);
                 };
@@ -1004,17 +901,11 @@ app.registerExtension({
                         const t = activeDur * pct;
                         const isMajor = i % subTicks === 0;
                         const tickWrapper = document.createElement("div");
-                        Object.assign(tickWrapper.style, {
-                            position: "absolute", left: `${pct * 100}%`, top: "0",
-                            display: "flex", flexDirection: "column", alignItems: "center", transform: "translateX(-50%)"
-                        });
+                        Object.assign(tickWrapper.style, { position: "absolute", left: `${pct * 100}%`, top: "0", display: "flex", flexDirection: "column", alignItems: "center", transform: "translateX(-50%)" });
                         if (i === 0) { tickWrapper.style.transform = "none"; tickWrapper.style.alignItems = "flex-start"; }
                         if (i === totalTicks) { tickWrapper.style.transform = "translateX(-100%)"; tickWrapper.style.alignItems = "flex-end"; }
                         const line = document.createElement("div");
-                        Object.assign(line.style, {
-                            width: isMajor ? "2px" : "1px", height: isMajor ? "6px" : "4px",
-                            background: isMajor ? "#aaa" : "#555", marginBottom: "2px", borderRadius: "1px"
-                        });
+                        Object.assign(line.style, { width: isMajor ? "2px" : "1px", height: isMajor ? "6px" : "4px", background: isMajor ? "#aaa" : "#555", marginBottom: "2px", borderRadius: "1px" });
                         tickWrapper.appendChild(line);
                         if (isMajor) {
                             const label = document.createElement("div");
@@ -1146,8 +1037,7 @@ app.registerExtension({
 
                 let dragCounter = 0;
                 container.addEventListener("dragenter", (e) => {
-                    e.preventDefault();
-                    dragCounter++;
+                    e.preventDefault(); dragCounter++;
                     if (dragCounter === 1) {
                         container.style.outline = "2px dashed #38bdf8";
                         container.style.outlineOffset = "-2px";
@@ -1156,17 +1046,14 @@ app.registerExtension({
                 });
                 container.addEventListener("dragover", (e) => { e.preventDefault(); });
                 container.addEventListener("dragleave", (e) => {
-                    e.preventDefault();
-                    dragCounter--;
+                    e.preventDefault(); dragCounter--;
                     if (dragCounter === 0) {
                         container.style.outline = "none";
                         container.style.background = defaultBg;
                     }
                 });
                 container.addEventListener("drop", (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    dragCounter = 0;
+                    e.preventDefault(); e.stopPropagation(); dragCounter = 0;
                     container.style.outline = "none";
                     container.style.background = defaultBg;
                     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
