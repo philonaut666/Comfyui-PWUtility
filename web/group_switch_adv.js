@@ -5,7 +5,8 @@ const NODE_NAME = "GroupSwitchADV";
 const i18n = {
     zh: {
         title: "组开关管理器", allColors: "所有", refresh: "刷新", settings: "设置", cancel: "取消", confirm: "确定",
-        enable: "开启", disable: "关闭", modeLabel: "运行模式", modeDisable: "Mute", modeBypass: "Bypass",
+        enable: "开启", disable: "关闭", active: "Active", bypass: "Bypass", mute: "Mute",
+        modeLabel: "运行模式", modeDisable: "Mute", modeBypass: "Bypass",
         colorRed: "红色", colorBrown: "棕色", colorGreen: "绿色", colorBlue: "蓝色", colorPaleBlue: "浅蓝色",
         colorCyan: "青色", colorPurple: "紫色", colorYellow: "黄色", colorBlack: "黑色",
         matchMode: "匹配模式", matchColors: "按颜色", matchTitle: "按标题", matchNone: "无(显示全部)",
@@ -17,7 +18,8 @@ const i18n = {
     },
     en: {
         title: "Group Switch ADV", allColors: "All", refresh: "Refresh", settings: "Settings", cancel: "Cancel", confirm: "Confirm",
-        enable: "Enable", disable: "Disable", modeLabel: "Execution Mode", modeDisable: "Mute", modeBypass: "Bypass",
+        enable: "Enable", disable: "Disable", active: "Active", bypass: "Bypass", mute: "Mute",
+        modeLabel: "Execution Mode", modeDisable: "Mute", modeBypass: "Bypass",
         colorRed: "Red", colorBrown: "Brown", colorGreen: "Green", colorBlue: "Blue", colorPaleBlue: "Pale Blue",
         colorCyan: "Cyan", colorPurple: "Purple", colorYellow: "Yellow", colorBlack: "Black",
         matchMode: "Match Mode", matchColors: "By Color", matchTitle: "By Title", matchNone: "None(Show All)",
@@ -263,7 +265,6 @@ app.registerExtension({
                         color: white !important; 
                         border-color: #388e3c !important; 
                     }
-                    /* 【修改】优化 - 号的显示，使其更粗且完美居中 */
                     .gsa-rule button.r-mirror-add.added { 
                         background: #e9ecef !important; 
                         color: #4caf50 !important; 
@@ -508,24 +509,25 @@ app.registerExtension({
                     }
                 }
 
+                // 【核心重构】支持 Active/Bypass/Mute 三种状态的 BFS 联动推演
                 const finalStates = {};
                 const pendingActions = [];
                 const sourceRules = globalRules[groupName];
                 if (sourceRules) {
                     const rules = enable ? sourceRules.on_enable : sourceRules.on_disable;
-                    for (const rule of rules) pendingActions.push({ name: rule.target_group, enabled: rule.action === 'enable', depth: 1 });
+                    for (const rule of rules) pendingActions.push({ name: rule.target_group, action: rule.action || 'active', depth: 1 });
                 }
                 
                 let head = 0;
                 while(head < pendingActions.length) {
-                    const action = pendingActions[head++];
-                    const { name, enabled, depth } = action;
+                    const act = pendingActions[head++];
+                    const { name, action, depth } = act;
                     if (finalStates[name] && finalStates[name].depth <= depth) continue;
-                    finalStates[name] = { enabled, depth };
+                    finalStates[name] = { action, depth };
                     const rules = globalRules[name];
                     if (rules) {
-                        const nextRules = enabled ? rules.on_enable : rules.on_disable;
-                        for (const rule of nextRules) pendingActions.push({ name: rule.target_group, enabled: rule.action === 'enable', depth: depth + 1 });
+                        const nextRules = (action === 'active') ? rules.on_enable : rules.on_disable;
+                        for (const rule of nextRules) pendingActions.push({ name: rule.target_group, action: rule.action || 'active', depth: depth + 1 });
                     }
                 }
                 
@@ -534,16 +536,15 @@ app.registerExtension({
                     if (targetGroup) {
                         const targetNodes = getNodesInGroupGlobal(targetGroup);
                         if (targetNodes.length > 0) {
-                            let targetSwitchMode = 'bypass';
-                            for (const node of allAdvNodes) {
-                                const cfg = node.properties.groups.find(g => g.group_name === name);
-                                if (cfg) { targetSwitchMode = node.properties.switchMode || 'bypass'; break; }
-                            }
-                            const targetMode = state.enabled ? 0 : (targetSwitchMode === 'bypass' ? 4 : 2);
+                            let targetMode = 0;
+                            if (state.action === 'active') targetMode = 0;
+                            else if (state.action === 'mute') targetMode = 2;
+                            else if (state.action === 'bypass') targetMode = 4;
+                            
                             changeModeOfNodes(targetNodes, targetMode);
                             for (const node of allAdvNodes) {
                                 const cfg = node.properties.groups.find(g => g.group_name === name);
-                                if (cfg) cfg.enabled = state.enabled;
+                                if (cfg) cfg.enabled = (targetMode === 0);
                             }
                         }
                     }
@@ -648,11 +649,11 @@ app.registerExtension({
 
             dlg.querySelector('#l-add-on').onclick = () => { 
                 const allGroups = this.getWorkflowGroups().filter(g => g.title !== cfg.group_name);
-                if(allGroups.length) { temp.linkage.on_enable.push({target_group: allGroups[0].title, action: 'enable'}); renderRules('on_enable'); } 
+                if(allGroups.length) { temp.linkage.on_enable.push({target_group: allGroups[0].title, action: 'active'}); renderRules('on_enable'); } 
             };
             dlg.querySelector('#l-add-off').onclick = () => { 
                 const allGroups = this.getWorkflowGroups().filter(g => g.title !== cfg.group_name);
-                if(allGroups.length) { temp.linkage.on_disable.push({target_group: allGroups[0].title, action: 'enable'}); renderRules('on_disable'); } 
+                if(allGroups.length) { temp.linkage.on_disable.push({target_group: allGroups[0].title, action: 'active'}); renderRules('on_disable'); } 
             };
             
             const close = () => dlg.remove();
@@ -701,8 +702,9 @@ app.registerExtension({
                     <div class="gsa-search-menu"></div>
                 </div>
                 <select class="r-action">
-                    <option value="enable" ${rule.action === 'enable' ? 'selected' : ''}>${t('enable')}</option>
-                    <option value="disable" ${rule.action === 'disable' ? 'selected' : ''}>${t('disable')}</option>
+                    <option value="active" ${rule.action === 'active' ? 'selected' : ''}>${t('active')}</option>
+                    <option value="bypass" ${rule.action === 'bypass' ? 'selected' : ''}>${t('bypass')}</option>
+                    <option value="mute" ${rule.action === 'mute' ? 'selected' : ''}>${t('mute')}</option>
                 </select>
                 <button class="r-del">X</button>
             `;
@@ -718,7 +720,6 @@ app.registerExtension({
                 const exists = (config.linkage[oppositeType] || []).some(r => r.target_group === rule.target_group);
                 if (exists) {
                     mirrorBtn.classList.add('added');
-                    // 【修改】将 ✓ 改为 -
                     mirrorBtn.innerHTML = '-';
                     mirrorBtn.title = "Reverse rule exists";
                 } else {
@@ -733,7 +734,11 @@ app.registerExtension({
                 e.stopPropagation();
                 if (mirrorBtn.classList.contains('added')) return;
                 
-                const oppositeAction = rule.action === 'enable' ? 'disable' : 'enable';
+                let oppositeAction = 'mute';
+                if (rule.action === 'active') oppositeAction = 'mute';
+                else if (rule.action === 'mute') oppositeAction = 'active';
+                else if (rule.action === 'bypass') oppositeAction = 'active';
+
                 if (!config.linkage[oppositeType]) config.linkage[oppositeType] = [];
                 
                 config.linkage[oppositeType].push({
