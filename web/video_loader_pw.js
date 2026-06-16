@@ -213,7 +213,6 @@ app.registerExtension({
                     }
                 };
 
-                // NEW: Automatically trigger refresh when 'path' widget value changes
                 if (pathWidget) {
                     const origPathCallback = pathWidget.callback;
                     pathWidget.callback = function () {
@@ -224,17 +223,15 @@ app.registerExtension({
                     };
                 }
 
-                // NEW: Listen for connection changes to the 'path' input to auto-refresh
                 const origOnConnectionsChange = node.onConnectionsChange;
                 node.onConnectionsChange = function (type, index, connected, link_info, io_slot) {
                     if (origOnConnectionsChange) origOnConnectionsChange.apply(this, arguments);
-                    // type: 1 = INPUT, 2 = OUTPUT. We care about INPUT (1)
                     if (type === 1 && connected && io_slot && io_slot.name === "path") {
                         setTimeout(() => {
                             if (pathWidget && pathWidget.value) {
                                 applyVideoPath(String(pathWidget.value).trim(), true);
                             }
-                        }, 150); // Small delay to ensure widget value is updated by ComfyUI
+                        }, 150);
                     }
                 };
 
@@ -333,21 +330,19 @@ app.registerExtension({
                     fileInput.click(); 
                 });
 
-                // NEW: "Refresh & Run" button that updates UI AND triggers workflow execution
+                // FIX: Use app.queuePrompt(0, node.id) to trigger "Run (Branch)" behavior
+                // This executes ONLY this node and its dependencies, ignoring downstream nodes.
                 const refreshBtnWidget = this.addWidget("button", "Refresh & Run", null, () => {
                     const targetPath = (pathWidget && pathWidget.value && String(pathWidget.value).trim()) 
                         ? String(pathWidget.value).trim() 
                         : (videoWidget ? String(videoWidget.value).trim() : "");
                         
                     if (targetPath) {
-                        // 1. Force frontend UI update immediately
                         applyVideoPath(targetPath, true);
                         
-                        // 2. Trigger ComfyUI execution to ensure backend reads the new path 
-                        // and returns accurate video_info (frame count, duration, etc.)
-                        // This mimics the "Run Branch" functionality.
                         setTimeout(() => {
-                            app.queuePrompt(0);
+                            // Passing node.id as the second argument restricts execution to this node branch only
+                            app.queuePrompt(0, node.id);
                         }, 100);
                     } else {
                         console.warn("[VideoLoaderPW] No video path found to refresh.");
