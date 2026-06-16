@@ -8,7 +8,6 @@ from server import PromptServer
 from aiohttp import web
 import comfy.utils
 
-# Custom API route to serve video files from anywhere on the user's system for the frontend preview
 @PromptServer.instance.routes.get("/video_ui_custom_view")
 async def custom_view(request):
     file_path = request.query.get("filename", "")
@@ -16,7 +15,6 @@ async def custom_view(request):
         return web.FileResponse(file_path)
     return web.Response(status=404, text="File not found")
 
-# Custom API route for Chunked Uploads to bypass the 413 Payload Too Large error
 @PromptServer.instance.routes.post("/video_ui_upload_chunk")
 async def upload_chunk(request):
     post = await request.post()
@@ -27,7 +25,6 @@ async def upload_chunk(request):
     upload_dir = folder_paths.get_input_directory()
     file_path = os.path.join(upload_dir, filename)
     
-    # Append to file if it's not the first chunk, otherwise write new
     mode = "ab" if chunk_index > 0 else "wb"
     with open(file_path, mode) as f:
         f.write(file.file.read())
@@ -66,17 +63,14 @@ class VideoLoaderPW:
     CATEGORY = "PW/Video"
 
     def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, path=None, **kwargs):
-        # If a path is connected from LocalMedia Manager, use it in priority over the widget value
         video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
 
         if not video_to_load:
-            # Return blank defaults if no video is loaded
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
             empty_audio = {"waveform": torch.zeros((1, 1, 44100)), "sample_rate": 44100}
-            return {"ui": {"video_path": [""]}, "result": (empty_image, empty_audio, 0.0, 0, "{}")}
+            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, empty_audio, 0.0, 0, "{}")}
 
-        # 1. Resolve path using ComfyUI standard paths or Absolute Path
-        video_path = video_to_load  # Try exact/absolute path first
+        video_path = video_to_load
         if not os.path.exists(video_path):
             video_path_annotated = folder_paths.get_annotated_filepath(video_to_load)
             if os.path.exists(video_path_annotated):
@@ -88,10 +82,7 @@ class VideoLoaderPW:
                 else:
                     raise FileNotFoundError(f"Video file not found: {video_to_load}")
 
-        # Open container to read streams and metadata
         container = av.open(video_path)
-        
-        # Determine video stream and duration
         video_stream = container.streams.video[0] if len(container.streams.video) > 0 else None
         video_duration = 0
         if video_stream and video_stream.duration and video_stream.time_base:
@@ -100,7 +91,6 @@ class VideoLoaderPW:
         orig_w = video_stream.codec_context.width if video_stream else 512
         orig_h = video_stream.codec_context.height if video_stream else 512
 
-        # Capture source stream metadata for video_info output
         source_fps = 0.0
         if video_stream:
             avg_rate = getattr(video_stream, 'average_rate', None) or getattr(video_stream, 'guessed_rate', None)
@@ -109,12 +99,11 @@ class VideoLoaderPW:
         source_frame_count = int(video_stream.frames) if video_stream and video_stream.frames else 0
         source_duration = video_duration
 
-        # Determine correct colorspace and color range for PyAV conversion to prevent color shift
         try:
             from av.video.reformatter import Colorspace, ColorRange
             fallback_cs = Colorspace.ITU709 if max(orig_w, orig_h) >= 720 else Colorspace.ITU601
             fallback_cr = ColorRange.MPEG
-            dst_range = ColorRange.JPEG # RGB should always be full range
+            dst_range = ColorRange.JPEG
         except ImportError:
             fallback_cs = "itu709" if max(orig_w, orig_h) >= 720 else "itu601"
             fallback_cr = "mpeg"
@@ -125,7 +114,6 @@ class VideoLoaderPW:
         
         if video_stream and video_stream.codec_context:
             cc = video_stream.codec_context
-              
             c_space = getattr(cc, 'colorspace', getattr(cc, 'color_space', None))
             if c_space and hasattr(c_space, 'name') and c_space.name != "UNSPECIFIED":
                 src_colorspace = c_space
@@ -138,19 +126,16 @@ class VideoLoaderPW:
             elif c_range and isinstance(c_range, str) and "unspecified" not in c_range.lower():
                 src_color_range = c_range
 
-        # Calculate manual crop from interactive UI first
         manual_crop_left = int(orig_w * crop_x)
         manual_crop_top = int(orig_h * crop_y)
         manual_crop_right = orig_w - int(orig_w * (crop_x + crop_w))
         manual_crop_bottom = orig_h - int(orig_h * (crop_y + crop_h))
         
-        # Ensure we don't crop more than the image
         manual_crop_left = max(0, min(manual_crop_left, orig_w - 1))
         manual_crop_top = max(0, min(manual_crop_top, orig_h - 1))
         manual_crop_right = max(0, min(manual_crop_right, orig_w - manual_crop_left - 1))
         manual_crop_bottom = max(0, min(manual_crop_bottom, orig_h - manual_crop_top - 1))
 
-        # Determine exact bounds based on frontend mode
         if display_mode == "frames":
             fr = float(frame_rate) if frame_rate > 0 else 24.0
             actual_start_time = float(start_frame) / fr
@@ -160,17 +145,14 @@ class VideoLoaderPW:
             actual_end_time = end_time if (end_time > 0 and end_time > start_time) else video_duration
 
         if actual_end_time <= 0:
-            actual_end_time = float('inf') # Fallback if duration is unknown
+            actual_end_time = float('inf')
 
-        # 2. Extract Video Frames (PyAV)
         frames = []
         image_tensor = None
         frames_loaded = 0
          
         if video_stream:
-            video_stream.thread_type = "AUTO" # Enable multithreaded decoding
-            
-            # Efficiently seek backwards to the nearest keyframe
+            video_stream.thread_type = "AUTO"
             if video_stream.time_base:
                 seek_pts = int(actual_start_time / float(video_stream.time_base))
             else:
@@ -178,11 +160,9 @@ class VideoLoaderPW:
             
             container.seek(seek_pts, stream=video_stream, backward=True)
             
-            # Custom sampling to force specific framerate 
             frame_interval = 1.0 / float(frame_rate) if frame_rate > 0 else 1.0/24.0
             expected_target_time = actual_start_time
             
-            # Pre-calculate expected frames
             alloc_end_time = actual_end_time if actual_end_time != float('inf') else video_duration
             expected_frames = 0
             if alloc_end_time > 0:
@@ -200,11 +180,9 @@ class VideoLoaderPW:
                 if frame_time < actual_start_time:
                     continue
                     
-                # Add a slight buffer to ensure we evaluate the boundary correctly
                 if frame_time > actual_end_time + frame_interval: 
                     break
                     
-                # Fix PyAV color shift by forcing proper colorspace and range conversion.
                 try:
                     frame = frame.reformat(
                         format="rgb24",
@@ -217,12 +195,10 @@ class VideoLoaderPW:
                     print(f"[VideoLoaderPW] Color reformat failed, using default: {e}")
                     frame_rgb = frame.to_ndarray(format='rgb24')
                 
-                # Apply interactive crop first
                 if manual_crop_left > 0 or manual_crop_top > 0 or manual_crop_right > 0 or manual_crop_bottom > 0:
                     frame_rgb = frame_rgb[manual_crop_top:orig_h-manual_crop_bottom, manual_crop_left:orig_w-manual_crop_right, :]
                 
                 # FIX: Relaxed floating point boundary conditions to prevent dropping the exact last frame
-                # Changed from: expected_target_time <= frame_time and expected_target_time < actual_end_time - 1e-5
                 while expected_target_time <= frame_time + 1e-5 and expected_target_time <= actual_end_time + 1e-5:
                     if image_tensor is None and expected_frames > 0:
                         height, width = frame_rgb.shape[:2]
@@ -248,7 +224,6 @@ class VideoLoaderPW:
                         
                     expected_target_time += frame_interval
 
-        # Convert frames to ComfyUI Image standard format
         if image_tensor is not None:
             if frames_loaded > 0:
                 image_tensor = image_tensor[:frames_loaded]
@@ -260,9 +235,7 @@ class VideoLoaderPW:
         else:
             image_tensor = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
 
-        # 3. Extract Audio (PyAV)
         audio_dict = {"waveform": torch.zeros((1, 1, 44100)), "sample_rate": 44100}
-        
         if len(container.streams.audio) > 0:
             try:
                 audio_stream = container.streams.audio[0]
@@ -304,7 +277,6 @@ class VideoLoaderPW:
                          
                     offset_sec = max(0.0, actual_start_time - first_frame_time)
                     start_sample = int(offset_sec * sample_rate)
-                    
                     duration_sec_audio = actual_end_time - actual_start_time
                     end_sample = start_sample + int(duration_sec_audio * sample_rate)
                     
@@ -315,7 +287,6 @@ class VideoLoaderPW:
                          
                     waveform = waveform.unsqueeze(0)
                     audio_dict = {"waveform": waveform, "sample_rate": sample_rate}
-                    
             except Exception as e:
                 print(f"[VideoLoaderPW] Audio track extraction skipped or failed: {e}")
 
@@ -344,11 +315,11 @@ class VideoLoaderPW:
              "loaded_height":      loaded_h,
         }, indent=4)
 
-        return {"ui": {"video_path": [str(video_to_load)]}, "result": (image_tensor, audio_dict, final_duration_sec, frame_count, video_info)}
+        # FIX: Include video_info in the 'ui' dictionary so the frontend 'executed' event can reliably access it
+        return {
+            "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
+            "result": (image_tensor, audio_dict, final_duration_sec, frame_count, video_info)
+        }
 
-NODE_CLASS_MAPPINGS = {
-    "VideoLoaderPW": VideoLoaderPW,
-}
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "VideoLoaderPW": "Video Loader PW",
-}
+NODE_CLASS_MAPPINGS = {"VideoLoaderPW": VideoLoaderPW}
+NODE_DISPLAY_NAME_MAPPINGS = {"VideoLoaderPW": "Video Loader PW"}
