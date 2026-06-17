@@ -6,6 +6,65 @@ import os
 import folder_paths
 import io
 import comfy.utils
+import time
+import base64
+import re
+from server import PromptServer
+from aiohttp import web
+
+# --- Crop Endpoint Registration ---
+@PromptServer.instance.routes.post("/ImageLoaderPW/crop")
+async def crop_image(request):
+    try:
+        data = await request.json()
+        original_filename = data.get("filename")
+        image_data_url = data.get("image")
+        
+        if not original_filename or not image_data_url:
+            return web.json_response({"error": "Missing data"}, status=400)
+            
+        subfolder = ""
+        if "/" in original_filename:
+            parts = original_filename.split("/")
+            subfolder = "/".join(parts[:-1])
+            original_filename = parts[-1]
+            
+        header, encoded = image_data_url.split(",", 1)
+        binary_data = base64.b64decode(encoded)
+        
+        input_dir = folder_paths.get_input_directory()
+        if subfolder:
+            save_dir = os.path.join(input_dir, subfolder)
+            os.makedirs(save_dir, exist_ok=True)
+        else:
+            save_dir = input_dir
+            
+        base, ext = os.path.splitext(original_filename)
+        if not ext:
+            ext = ".png"
+            
+        base = re.sub(r'_cropped_\d+.*$', '', base)
+        new_filename = f"{base}_cropped_{int(time.time())}{ext}"
+        
+        save_path = os.path.join(save_dir, new_filename)
+        
+        counter = 1
+        while os.path.exists(save_path):
+            new_filename = f"{base}_cropped_{int(time.time())}_{counter}{ext}"
+            save_path = os.path.join(save_dir, new_filename)
+            counter += 1
+            
+        with open(save_path, "wb") as f:
+            f.write(binary_data)
+            
+        relative_path = os.path.join(subfolder, new_filename).replace("\\", "/")
+        
+        return web.json_response({
+            "filename": relative_path
+        })
+    except Exception as e:
+        print(f"Error cropping image: {e}")
+        return web.json_response({"error": str(e)}, status=500)
 
 class ImageLoaderPW:
     @classmethod
