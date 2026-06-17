@@ -3,6 +3,7 @@ import os
 import shutil
 import torch
 import av
+import math
 
 def f32_pcm(wav: torch.Tensor) -> torch.Tensor:
     """Convert audio to float 32 bits PCM format."""
@@ -62,9 +63,12 @@ class AudioLoaderPW:
                 "start_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "end_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "duration": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
-                "fps": ("FLOAT", {"default": 30.0, "min": 0.0, "max": 1000.0, "step": 0.01, "tooltip": "Frames per second"}),
+                # 修改 1: fps 默认值改为 25.0，step 改为 0.001 以支持 3 位小数
+                "fps": ("FLOAT", {"default": 25.0, "min": 0.0, "max": 1000.0, "step": 0.001, "tooltip": "Frames per second"}),
                 "pre_silence": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Silence in seconds to add before the audio"}),
                 "post_silence": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Silence in seconds to add after the audio"}),
+                # 修改 2: 添加 8n+1 开关
+                "align_8n_plus_1": ("BOOLEAN", {"default": False, "tooltip": "Pad audio to make total frames equal to 8n+1 based on fps"}),
             },
             "optional": {
                 "audioUI": ("AUDIO_UI",),
@@ -81,7 +85,7 @@ class AudioLoaderPW:
     def VALIDATE_INPUTS(cls, audio, **kwargs):
         return True
 
-    def load_audio(self, audio, start_time, end_time, duration, fps, pre_silence, post_silence, path=None, **kwargs):
+    def load_audio(self, audio, start_time, end_time, duration, fps, pre_silence, post_silence, align_8n_plus_1, path=None, **kwargs):
         audio_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else audio
 
         try:
@@ -125,17 +129,47 @@ class AudioLoaderPW:
         if trimmed_waveform.shape[1] == 0:
             trimmed_waveform = torch.zeros((waveform.shape[0], 1), dtype=waveform.dtype, device=waveform.device)
         
-        # --- 新增：添加前置和后置静音 ---
+        # 添加前置和后置静音
         pre_silence_frames = int(pre_silence * sample_rate)
         post_silence_frames = int(post_silence * sample_rate)
         
         pre_silence_waveform = torch.zeros((waveform.shape[0], pre_silence_frames), dtype=trimmed_waveform.dtype, device=trimmed_waveform.device)
         post_silence_waveform = torch.zeros((waveform.shape[0], post_silence_frames), dtype=trimmed_waveform.dtype, device=trimmed_waveform.device)
         
-        # 拼接: [前置静音, 截取音频, 后置静音]
         final_waveform = torch.cat((pre_silence_waveform, trimmed_waveform, post_silence_waveform), dim=1)
         
+        # --- 新增：8n+1 帧对齐逻辑 ---
+        if align_8n_plus_1 and fps > 0:
+            # 1. 计算总输出的 audio 长度 (秒)
+            audio_length_sec = final_waveform.shape[1] / sample_rate
+            
+            # 2. 依据输入的 fps 计算总帧数 (使用 round 避免浮点精度导致的 1 帧误差)
+            total_frames = int(round(audio_length_sec * fps))
+            
+            # 3. 判断该帧数是否符合 8n+1 的标准
+            if (total_frames - 1) % 8 != 0:
+                # 4. 按照 ceil(总帧数/8)*8+1 的公式算出新的总帧数 (使用整数运算避免浮点问题)
+                new_total_frames = ((total_frames + 7) // 8) * 8 + 1
+                
+                # 5. 计算出新的总帧数与原总帧数的帧数差额
+                diff_frames = new_total_frames - total_frames
+                
+                # 6. 将帧数差额转换为采样点差额，并在音频最后添加这个差额的空音频
+                diff_samples = int(round(diff_frames * sample_rate / fps))
+                
+                if diff_samples > 0:
+                    pad_waveform = torch.zeros((final_waveform.shape[0], diff_samples), dtype=final_waveform.dtype, device=final_waveform.device)
+                    final_waveform = torch.cat((final_waveform, pad_waveform), dim=1)
+                
+                # 7. duration 按照新的总帧数的值根据 fps 换算为秒数进行输出
+                final_duration = float(new_total_frames / fps)
+            else:
+                # 如果符合 8n+1 标准，则不添加空音频，duration 直接输出 audio 长度（秒）
+                final_duration = float(audio_length_sec)
+        else:
+            # 开关关闭，不进行判断，直接输出音频和基于 sample_rate 的 duration
+            final_duration = float(final_waveform.shape[1] / sample_rate)
+        
         audio_output = {"waveform": final_waveform.unsqueeze(0), "sample_rate": sample_rate}
-        final_duration = float(final_waveform.shape[1] / sample_rate)
         
         return {"ui": {"audio_path": [str(audio_to_load)]}, "result": (audio_output, final_duration)}
