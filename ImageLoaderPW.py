@@ -22,7 +22,7 @@ class ImageLoaderPW:
             },
         }
 
-    # Added "IMAGE" at the beginning for multi_output + 50 individual outputs = 51 outputs
+    # Keep 51 outputs in backend to prevent ComfyUI execution engine crashes when JS dynamically adds outputs
     RETURN_TYPES = ("IMAGE",) * 51
     RETURN_NAMES = ("multi_output",) + tuple(f"image_{i+1}" for i in range(50))
     FUNCTION = "load_images"
@@ -88,7 +88,6 @@ class ImageLoaderPW:
             width = width if width > 0 else ow
             height = height if height > 0 else oh
 
-        # Always apply resize logic
         outputs = image.permute(0, 3, 1, 2)
 
         if interpolation == "lanczos":
@@ -125,7 +124,6 @@ class ImageLoaderPW:
 
         for path in valid_paths:
             try:
-                # Resolve full path
                 full_path = path
                 if not os.path.exists(full_path):
                      full_path = os.path.join(folder_paths.get_input_directory(), path)
@@ -134,19 +132,15 @@ class ImageLoaderPW:
                     print(f"Warning: Image path not found: {path}")
                     continue
 
-                # Load image
                 image = Image.open(full_path)
                 image = ImageOps.exif_transpose(image)
                 image = image.convert("RGB")
 
-                # Convert to Torch Tensor to prepare for Advanced Resize Logic
                 image_np = np.array(image).astype(np.float32) / 255.0
                 image_tensor = torch.from_numpy(image_np)[None,]
 
-                # Apply Advanced Resize
                 image_tensor = self.resize_image(image_tensor, width, height, resize_method, interpolation, multiple_of)
      
-                # Compression (Applied after resize to accurately maintain the effect)
                 if img_compression > 0:
                     img_np = (image_tensor[0].numpy() * 255).clip(0, 255).astype(np.uint8)
                     img_pil = Image.fromarray(img_np)
@@ -159,26 +153,15 @@ class ImageLoaderPW:
             except Exception as e:
                 print(f"Error loading {path}: {e}")
 
-        # Combine all successfully loaded images into a single batched tensor for multi_output
+        # 1. Changed multi_output to be a Python LIST of tensors instead of a batched tensor
         if len(results) > 0:
-            # Safety Check: Advanced resize methods might output differently sized tensors (e.g., 'keep proportion')
-            first_shape = results[0].shape
-            all_same_shape = all(r.shape == first_shape for r in results)
-            
-            if all_same_shape:
-                multi_output = torch.cat(results, dim=0)
-            else:
-                print("ImageLoaderPW Warning: Images have different dimensions due to resize settings. Cannot batch into multi_output. Outputting zero tensor for the batch, but individual output nodes will still work fine.")
-                multi_output = torch.zeros((1, 64, 64, 3))
+            multi_output = results 
         else:
-            # Fallback empty tensor if no valid paths
-            multi_output = torch.zeros((1, 64, 64, 3))
-            results = [multi_output]
+            multi_output = []
 
         # Pad individual outputs exactly to length 50 as defined in RETURN_TYPES
         padded_results = results + [torch.zeros((1, 64, 64, 3))] * (50 - len(results))
 
-        # Return the multi batch output first, followed by the individual padded items
         return (multi_output, *padded_results[:50])
 
 NODE_CLASS_MAPPINGS = {
