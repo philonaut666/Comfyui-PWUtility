@@ -44,7 +44,7 @@ app.registerExtension({
                                 app.graph.setDirtyCanvas(true, true);
                             }
                         }
-                }
+                    }
                 }, 10);
 
                 Object.defineProperty(node, 'imgs', {
@@ -293,7 +293,6 @@ app.registerExtension({
                     const startWidget = node.widgets && node.widgets.find(w => w.name === "start_time");
                     const endWidget = node.widgets && node.widgets.find(w => w.name === "end_time");
                     const durationWidget = node.widgets && node.widgets.find(w => w.name === "duration");
-                    // 新增：获取前后置静音 widget
                     const preSilenceWidget = node.widgets && node.widgets.find(w => w.name === "pre_silence");
                     const postSilenceWidget = node.widgets && node.widgets.find(w => w.name === "post_silence");
                     
@@ -315,7 +314,6 @@ app.registerExtension({
                             let d = parseFloat(v) || 0;
                             if (d < 0) d = 0;
                             
-                            // 新增：计算扣除静音后的可用音频时长
                             let pre = preSilenceWidget ? parseFloat(preSilenceWidget.value) || 0 : 0;
                             let post = postSilenceWidget ? parseFloat(postSilenceWidget.value) || 0 : 0;
                             let availableForAudio = d - pre - post;
@@ -451,7 +449,6 @@ app.registerExtension({
                         fill.style.left = `${sPct}%`;
                         fill.style.width = `${ePct - sPct}%`;
                         
-                        // 新增：计算包含前后置静音的总时长
                         const currentDur = parseFloat((e - s + pre + post).toFixed(2));
                         trimLength.textContent = `Trimmed: ${currentDur}s`;
                         
@@ -496,7 +493,6 @@ app.registerExtension({
                         if (audioEl.currentTime < s || audioEl.currentTime >= e) { audioEl.currentTime = s; }
                     };
 
-                    // 新增：将 pre_silence 和 post_silence 加入监听列表
                     [startWidget, endWidget, preSilenceWidget, postSilenceWidget].forEach(w => {
                         if (w) {
                             const orig = w.callback;
