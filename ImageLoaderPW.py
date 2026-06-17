@@ -4,16 +4,13 @@ import numpy as np
 from PIL import Image, ImageOps
 import os
 import folder_paths
-import io as py_io  # Renamed to avoid conflict with comfy_api.io
+import io as py_io 
 import comfy.utils
 import time
 import base64
 import re
 from server import PromptServer
 from aiohttp import web
-
-# Import ComfyUI V3 API
-from comfy_api.v0_0_2 import io, ui
 
 # --- Crop Endpoint Registration ---
 @PromptServer.instance.routes.post("/ImageLoaderPW/crop")
@@ -70,32 +67,28 @@ async def crop_image(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
-class ImageLoaderPW(io.ComfyNode):
+class ImageLoaderPW:
     @classmethod
-    def define_schema(cls) -> io.Schema:
-        return io.Schema(
-            node_id="ImageLoaderPW",
-            display_name="Image Loader PW",
-            category="PWUtility",
-            description="Load multiple images with advanced resize, crop, and compression options.",
-            inputs=[
-                io.String.Input("image_paths", default="", multiline=True, tooltip="Paths to images, one per line"),
-                io.Int.Input("width", default=0, min=0, max=8192, step=1),
-                io.Int.Input("height", default=0, min=0, max=8192, step=1),
-                io.Combo.Input("interpolation", options=["lanczos", "nearest", "bilinear", "bicubic", "area", "nearest-exact"]),
-                io.Combo.Input("resize_method", options=["keep proportion", "stretch", "pad", "crop"]),
-                io.Int.Input("multiple_of", default=32, min=0, max=512, step=1),
-                io.Int.Input("img_compression", default=18, min=0, max=100, step=1),
-            ],
-            outputs=[
-                io.Image.Output(display_name="IMAGES"), 
-            ] + [
-                io.Image.Output(display_name=f"image_{i+1}") for i in range(50)
-            ]
-        )
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image_paths": ("STRING", {"default": "", "multiline": True}),
+                "width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1}),
+                "height": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1}),
+                "interpolation": (["lanczos", "nearest", "bilinear", "bicubic", "area", "nearest-exact"],),
+                "resize_method": (["keep proportion", "stretch", "pad", "crop"],),
+                "multiple_of": ("INT", {"default": 32, "min": 0, "max": 512, "step": 1}),
+                "img_compression": ("INT", {"default": 18, "min": 0, "max": 100, "step": 1}),
+            },
+        }
 
-    @classmethod
-    def resize_image(cls, image, width, height, resize_method="keep proportion", interpolation="nearest", multiple_of=0):
+    # 保持 51 个输出端口，防止前端 JS 动态添加时导致 ComfyUI 执行引擎崩溃
+    RETURN_TYPES = ("IMAGE",) * 51
+    RETURN_NAMES = ("IMAGES",) + tuple(f"image_{i+1}" for i in range(50))
+    FUNCTION = "load_images"
+    CATEGORY = "PWUtility"
+
+    def resize_image(self, image, width, height, resize_method="keep proportion", interpolation="nearest", multiple_of=0):
         MAX_RESOLUTION = 8192
         _, oh, ow, _ = image.shape
         x = y = x2 = y2 = 0
@@ -185,8 +178,7 @@ class ImageLoaderPW(io.ComfyNode):
 
         return outputs
 
-    @classmethod
-    def execute(cls, image_paths="", width=0, height=0, interpolation="lanczos", resize_method="keep proportion", multiple_of=32, img_compression=18, **kwargs):
+    def load_images(self, image_paths, width, height, interpolation, resize_method, multiple_of, img_compression):
         results = []
         valid_paths = [p.strip() for p in image_paths.split("\n") if p.strip()]
 
@@ -207,7 +199,7 @@ class ImageLoaderPW(io.ComfyNode):
                 image_np = np.array(image).astype(np.float32) / 255.0
                 image_tensor = torch.from_numpy(image_np)[None,]
 
-                image_tensor = cls.resize_image(image_tensor, width, height, resize_method, interpolation, multiple_of)
+                image_tensor = self.resize_image(image_tensor, width, height, resize_method, interpolation, multiple_of)
      
                 if img_compression > 0:
                     img_np = (image_tensor[0].numpy() * 255).clip(0, 255).astype(np.uint8)
@@ -221,10 +213,12 @@ class ImageLoaderPW(io.ComfyNode):
             except Exception as e:
                 print(f"Error loading {path}: {e}")
 
+        # 生成标准 ComfyUI IMAGE Batch 以兼容 Preview Image 节点
         if len(results) > 0:
             try:
                 IMAGES = torch.cat(results, dim=0)
             except Exception as e:
+                # 智能容错：如果尺寸不一致，自动统一缩放到第一张图片的尺寸
                 print(f"ImageLoaderPW Warning: Images have different dimensions. Resizing all to match the first image to create a valid batch.")
                 target_h, target_w = results[0].shape[1], results[0].shape[2]
                 resized_results = [results[0]]
@@ -238,6 +232,12 @@ class ImageLoaderPW(io.ComfyNode):
 
         padded_results = results + [torch.zeros((1, 64, 64, 3))] * (50 - len(results))
 
-        return io.NodeOutput(IMAGES, *padded_results[:50])
+        return (IMAGES, *padded_results[:50])
 
-NODE_CLASSES = [ImageLoaderPW]
+NODE_CLASS_MAPPINGS = {
+    "ImageLoaderPW": ImageLoaderPW
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "ImageLoaderPW": "Image Loader PW"
+}
