@@ -4,10 +4,13 @@ import numpy as np
 import folder_paths
 import av
 import json
+import uuid
+from PIL import Image
 from server import PromptServer
 from aiohttp import web
 import comfy.utils
 
+# Custom API route to serve video files from anywhere on the user's system for the frontend preview
 @PromptServer.instance.routes.get("/video_ui_custom_view")
 async def custom_view(request):
     file_path = request.query.get("filename", "")
@@ -15,6 +18,7 @@ async def custom_view(request):
         return web.FileResponse(file_path)
     return web.Response(status=404, text="File not found")
 
+# Custom API route for Chunked Uploads to bypass the 413 Payload Too Large error
 @PromptServer.instance.routes.post("/video_ui_upload_chunk")
 async def upload_chunk(request):
     post = await request.post()
@@ -25,6 +29,7 @@ async def upload_chunk(request):
     upload_dir = folder_paths.get_input_directory()
     file_path = os.path.join(upload_dir, filename)
     
+    # Append to file if it's not the first chunk, otherwise write new
     mode = "ab" if chunk_index > 0 else "wb"
     with open(file_path, mode) as f:
         f.write(file.file.read())
@@ -45,7 +50,6 @@ class VideoLoaderPW:
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "end_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "duration_frames": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
-                # FIX 2: Default frame_rate changed from 24 to 25
                 "frame_rate": ("INT", {"default": 25, "min": 1, "max": 120, "step": 1, "tooltip": "Force the video to a specific frame rate for extraction."}),
                 "display_mode": (["seconds", "frames"], {"default": "seconds"}),
                 "crop_x": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
@@ -69,7 +73,7 @@ class VideoLoaderPW:
         if not video_to_load:
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
             empty_audio = {"waveform": torch.zeros((1, 1, 44100)), "sample_rate": 44100}
-            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, empty_audio, 0.0, 0, "{}")}
+            return {"ui": {"video_path": [""], "video_info": ["{}"], "images": []}, "result": (empty_image, empty_audio, 0.0, 0, "{}")}
 
         video_path = video_to_load
         if not os.path.exists(video_path):
@@ -315,8 +319,39 @@ class VideoLoaderPW:
              "loaded_height":      loaded_h,
         }, indent=4)
 
+        # ========================================================================
+        # NEW: Generate a preview image for ComfyUI "Run Branch" and native preview
+        # ========================================================================
+        preview_images = []
+        if image_tensor is not None and image_tensor.shape[0] > 0:
+            try:
+                # Extract the first frame for the preview
+                first_frame = image_tensor[0].cpu().numpy()
+                # Convert from [0.0, 1.0] float32 to [0, 255] uint8
+                first_frame_uint8 = (first_frame * 255.0).clip(0, 255).astype(np.uint8)
+                
+                # Create PIL Image and save to temp directory
+                img = Image.fromarray(first_frame_uint8)
+                temp_dir = folder_paths.get_temp_directory()
+                filename = f"vl_pw_preview_{uuid.uuid4()}.png"
+                file_path = os.path.join(temp_dir, filename)
+                img.save(file_path, format="PNG")
+                
+                # Format expected by ComfyUI frontend for image preview
+                preview_images.append({
+                    "filename": filename,
+                    "subfolder": "",
+                    "type": "temp"
+                })
+            except Exception as e:
+                print(f"[VideoLoaderPW] Failed to generate preview image: {e}")
+
         return {
-            "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
+            "ui": {
+                "video_path": [str(video_to_load)], 
+                "video_info": [video_info],
+                "images": preview_images  # This triggers the native ComfyUI image preview
+            }, 
             "result": (image_tensor, audio_dict, final_duration_sec, frame_count, video_info)
         }
 
