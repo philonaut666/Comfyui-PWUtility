@@ -81,9 +81,8 @@ class ImageLoaderPW:
             },
         }
 
-    # Keep 51 outputs in backend to prevent ComfyUI execution engine crashes when JS dynamically adds outputs
-    RETURN_TYPES = ("IMAGE",) * 51
-    # Changed first output name to "image_list"
+    # 修改点：将第一个输出类型改为 "IMAGE_LIST"，防止误连原生 Preview Image 导致崩溃
+    RETURN_TYPES = ("IMAGE_LIST",) + ("IMAGE",) * 50
     RETURN_NAMES = ("image_list",) + tuple(f"image_{i+1}" for i in range(50))
     FUNCTION = "load_images"
     CATEGORY = "PWUtility"
