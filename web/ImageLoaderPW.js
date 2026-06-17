@@ -8,8 +8,19 @@ function injectGalleryStyles() {
     style.id = 'pw-gallery-styles';
     style.textContent = `
         .pw-gallery-item { position: relative; }
-        .pw-gallery-item .pw-crop-btn { opacity: 0; transition: opacity 0.2s; }
-        .pw-gallery-item:hover .pw-crop-btn { opacity: 1; }
+        .pw-gallery-item .pw-crop-btn { 
+            opacity: 0; 
+            transition: opacity 0.2s, transform 0.2s, background 0.2s; 
+            pointer-events: none; 
+        }
+        .pw-gallery-item:hover .pw-crop-btn { 
+            opacity: 1; 
+            pointer-events: auto; 
+        }
+        .pw-gallery-item .pw-crop-btn:hover {
+            background: rgba(0, 122, 204, 0.9) !important;
+            transform: translate(-50%, -50%) scale(1.1) !important;
+        }
     `;
     document.head.appendChild(style);
 }
@@ -882,21 +893,20 @@ app.registerExtension({
                 `;
                 numBadge.innerText = (index + 1).toString();
 
-                // --- Crop Button Addition ---
+                // --- Crop Button (Centered & Enlarged) ---
                 const cropBtn = document.createElement("div");
                 cropBtn.className = "pw-crop-btn";
                 cropBtn.style.cssText = `
-                    position: absolute; top: 0; left: 0; 
-                    background: rgba(0, 122, 204, 0.8); color: white; 
-                    width: 24px; height: 24px; 
+                    position: absolute; top: 50%; left: 50%; 
+                    transform: translate(-50%, -50%);
+                    background: rgba(0, 0, 0, 0.6); color: white; 
+                    width: 48px; height: 48px; 
                     display: flex; align-items: center; justify-content: center; 
-                    font-size: 16px; cursor: pointer; z-index: 10;
-                    border-bottom-right-radius: 4px;
-                    transition: background 0.2s;
+                    font-size: 32px; cursor: pointer; z-index: 10;
+                    border-radius: 50%;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.6);
                 `;
                 cropBtn.innerHTML = "✂️";
-                cropBtn.onmouseenter = () => { cropBtn.style.background = "rgba(0, 122, 204, 1)"; };
-                cropBtn.onmouseleave = () => { cropBtn.style.background = "rgba(0, 122, 204, 0.8)"; };
 
                 cropBtn.onclick = (e) => {
                     e.stopPropagation();
