@@ -83,8 +83,12 @@ class ImageLoaderPW:
 
     # Keep 51 outputs in backend to prevent ComfyUI execution engine crashes when JS dynamically adds outputs
     RETURN_TYPES = ("IMAGE",) * 51
-    # Changed first output name to "IMAGES"
-    RETURN_NAMES = ("IMAGES",) + tuple(f"image_{i+1}" for i in range(50))
+    RETURN_NAMES = ("image_list",) + tuple(f"image_{i+1}" for i in range(50))
+    
+    # CRITICAL: Tells ComfyUI that the first output is a Python List of Images, 
+    # allowing nodes like Preview Image to correctly iterate and preview it.
+    OUTPUT_IS_LIST = (True,) + (False,) * 50 
+    
     FUNCTION = "load_images"
     CATEGORY = "PWUtility"
 
@@ -178,47 +182,11 @@ class ImageLoaderPW:
 
         return outputs
 
-    def resize_and_pad_to_target(self, image_tensor, target_w, target_h, interpolation="lanczos"):
-        """
-        专门用于 IMAGES 端口的缩放逻辑：
-        按照目标尺寸（第一张图的尺寸）等比例缩放，并使用白边 (1.0) 填充。
-        """
-        _, oh, ow, _ = image_tensor.shape
-        
-        # 计算等比例缩放系数
-        ratio = min(target_w / ow, target_h / oh)
-        new_w = max(1, round(ow * ratio))
-        new_h = max(1, round(oh * ratio))
-
-        outputs = image_tensor.permute(0, 3, 1, 2)
-        
-        # 缩放
-        if interpolation == "lanczos":
-            outputs = comfy.utils.lanczos(outputs, new_w, new_h)
-        else:
-            outputs = F.interpolate(outputs, size=(new_h, new_w), mode=interpolation)
-            
-        # 计算白边 Padding
-        pad_left = (target_w - new_w) // 2
-        pad_right = target_w - new_w - pad_left
-        pad_top = (target_h - new_h) // 2
-        pad_bottom = target_h - new_h - pad_top
-        
-        # 填充白边 (value=1.0)
-        if pad_left > 0 or pad_right > 0 or pad_top > 0 or pad_bottom > 0:
-            outputs = F.pad(outputs, (pad_left, pad_right, pad_top, pad_bottom), value=1.0)
-            
-        outputs = outputs.permute(0, 2, 3, 1)
-        return torch.clamp(outputs, 0.0, 1.0)
-
     def load_images(self, image_paths, width, height, interpolation, resize_method, multiple_of, img_compression):
+        results = []
         valid_paths = [p.strip() for p in image_paths.split("\n") if p.strip()]
-        
-        results_ui = []      # 用于独立的 image_1, image_2... 端口
-        results_batch = []   # 用于 IMAGES 端口
-        target_w, target_h = 0, 0
 
-        for i, path in enumerate(valid_paths):
+        for path in valid_paths:
             try:
                 full_path = path
                 if not os.path.exists(full_path):
@@ -231,40 +199,38 @@ class ImageLoaderPW:
                 image = Image.open(full_path)
                 image = ImageOps.exif_transpose(image)
                 image = image.convert("RGB")
-                
-                # 记录第一张图片的尺寸作为目标尺寸
-                if i == 0:
-                    target_w, target_h = image.size
 
                 image_np = np.array(image).astype(np.float32) / 255.0
                 image_tensor = torch.from_numpy(image_np)[None,]
 
-                # 1. 处理独立输出端口 (应用 UI 面板上的设置)
-                ui_tensor = self.resize_image(image_tensor, width, height, resize_method, interpolation, multiple_of)
+                image_tensor = self.resize_image(image_tensor, width, height, resize_method, interpolation, multiple_of)
+     
                 if img_compression > 0:
-                    img_np = (ui_tensor[0].numpy() * 255).clip(0, 255).astype(np.uint8)
+                    img_np = (image_tensor[0].numpy() * 255).clip(0, 255).astype(np.uint8)
                     img_pil = Image.fromarray(img_np)
                     img_byte_arr = io.BytesIO()
                     img_pil.save(img_byte_arr, format="JPEG", quality=max(1, 100 - img_compression))
                     img_pil = Image.open(img_byte_arr)
-                    ui_tensor = torch.from_numpy(np.array(img_pil).astype(np.float32) / 255.0)[None,]
-                results_ui.append(ui_tensor)
+                    image_tensor = torch.from_numpy(np.array(img_pil).astype(np.float32) / 255.0)[None,]
 
-                # 2. 处理 IMAGES 输出端口 (强制统一为第一张图的尺寸 + 白边 Pad)
-                if target_w > 0 and target_h > 0:
-                    batch_tensor = self.resize_and_pad_to_target(image_tensor, target_w, target_h, interpolation)
-                    results_batch.append(batch_tensor)
-
+                results.append(image_tensor)
             except Exception as e:
                 print(f"Error loading {path}: {e}")
 
-        # 构建 IMAGES 列表输出
-        images_output = results_batch if len(results_batch) > 0 else []
-        
-        # 补齐独立输出端口至 50 个
-        padded_results_ui = results_ui + [torch.zeros((1, 64, 64, 3))] * (50 - len(results_ui))
+        # Construct the Image List exactly like Impact Pack's Make Image List
+        # It collects all valid, processed image tensors in order
+        image_list = []
+        for r in results:
+            image_list.append(r)
+            
+        if not image_list:
+            image_list = [] # Fallback to empty list if no images were loaded
 
-        return (images_output, *padded_results_ui[:50])
+        # Pad individual outputs exactly to length 50 as defined in RETURN_TYPES
+        padded_results = results + [torch.zeros((1, 64, 64, 3))] * (50 - len(results))
+
+        # Return the Image List first, followed by the individual padded items
+        return (image_list, *padded_results[:50])
 
 NODE_CLASS_MAPPINGS = {
     "ImageLoaderPW": ImageLoaderPW
