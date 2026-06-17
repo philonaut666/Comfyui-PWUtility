@@ -4,94 +4,98 @@ import numpy as np
 from PIL import Image, ImageOps
 import os
 import folder_paths
-import io
+import io as py_io  # Renamed to avoid conflict with comfy_api.io
 import comfy.utils
 import time
 import base64
 import re
+from server import PromptServer
+from aiohttp import web
 
-# --- 安全注册路由 (防止因环境差异导致节点无法加载) ---
-try:
-    import server
-    from aiohttp import web
+# Import ComfyUI V3 API
+from comfy_api.v0_0_2 import io, ui
 
-    @server.PromptServer.instance.routes.post("/ImageLoaderPW/crop")
-    async def crop_image(request):
-        try:
-            data = await request.json()
-            original_filename = data.get("filename")
-            image_data_url = data.get("image")
+# --- Crop Endpoint Registration ---
+@PromptServer.instance.routes.post("/ImageLoaderPW/crop")
+async def crop_image(request):
+    try:
+        data = await request.json()
+        original_filename = data.get("filename")
+        image_data_url = data.get("image")
+        
+        if not original_filename or not image_data_url:
+            return web.json_response({"error": "Missing data"}, status=400)
             
-            if not original_filename or not image_data_url:
-                return web.json_response({"error": "Missing data"}, status=400)
-                
-            subfolder = ""
-            if "/" in original_filename:
-                parts = original_filename.split("/")
-                subfolder = "/".join(parts[:-1])
-                original_filename = parts[-1]
-                
-            header, encoded = image_data_url.split(",", 1)
-            binary_data = base64.b64decode(encoded)
+        subfolder = ""
+        if "/" in original_filename:
+            parts = original_filename.split("/")
+            subfolder = "/".join(parts[:-1])
+            original_filename = parts[-1]
             
-            input_dir = folder_paths.get_input_directory()
-            if subfolder:
-                save_dir = os.path.join(input_dir, subfolder)
-                os.makedirs(save_dir, exist_ok=True)
-            else:
-                save_dir = input_dir
-                
-            base_name, ext = os.path.splitext(original_filename)
-            if not ext:
-                ext = ".png"
-                
-            base_name = re.sub(r'_cropped_\d+.*$', '', base_name)
-            new_filename = f"{base_name}_cropped_{int(time.time())}{ext}"
+        header, encoded = image_data_url.split(",", 1)
+        binary_data = base64.b64decode(encoded)
+        
+        input_dir = folder_paths.get_input_directory()
+        if subfolder:
+            save_dir = os.path.join(input_dir, subfolder)
+            os.makedirs(save_dir, exist_ok=True)
+        else:
+            save_dir = input_dir
             
+        base, ext = os.path.splitext(original_filename)
+        if not ext:
+            ext = ".png"
+            
+        base = re.sub(r'_cropped_\d+.*$', '', base)
+        new_filename = f"{base}_cropped_{int(time.time())}{ext}"
+        
+        save_path = os.path.join(save_dir, new_filename)
+        
+        counter = 1
+        while os.path.exists(save_path):
+            new_filename = f"{base}_cropped_{int(time.time())}_{counter}{ext}"
             save_path = os.path.join(save_dir, new_filename)
+            counter += 1
             
-            counter = 1
-            while os.path.exists(save_path):
-                new_filename = f"{base_name}_cropped_{int(time.time())}_{counter}{ext}"
-                save_path = os.path.join(save_dir, new_filename)
-                counter += 1
-                
-            with open(save_path, "wb") as f:
-                f.write(binary_data)
-                
-            relative_path = os.path.join(subfolder, new_filename).replace("\\", "/")
+        with open(save_path, "wb") as f:
+            f.write(binary_data)
             
-            return web.json_response({
-                "filename": relative_path
-            })
-        except Exception as e:
-            print(f"[ImageLoaderPW] Error cropping image: {e}")
-            return web.json_response({"error": str(e)}, status=500)
-except Exception as e:
-    print(f"[ImageLoaderPW] Warning: Could not register /ImageLoaderPW/crop route. Crop feature might be disabled. Error: {e}")
+        relative_path = os.path.join(subfolder, new_filename).replace("\\", "/")
+        
+        return web.json_response({
+            "filename": relative_path
+        })
+    except Exception as e:
+        print(f"Error cropping image: {e}")
+        return web.json_response({"error": str(e)}, status=500)
 
 
-class ImageLoaderPW:
+class ImageLoaderPW(io.ComfyNode):
     @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "image_paths": ("STRING", {"default": "", "multiline": True}),
-                "width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1}),
-                "height": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1}),
-                "interpolation": (["lanczos", "nearest", "bilinear", "bicubic", "area", "nearest-exact"],),
-                "resize_method": (["keep proportion", "stretch", "pad", "crop"],),
-                "multiple_of": ("INT", {"default": 32, "min": 0, "max": 512, "step": 1}),
-                "img_compression": ("INT", {"default": 18, "min": 0, "max": 100, "step": 1}),
-            },
-        }
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="ImageLoaderPW",
+            display_name="Image Loader PW",
+            category="PWUtility",
+            description="Load multiple images with advanced resize, crop, and compression options.",
+            inputs=[
+                io.String.Input("image_paths", default="", multiline=True, tooltip="Paths to images, one per line"),
+                io.Int.Input("width", default=0, min=0, max=8192, step=1),
+                io.Int.Input("height", default=0, min=0, max=8192, step=1),
+                io.Combo.Input("interpolation", options=["lanczos", "nearest", "bilinear", "bicubic", "area", "nearest-exact"]),
+                io.Combo.Input("resize_method", options=["keep proportion", "stretch", "pad", "crop"]),
+                io.Int.Input("multiple_of", default=32, min=0, max=512, step=1),
+                io.Int.Input("img_compression", default=18, min=0, max=100, step=1),
+            ],
+            outputs=[
+                io.Image.Output(display_name="IMAGES"), # Changed to IMAGES
+            ] + [
+                io.Image.Output(display_name=f"image_{i+1}") for i in range(50)
+            ]
+        )
 
-    RETURN_TYPES = ("IMAGE",) * 51
-    RETURN_NAMES = ("IMAGES",) + tuple(f"image_{i+1}" for i in range(50))
-    FUNCTION = "load_images"
-    CATEGORY = "PWUtility"
-
-    def resize_image(self, image, width, height, resize_method="keep proportion", interpolation="nearest", multiple_of=0):
+    @classmethod
+    def resize_image(cls, image, width, height, resize_method="keep proportion", interpolation="nearest", multiple_of=0):
         MAX_RESOLUTION = 8192
         _, oh, ow, _ = image.shape
         x = y = x2 = y2 = 0
@@ -154,10 +158,7 @@ class ImageLoaderPW:
         outputs = image.permute(0, 3, 1, 2)
 
         if interpolation == "lanczos":
-            if hasattr(comfy.utils, 'lanczos'):
-                outputs = comfy.utils.lanczos(outputs, width, height)
-            else:
-                outputs = F.interpolate(outputs, size=(height, width), mode="bicubic")
+            outputs = comfy.utils.lanczos(outputs, width, height)
         else:
             outputs = F.interpolate(outputs, size=(height, width), mode=interpolation)
 
@@ -184,7 +185,8 @@ class ImageLoaderPW:
 
         return outputs
 
-    def load_images(self, image_paths, width, height, interpolation, resize_method, multiple_of, img_compression):
+    @classmethod
+    def execute(cls, image_paths, width, height, interpolation, resize_method, multiple_of, img_compression):
         results = []
         valid_paths = [p.strip() for p in image_paths.split("\n") if p.strip()]
 
@@ -205,12 +207,12 @@ class ImageLoaderPW:
                 image_np = np.array(image).astype(np.float32) / 255.0
                 image_tensor = torch.from_numpy(image_np)[None,]
 
-                image_tensor = self.resize_image(image_tensor, width, height, resize_method, interpolation, multiple_of)
+                image_tensor = cls.resize_image(image_tensor, width, height, resize_method, interpolation, multiple_of)
      
                 if img_compression > 0:
                     img_np = (image_tensor[0].numpy() * 255).clip(0, 255).astype(np.uint8)
                     img_pil = Image.fromarray(img_np)
-                    img_byte_arr = io.BytesIO()
+                    img_byte_arr = py_io.BytesIO()
                     img_pil.save(img_byte_arr, format="JPEG", quality=max(1, 100 - img_compression))
                     img_pil = Image.open(img_byte_arr)
                     image_tensor = torch.from_numpy(np.array(img_pil).astype(np.float32) / 255.0)[None,]
@@ -219,28 +221,31 @@ class ImageLoaderPW:
             except Exception as e:
                 print(f"Error loading {path}: {e}")
 
-        # 核心修改：严格清洗数据，确保每个 Tensor 都是标准的 (1, H, W, 3) float32
-        # 直接输出 Python List，完全模仿 Image Manager 的 pack_images 行为
-        clean_results = []
-        for r in results:
-            if r.dtype != torch.float32:
-                r = r.to(torch.float32)
-            if r.ndim == 3:
-                r = r.unsqueeze(0)
-            clean_results.append(r)
-            
-        # IMAGES 端口输出 List，保持所有图片原始尺寸，且兼容 Preview Image 遍历
-        IMAGES = clean_results if len(clean_results) > 0 else [torch.zeros((1, 64, 64, 3), dtype=torch.float32)]
+        # Create a standard ComfyUI IMAGE batch (Batched Tensor) so it can connect to Preview Image
+        if len(results) > 0:
+            try:
+                # Try to concatenate directly if all images have the same dimensions
+                IMAGES = torch.cat(results, dim=0)
+            except Exception as e:
+                # Fallback: If dimensions differ (e.g., 'keep proportion' was used), 
+                # resize all images to match the first image's dimensions to form a valid batch.
+                print(f"ImageLoaderPW Warning: Images have different dimensions. Resizing all to match the first image to create a valid batch.")
+                target_h, target_w = results[0].shape[1], results[0].shape[2]
+                resized_results = [results[0]]
+                for r in results[1:]:
+                    resized = F.interpolate(r.permute(0, 3, 1, 2), size=(target_h, target_w), mode="bilinear", align_corners=False).permute(0, 2, 3, 1)
+                    resized_results.append(resized)
+                IMAGES = torch.cat(resized_results, dim=0)
+        else:
+            # Fallback empty tensor if no valid paths
+            IMAGES = torch.zeros((1, 64, 64, 3))
+            results = [IMAGES]
 
-        # 独立端口 (image_1, image_2...) 依然输出原始 List 中的元素
-        padded_results = clean_results + [torch.zeros((1, 64, 64, 3), dtype=torch.float32)] * (50 - len(clean_results))
+        # Pad individual outputs exactly to length 50 as defined in schema
+        padded_results = results + [torch.zeros((1, 64, 64, 3))] * (50 - len(results))
 
-        return (IMAGES, *padded_results[:50])
+        # V3 API return format
+        return io.NodeOutput(IMAGES, *padded_results[:50])
 
-NODE_CLASS_MAPPINGS = {
-    "ImageLoaderPW": ImageLoaderPW
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "ImageLoaderPW": "Image Loader PW"
-}
+# V3 API Export
+NODE_CLASSES = [ImageLoaderPW]
