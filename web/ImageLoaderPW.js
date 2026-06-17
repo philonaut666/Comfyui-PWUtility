@@ -1,6 +1,177 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
+// --- GLOBAL CROP MODAL SETUP ---
+let cropModal = null;
+let isDrawing = false;
+let startX = 0, startY = 0;
+let currentCropCallback = null;
+
+function initCropModal() {
+    if (cropModal) return;
+    
+    cropModal = document.createElement("div");
+    cropModal.id = "pw-crop-modal";
+    cropModal.style.cssText = `
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+        background: rgba(0, 0, 0, 0.85); z-index: 99999; 
+        display: none; justify-content: center; align-items: center;
+        font-family: sans-serif;
+    `;
+    
+    cropModal.innerHTML = `
+        <div style="background: #2a2a2a; padding: 20px; border-radius: 8px; display: flex; flex-direction: column; gap: 15px; max-width: 90%; max-height: 90%; box-shadow: 0 10px 25px rgba(0,0,0,0.5); border: 1px solid #444;">
+            <div style="display: flex; justify-content: space-between; align-items: center; color: #fff; font-size: 14px; font-weight: bold;">
+                <span>Crop Image</span>
+                <span id="pw-crop-close" style="cursor: pointer; font-size: 18px; color: #aaa;">✕</span>
+            </div>
+            <div style="position: relative; display: inline-block; max-width: 100%; max-height: 70vh; user-select: none; background: #111; border: 1px solid #333;" id="pw-crop-container">
+                <img id="pw-crop-img" style="max-width: 100%; max-height: 70vh; display: block; pointer-events: none;" crossorigin="anonymous">
+                <div id="pw-crop-box" style="position: absolute; border: 2px dashed #fff; background: rgba(255, 255, 255, 0.2); box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5); display: none; pointer-events: none;"></div>
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button id="pw-crop-cancel" style="background: #444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button id="pw-crop-save" style="background: #2196F3; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;">Save Crop</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(cropModal);
+    
+    const container = document.getElementById('pw-crop-container');
+    const cropBox = document.getElementById('pw-crop-box');
+    const img = document.getElementById('pw-crop-img');
+    const closeBtn = document.getElementById('pw-crop-close');
+    const cancelBtn = document.getElementById('pw-crop-cancel');
+    const saveBtn = document.getElementById('pw-crop-save');
+
+    const closeModal = () => {
+        cropModal.style.display = 'none';
+        isDrawing = false;
+        cropBox.style.display = 'none';
+        currentCropCallback = null;
+    };
+
+    closeBtn.onclick = closeModal;
+    cancelBtn.onclick = closeModal;
+    cropModal.onclick = (e) => { if (e.target === cropModal) closeModal(); };
+
+    container.onmousedown = (e) => {
+        isDrawing = true;
+        const rect = container.getBoundingClientRect();
+        startX = e.clientX - rect.left;
+        startY = e.clientY - rect.top;
+        cropBox.style.left = startX + 'px';
+        cropBox.style.top = startY + 'px';
+        cropBox.style.width = '0px';
+        cropBox.style.height = '0px';
+        cropBox.style.display = 'block';
+    };
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDrawing) return;
+        const rect = container.getBoundingClientRect();
+        let currentX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+        let currentY = Math.max(0, Math.min(e.clientY - rect.top, rect.height));
+
+        let w = currentX - startX;
+        let h = currentY - startY;
+
+        let left = w < 0 ? currentX : startX;
+        let top = h < 0 ? currentY : startY;
+
+        cropBox.style.left = left + 'px';
+        cropBox.style.top = top + 'px';
+        cropBox.style.width = Math.abs(w) + 'px';
+        cropBox.style.height = Math.abs(h) + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+        isDrawing = false;
+    });
+
+    saveBtn.onclick = async () => {
+        const rect = container.getBoundingClientRect();
+        const boxRect = cropBox.getBoundingClientRect();
+        
+        const relLeft = boxRect.left - rect.left;
+        const relTop = boxRect.top - rect.top;
+        const relWidth = boxRect.width;
+        const relHeight = boxRect.height;
+
+        if (relWidth < 5 || relHeight < 5) {
+            alert("Crop area is too small.");
+            return;
+        }
+
+        const scaleX = img.naturalWidth / img.clientWidth;
+        const scaleY = img.naturalHeight / img.clientHeight;
+
+        const sx = relLeft * scaleX;
+        const sy = relTop * scaleY;
+        const sw = relWidth * scaleX;
+        const sh = relHeight * scaleY;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = sw;
+        canvas.height = sh;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+
+        saveBtn.innerText = "Processing...";
+        saveBtn.disabled = true;
+
+        canvas.toBlob(async (blob) => {
+            const originalPath = img.dataset.originalPath;
+            const originalName = originalPath.split('/').pop();
+            const subfolder = originalPath.includes('/') ? originalPath.substring(0, originalPath.lastIndexOf('/')) : '';
+            const ext = originalName.split('.').pop();
+            const baseName = originalName.replace(`.${ext}`, '');
+            const newFileName = `${baseName}_crop_${Date.now()}.${ext}`;
+            
+            const formData = new FormData();
+            formData.append("image", blob, newFileName);
+            formData.append("subfolder", subfolder);
+            formData.append("type", "input");
+
+            try {
+                const resp = await api.fetchApi("/upload/image", { method: "POST", body: formData });
+                if (resp.status === 200) {
+                    const data = await resp.json();
+                    let newName = data.name;
+                    if (data.subfolder) newName = data.subfolder + "/" + newName;
+                    
+                    if (currentCropCallback) currentCropCallback(newName);
+                    closeModal();
+                } else {
+                    alert("Failed to upload cropped image.");
+                }
+            } catch (err) {
+                console.error(err);
+                alert("Error uploading cropped image.");
+            } finally {
+                saveBtn.innerText = "Save Crop";
+                saveBtn.disabled = false;
+            }
+        }, 'image/png'); 
+    };
+}
+
+function openCropModal(imagePath, callback) {
+    initCropModal();
+    const img = document.getElementById('pw-crop-img');
+    const cropBox = document.getElementById('pw-crop-box');
+    
+    img.dataset.originalPath = imagePath;
+    img.src = `/api/view?filename=${encodeURIComponent(imagePath)}&type=input`;
+    cropBox.style.display = 'none';
+    currentCropCallback = callback;
+    
+    cropModal.style.display = 'flex';
+}
+
+
+// --- MAIN NODE EXTENSION ---
 app.registerExtension({
     name: "Comfy.ImageLoaderPW",
     async nodeCreated(node) {
@@ -142,22 +313,18 @@ app.registerExtension({
             refreshGallery(isRearranging);
         }
 
-        // --- MODIFIED: Output Syncing Logic ---
         function syncOutputs(count) {
             if (!node.outputs) return;
 
             let changed = false;
-            // Keep at least 3 image outputs + 1 multi_output = 4 outputs minimum
             const targetImageOutputs = Math.max(3, count);
             const targetTotal = targetImageOutputs + 1; 
             
-            // Remove excess outputs, but NEVER drop below the default 4 outputs
             while (node.outputs.length > targetTotal && node.outputs.length > 4) {
                 node.removeOutput(node.outputs.length - 1);
                 changed = true;
             }
 
-            // Dynamically add outputs if count > 3
             for (let i = node.outputs.length; i < targetTotal; i++) {
                 node.addOutput(`image_${i}`, "IMAGE");
                 changed = true;
@@ -400,9 +567,10 @@ app.registerExtension({
 
                 const img = document.createElement("img");
                 img.src = `/api/view?filename=${encodeURIComponent(path)}&type=input`;
-                img.style.cssText = "max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: auto; display: block;";
+                img.style.cssText = "max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; display: block;";
                 img.draggable = false; 
                 
+                // Delete Button
                 const del = document.createElement("div");
                 del.style.cssText = `
                     position: absolute; top: 0; right: 0; 
@@ -412,7 +580,8 @@ app.registerExtension({
                     font-size: 14px; cursor: pointer; z-index: 10;
                     font-family: Arial, sans-serif; font-weight: bold;
                     line-height: 1; border-bottom-left-radius: 4px;
-                    transition: background 0.2s;
+                    transition: opacity 0.2s, background 0.2s;
+                    opacity: 0;
                 `;
                 del.innerHTML = `<svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
                      <path d="M1 1L9 9M9 1L1 9" stroke="white" stroke-width="2" stroke-linecap="round"/>
@@ -426,6 +595,42 @@ app.registerExtension({
                     const newPaths = paths.filter((_, i) => i !== index);
                     setWidgetValue(newPaths, false);
                 };
+
+                // Crop Button (NEW)
+                const cropBtn = document.createElement("div");
+                cropBtn.innerHTML = "✂️";
+                cropBtn.style.cssText = `
+                    position: absolute; top: 0; right: 18px; 
+                    background: #2196F3; color: white; 
+                    width: 18px; height: 18px; 
+                    display: flex; align-items: center; justify-content: center; 
+                    font-size: 12px; cursor: pointer; z-index: 10;
+                    border-bottom-right-radius: 4px;
+                    transition: opacity 0.2s, background 0.2s;
+                    opacity: 0;
+                `;
+                
+                cropBtn.onmouseenter = () => { cropBtn.style.background = "#42a5f5"; };
+                cropBtn.onmouseleave = () => { cropBtn.style.background = "#2196F3"; };
+                
+                cropBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    openCropModal(path, (newPath) => {
+                        const newPaths = [...paths];
+                        newPaths[index] = newPath;
+                        setWidgetValue(newPaths, false);
+                    });
+                };
+
+                // Hover logic to show/hide action buttons
+                item.addEventListener("mouseenter", () => {
+                    del.style.opacity = "1";
+                    cropBtn.style.opacity = "1";
+                });
+                item.addEventListener("mouseleave", () => {
+                    del.style.opacity = "0";
+                    cropBtn.style.opacity = "0";
+                });
 
                 const numBadge = document.createElement("div");
                 numBadge.style.cssText = `
@@ -443,10 +648,8 @@ app.registerExtension({
 
                 item.ondragstart = (e) => { 
                     draggedNode = item; 
-                    
                     e.dataTransfer.setData('text/plain', path);
                     e.dataTransfer.effectAllowed = "move";
-                    
                     setTimeout(() => { 
                         if (draggedNode === item) {
                             item.style.background = "transparent";
@@ -463,7 +666,6 @@ app.registerExtension({
                         Array.from(draggedNode.children).forEach(c => c.style.opacity = "1");
                     }
                     draggedNode = null; 
-                    
                     const newPaths = Array.from(grid.children).map(n => n.dataset.path);
                     const currentVal = (pathsWidget?.value || "").trim();
                     if (newPaths.join("\n") !== currentVal) {
@@ -477,41 +679,32 @@ app.registerExtension({
                     if (!draggedNode || draggedNode === item) return;
 
                     const distMoved = Math.hypot(e.clientX - lastSwapX, e.clientY - lastSwapY);
-                    if (Date.now() - lastSwapTime < 50 && distMoved < 5) {
-                        return;
-                    }
+                    if (Date.now() - lastSwapTime < 50 && distMoved < 5) return;
 
                     const itemRect = item.getBoundingClientRect();
                     const bufferX = itemRect.width * 0.25; 
                     const bufferY = itemRect.height * 0.25;
                     
                     if (e.clientX < itemRect.left + bufferX || e.clientX > itemRect.right - bufferX ||
-                        e.clientY < itemRect.top + bufferY || e.clientY > itemRect.bottom - bufferY) {
-                        return;
-                    }
+                        e.clientY < itemRect.top + bufferY || e.clientY > itemRect.bottom - bufferY) return;
 
                     const items = Array.from(grid.children);
                     const draggedIdx = items.indexOf(draggedNode);
                     const targetIdx = items.indexOf(item);
 
-                    if (draggedIdx < targetIdx) {
-                        grid.insertBefore(draggedNode, item.nextSibling);
-                    } else {
-                        grid.insertBefore(draggedNode, item);
-                    }
+                    if (draggedIdx < targetIdx) grid.insertBefore(draggedNode, item.nextSibling);
+                    else grid.insertBefore(draggedNode, item);
 
                     lastSwapX = e.clientX;
                     lastSwapY = e.clientY;
                     lastSwapTime = Date.now();
                 };
                 
-                item.ondrop = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation(); 
-                };
+                item.ondrop = (e) => { e.preventDefault(); e.stopPropagation(); };
 
                 item.appendChild(img);
                 item.appendChild(del);
+                item.appendChild(cropBtn);
                 item.appendChild(numBadge);
                 grid.appendChild(item);
             });
@@ -557,9 +750,7 @@ app.registerExtension({
                     handled = true;
                 }
             }
-            if (!handled && origOnDragDrop) {
-                return origOnDragDrop.apply(this, arguments);
-            }
+            if (!handled && origOnDragDrop) return origOnDragDrop.apply(this, arguments);
             return handled;
         };
 
@@ -567,33 +758,19 @@ app.registerExtension({
         node.onDragOver = function(e) {
             if (e.dataTransfer && e.dataTransfer.items) {
                 const hasImage = Array.from(e.dataTransfer.items).some(f => f.kind === 'file' && f.type.startsWith('image/'));
-                if (hasImage) {
-                    e.preventDefault();
-                    return true;
-                }
+                if (hasImage) { e.preventDefault(); return true; }
             }
-            if (origOnDragOver) {
-                return origOnDragOver.apply(this, arguments);
-            }
+            if (origOnDragOver) return origOnDragOver.apply(this, arguments);
             return false;
         };
 
         uploadBtn.onclick = () => fileInput.click();
         fileInput.onchange = (e) => handleFiles(e.target.files);
         
-        container.ondragover = (e) => { 
-            e.preventDefault(); 
-            e.stopPropagation(); 
-            container.style.borderColor = "#4CAF50"; 
-        };
-        container.ondragleave = (e) => { 
-            e.preventDefault();
-            e.stopPropagation(); 
-            container.style.borderColor = "#353545"; 
-        };
+        container.ondragover = (e) => { e.preventDefault(); e.stopPropagation(); container.style.borderColor = "#4CAF50"; };
+        container.ondragleave = (e) => { e.preventDefault(); e.stopPropagation(); container.style.borderColor = "#353545"; };
         container.ondrop = (e) => {
-            e.preventDefault();
-            e.stopPropagation(); 
+            e.preventDefault(); e.stopPropagation(); 
             container.style.borderColor = "#353545";
             if (e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
         };
@@ -602,19 +779,11 @@ app.registerExtension({
             if (app.canvas.selected_nodes && app.canvas.selected_nodes[node.id]) {
                 const items = e.clipboardData?.items;
                 if (!items) return;
-
                 const files = [];
                 for (let i = 0; i < items.length; i++) {
-                    if (items[i].kind === 'file' && items[i].type.startsWith('image/')) {
-                        files.push(items[i].getAsFile());
-                    }
+                    if (items[i].kind === 'file' && items[i].type.startsWith('image/')) files.push(items[i].getAsFile());
                 }
-
-                if (files.length > 0) {
-                    e.preventDefault();
-                    e.stopImmediatePropagation(); 
-                    handleFiles(files);
-                }
+                if (files.length > 0) { e.preventDefault(); e.stopImmediatePropagation(); handleFiles(files); }
             }
         };
 
