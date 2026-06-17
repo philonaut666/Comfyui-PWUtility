@@ -81,9 +81,8 @@ class ImageLoaderPW:
             },
         }
 
-    # 修改点：将第一个输出类型改为 "IMAGE_LIST"，防止误连原生 Preview Image 导致崩溃
-    RETURN_TYPES = ("IMAGE_LIST",) + ("IMAGE",) * 50
-    RETURN_NAMES = ("image_list",) + tuple(f"image_{i+1}" for i in range(50))
+    RETURN_TYPES = ("IMAGE",) * 51
+    RETURN_NAMES = ("pack_images",) + tuple(f"image_{i+1}" for i in range(50))
     FUNCTION = "load_images"
     CATEGORY = "PWUtility"
 
@@ -212,16 +211,16 @@ class ImageLoaderPW:
             except Exception as e:
                 print(f"Error loading {path}: {e}")
 
-        # Output as Python LIST of tensors
+        # Output as Python LIST of tensors (mapped to "pack_images" port)
         if len(results) > 0:
-            image_list = results 
+            pack_images = results 
         else:
-            image_list = []
+            pack_images = []
 
         # Pad individual outputs exactly to length 50 as defined in RETURN_TYPES
         padded_results = results + [torch.zeros((1, 64, 64, 3))] * (50 - len(results))
 
-        return (image_list, *padded_results[:50])
+        return (pack_images, *padded_results[:50])
 
 NODE_CLASS_MAPPINGS = {
     "ImageLoaderPW": ImageLoaderPW
