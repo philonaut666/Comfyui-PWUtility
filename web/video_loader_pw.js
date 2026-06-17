@@ -60,7 +60,6 @@ app.registerExtension({
                 node.accurateDuration = 0;
 
                 const videoWidget = this.widgets.find((w) => w.name === "video");
-                const pathWidget = this.widgets.find((w) => w.name === "path");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
                 const displayModeWidget = this.widgets.find((w) => w.name === "display_mode");
                 const startTimeWidget = this.widgets.find((w) => w.name === "start_time");
@@ -197,41 +196,17 @@ app.registerExtension({
                     };
                 }
 
-                const applyVideoPath = (rawPath, force = false) => {
-                    if (!rawPath || !String(rawPath).trim()) return;
-                    const p = String(rawPath).trim();
-                    const isNewFile = force || (p !== node._lastLoadedVideoPath);
+                const applyVideoPath = (rawPath) => {
+                    if (!rawPath || !rawPath.trim()) return;
+                    const p = rawPath.trim();
+                    const isNewFile = (p !== node._lastLoadedVideoPath);
                     node._lastLoadedVideoPath = p;
-
                     if (videoWidget) videoWidget.value = p;
-
-                    if (isNewFile || force) {
+                    if (isNewFile) {
                         if (node.updatePreview) node.updatePreview(p);
                         if (startTimeWidget) startTimeWidget.value = 0;
                         if (endTimeWidget) endTimeWidget.value = 0;
                         if (node.syncFramesFromTime) node.syncFramesFromTime();
-                    }
-                };
-
-                if (pathWidget) {
-                    const origPathCallback = pathWidget.callback;
-                    pathWidget.callback = function () {
-                        if (origPathCallback) origPathCallback.apply(this, arguments);
-                        if (this.value && typeof this.value === 'string' && this.value.trim()) {
-                            applyVideoPath(this.value.trim(), true);
-                        }
-                    };
-                }
-
-                const origOnConnectionsChange = node.onConnectionsChange;
-                node.onConnectionsChange = function (type, index, connected, link_info, io_slot) {
-                    if (origOnConnectionsChange) origOnConnectionsChange.apply(this, arguments);
-                    if (type === 1 && connected && io_slot && io_slot.name === "path") {
-                        setTimeout(() => {
-                            if (pathWidget && pathWidget.value) {
-                                applyVideoPath(String(pathWidget.value).trim(), true);
-                            }
-                        }, 150);
                     }
                 };
 
@@ -326,28 +301,7 @@ app.registerExtension({
                 fileInput.style.display = "none";
                 document.body.appendChild(fileInput);
 
-                const btnWidget = this.addWidget("button", "choose file to upload", null, () => { 
-                    fileInput.click(); 
-                });
-
-                // FIX: Use app.queuePrompt(0, node.id) to trigger "Run (Branch)" behavior
-                // This executes ONLY this node and its dependencies, ignoring downstream nodes.
-                const refreshBtnWidget = this.addWidget("button", "Refresh & Run", null, () => {
-                    const targetPath = (pathWidget && pathWidget.value && String(pathWidget.value).trim()) 
-                        ? String(pathWidget.value).trim() 
-                        : (videoWidget ? String(videoWidget.value).trim() : "");
-                        
-                    if (targetPath) {
-                        applyVideoPath(targetPath, true);
-                        
-                        setTimeout(() => {
-                            // Passing node.id as the second argument restricts execution to this node branch only
-                            app.queuePrompt(0, node.id);
-                        }, 100);
-                    } else {
-                        console.warn("[VideoLoaderPW] No video path found to refresh.");
-                    }
-                });
+                const btnWidget = this.addWidget("button", "choose file to upload", null, () => { fileInput.click(); });
 
                 const uploadFile = async (file) => {
                     try {
@@ -965,6 +919,7 @@ app.registerExtension({
                     };
                 }
 
+                // FIX: Display pure seconds with 2 decimal places when in Time mode
                 const formatTime = (secs) => {
                     return `${secs.toFixed(2)}s`;
                 };
