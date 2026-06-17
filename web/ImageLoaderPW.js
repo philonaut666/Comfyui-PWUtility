@@ -585,6 +585,53 @@ app.registerExtension({
             setTimeout(() => clearInterval(hideInterval), 1000);
         }
 
+        // --- Resize Widgets Visibility Logic ---
+        const scaleModeWidget = node.widgets.find(w => w.name === "scale_mode");
+        const widthWidget = node.widgets.find(w => w.name === "width");
+        const heightWidget = node.widgets.find(w => w.name === "height");
+        const longerWidget = node.widgets.find(w => w.name === "longer_size");
+        const shorterWidget = node.widgets.find(w => w.name === "shorter_size");
+
+        function updateResizeWidgetsVisibility() {
+            if (!scaleModeWidget) return;
+            const mode = scaleModeWidget.value;
+            
+            const setHidden = (widget, isHidden) => {
+                if (!widget) return;
+                Object.defineProperty(widget, 'hidden', {
+                    get: () => isHidden,
+                    set: () => {},
+                    configurable: true
+                });
+                widget.computeSize = function() {
+                    return isHidden ? [0, 0] : [this.width || 200, 20];
+                };
+                if (widget.element) {
+                    widget.element.style.display = isHidden ? "none" : "";
+                }
+            };
+
+            setHidden(widthWidget, mode !== "scale dimensions");
+            setHidden(heightWidget, mode !== "scale dimensions");
+            setHidden(longerWidget, mode !== "scale longer");
+            setHidden(shorterWidget, mode !== "scale shorter");
+
+            if (node.graph) node.graph.setDirtyCanvas(true, true);
+        }
+
+        if (scaleModeWidget) {
+            const origScaleModeCallback = scaleModeWidget.callback;
+            scaleModeWidget.callback = function(v) {
+                if (origScaleModeCallback) origScaleModeCallback.apply(this, [v]);
+                updateResizeWidgetsVisibility();
+            };
+        }
+
+        updateResizeWidgetsVisibility();
+        const resizeVisInterval = setInterval(updateResizeWidgetsVisibility, 100);
+        setTimeout(() => clearInterval(resizeVisInterval), 2000);
+        // ---------------------------------------
+
         const oldCallback = pathsWidget?.callback;
 
         function setWidgetValue(newPathsArray, isRearranging = false) {
@@ -893,7 +940,6 @@ app.registerExtension({
                 `;
                 numBadge.innerText = (index + 1).toString();
 
-                // --- Crop Button (Centered & Enlarged) ---
                 const cropBtn = document.createElement("div");
                 cropBtn.className = "pw-crop-btn";
                 cropBtn.style.cssText = `
