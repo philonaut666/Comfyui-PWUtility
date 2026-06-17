@@ -83,7 +83,8 @@ class ImageLoaderPW:
 
     # Keep 51 outputs in backend to prevent ComfyUI execution engine crashes when JS dynamically adds outputs
     RETURN_TYPES = ("IMAGE",) * 51
-    RETURN_NAMES = ("multi_output",) + tuple(f"image_{i+1}" for i in range(50))
+    # Changed first output name to "image_list"
+    RETURN_NAMES = ("image_list",) + tuple(f"image_{i+1}" for i in range(50))
     FUNCTION = "load_images"
     CATEGORY = "PWUtility"
 
@@ -212,16 +213,16 @@ class ImageLoaderPW:
             except Exception as e:
                 print(f"Error loading {path}: {e}")
 
-        # 1. Changed multi_output to be a Python LIST of tensors instead of a batched tensor
+        # Output as Python LIST of tensors
         if len(results) > 0:
-            multi_output = results 
+            image_list = results 
         else:
-            multi_output = []
+            image_list = []
 
         # Pad individual outputs exactly to length 50 as defined in RETURN_TYPES
         padded_results = results + [torch.zeros((1, 64, 64, 3))] * (50 - len(results))
 
-        return (multi_output, *padded_results[:50])
+        return (image_list, *padded_results[:50])
 
 NODE_CLASS_MAPPINGS = {
     "ImageLoaderPW": ImageLoaderPW
