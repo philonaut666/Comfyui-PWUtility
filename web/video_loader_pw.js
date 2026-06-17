@@ -22,7 +22,7 @@ app.registerExtension({
                     const pathWidget = this.widgets.find(w => w.name === "path");
                     
                     // Prioritize path if it exists and has a value
-                    const targetPath = (pathWidget && pathWidget.value && pathWidget.value.trim()) ? pathWidget.value : (videoWidget ? videoWidget.value : "");
+                    const targetPath = (pathWidget && pathWidget.value && String(pathWidget.value).trim()) ? String(pathWidget.value).trim() : (videoWidget ? videoWidget.value : "");
                     
                     if (targetPath && this.applyVideoPath) {
                         this.applyVideoPath(targetPath);
@@ -68,7 +68,7 @@ app.registerExtension({
                 node.accurateDuration = 0;
 
                 const videoWidget = this.widgets.find((w) => w.name === "video");
-                const pathWidget = this.widgets.find((w) => w.name === "path"); // FIX: Find path widget
+                const pathWidget = this.widgets.find((w) => w.name === "path"); // Find path widget
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
                 const displayModeWidget = this.widgets.find((w) => w.name === "display_mode");
                 const startTimeWidget = this.widgets.find((w) => w.name === "start_time");
@@ -207,12 +207,15 @@ app.registerExtension({
 
                 // FIX: Expose applyVideoPath to the node instance
                 node.applyVideoPath = (rawPath) => {
-                    if (!rawPath || !rawPath.trim()) return;
+                    if (!rawPath || typeof rawPath !== 'string' || !rawPath.trim()) return;
                     const p = rawPath.trim();
                     const isNewFile = (p !== node._lastLoadedVideoPath);
                     node._lastLoadedVideoPath = p;
 
-                    if (videoWidget) videoWidget.value = p;
+                    // Sync video widget value
+                    if (videoWidget && videoWidget.value !== p) {
+                        videoWidget.value = p; 
+                    }
 
                     if (isNewFile) {
                         if (node.updatePreview) node.updatePreview(p);
@@ -222,15 +225,35 @@ app.registerExtension({
                     }
                 };
 
-                // FIX: Intercept 'path' widget changes to trigger preview update
+                // FIX: Robustly intercept 'path' widget changes (both manual input and external node connections)
                 if (pathWidget) {
-                    const originalPathCallback = pathWidget.callback;
-                    pathWidget.callback = function () {
-                        if (originalPathCallback) originalPathCallback.apply(this, arguments);
+                    // 1. Intercept callback (handles manual input or standard ComfyUI value changes)
+                    const originalCallback = pathWidget.callback;
+                    pathWidget.callback = function(v) {
+                        if (originalCallback) originalCallback.apply(this, arguments);
                         if (node.applyVideoPath) {
-                            node.applyVideoPath(this.value);
+                            node.applyVideoPath(v !== undefined ? v : this.value);
                         }
                     };
+
+                    // 2. Intercept value setter (handles direct assignments from other nodes like LocalMedia Manager)
+                    let desc = Object.getOwnPropertyDescriptor(pathWidget, 'value');
+                    if (!desc) {
+                        desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(pathWidget), 'value');
+                    }
+                    if (desc && desc.set) {
+                        const originalSet = desc.set;
+                        desc.set = function(newValue) {
+                            originalSet.call(this, newValue);
+                            if (node.applyVideoPath) {
+                                // Use requestAnimationFrame to avoid blocking ComfyUI's internal update cycle
+                                requestAnimationFrame(() => {
+                                    node.applyVideoPath(newValue);
+                                });
+                            }
+                        };
+                        Object.defineProperty(pathWidget, 'value', desc);
+                    }
                 }
 
                 const _videoExecHandler = ({ detail }) => {
@@ -1113,7 +1136,7 @@ app.registerExtension({
                 });
 
                 // FIX: Initialize preview if path or video widget already has a value on creation
-                const initialPath = pathWidget && pathWidget.value ? pathWidget.value : (videoWidget ? videoWidget.value : "");
+                const initialPath = (pathWidget && pathWidget.value && String(pathWidget.value).trim()) ? String(pathWidget.value).trim() : (videoWidget ? videoWidget.value : "");
                 if (initialPath && node.applyVideoPath) {
                     node.applyVideoPath(initialPath);
                 }
