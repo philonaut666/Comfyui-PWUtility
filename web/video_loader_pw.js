@@ -919,7 +919,6 @@ app.registerExtension({
                     };
                 }
 
-                // FIX: Display pure seconds with 2 decimal places when in Time mode
                 const formatTime = (secs) => {
                     return `${secs.toFixed(2)}s`;
                 };
