@@ -10,6 +10,7 @@ app.registerExtension({
             const onResize = nodeType.prototype.onResize;
             const onDrawForeground = nodeType.prototype.onDrawForeground;
 
+            // FIX: Prioritize 'path' widget during workflow loading
             nodeType.prototype.onConfigure = function (info) {
                 if (onConfigure) onConfigure.apply(this, arguments);
                 if (this.syncFramesFromTime) this.syncFramesFromTime();
@@ -18,7 +19,14 @@ app.registerExtension({
 
                 if (this.widgets) {
                     const videoWidget = this.widgets.find(w => w.name === "video");
-                    if (videoWidget && videoWidget.value && this.updatePreview) {
+                    const pathWidget = this.widgets.find(w => w.name === "path");
+                    
+                    // Prioritize path if it exists and has a value
+                    const targetPath = (pathWidget && pathWidget.value && pathWidget.value.trim()) ? pathWidget.value : (videoWidget ? videoWidget.value : "");
+                    
+                    if (targetPath && this.applyVideoPath) {
+                        this.applyVideoPath(targetPath);
+                    } else if (videoWidget && videoWidget.value && this.updatePreview) {
                         this.updatePreview(videoWidget.value);
                     }
                 }
@@ -60,6 +68,7 @@ app.registerExtension({
                 node.accurateDuration = 0;
 
                 const videoWidget = this.widgets.find((w) => w.name === "video");
+                const pathWidget = this.widgets.find((w) => w.name === "path"); // FIX: Find path widget
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
                 const displayModeWidget = this.widgets.find((w) => w.name === "display_mode");
                 const startTimeWidget = this.widgets.find((w) => w.name === "start_time");
@@ -196,12 +205,15 @@ app.registerExtension({
                     };
                 }
 
-                const applyVideoPath = (rawPath) => {
+                // FIX: Expose applyVideoPath to the node instance
+                node.applyVideoPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
                     const isNewFile = (p !== node._lastLoadedVideoPath);
                     node._lastLoadedVideoPath = p;
+
                     if (videoWidget) videoWidget.value = p;
+
                     if (isNewFile) {
                         if (node.updatePreview) node.updatePreview(p);
                         if (startTimeWidget) startTimeWidget.value = 0;
@@ -210,11 +222,22 @@ app.registerExtension({
                     }
                 };
 
+                // FIX: Intercept 'path' widget changes to trigger preview update
+                if (pathWidget) {
+                    const originalPathCallback = pathWidget.callback;
+                    pathWidget.callback = function () {
+                        if (originalPathCallback) originalPathCallback.apply(this, arguments);
+                        if (node.applyVideoPath) {
+                            node.applyVideoPath(this.value);
+                        }
+                    };
+                }
+
                 const _videoExecHandler = ({ detail }) => {
                     if (!detail || String(detail.node) !== String(node.id)) return;
                     const out = detail.output;
                     if (out && out.video_path && out.video_path.length) {
-                        applyVideoPath(out.video_path[0]);
+                        if (node.applyVideoPath) node.applyVideoPath(out.video_path[0]);
                     }
                     
                     if (out && out.video_info) {
@@ -261,7 +284,7 @@ app.registerExtension({
 
                 node.onExecuted = function (output) {
                     if (output && output.video_path && output.video_path.length > 0) {
-                        applyVideoPath(output.video_path[0]);
+                        if (node.applyVideoPath) node.applyVideoPath(output.video_path[0]);
                     }
                     if (output && output.video_info) {
                         try {
@@ -307,11 +330,7 @@ app.registerExtension({
                     try {
                         if (errorMsg) errorMsg.style.display = "none";
                         if (file.path) {
-                            videoWidget.value = file.path;
-                            node.updatePreview(file.path);
-                            if (startTimeWidget) startTimeWidget.value = 0;
-                            if (endTimeWidget) endTimeWidget.value = 0;
-                            node.syncFramesFromTime();
+                            if (node.applyVideoPath) node.applyVideoPath(file.path);
                             return;
                         }
                         btnWidget.name = "Uploading...";
@@ -335,11 +354,7 @@ app.registerExtension({
                                 if (resp.status !== 200) throw new Error("Chunk upload failed");
                                 if (i === totalChunks - 1) {
                                     const data = await resp.json();
-                                    videoWidget.value = data.name;
-                                    node.updatePreview(data.name);
-                                    if (startTimeWidget) startTimeWidget.value = 0;
-                                    if (endTimeWidget) endTimeWidget.value = 0;
-                                    node.syncFramesFromTime();
+                                    if (node.applyVideoPath) node.applyVideoPath(data.name);
                                 }
                             }
                         } else {
@@ -349,11 +364,7 @@ app.registerExtension({
                             if (resp.status === 413) throw new Error("File too large.");
                             if (resp.status === 200) {
                                 const data = await resp.json();
-                                videoWidget.value = data.name;
-                                node.updatePreview(data.name);
-                                if (startTimeWidget) startTimeWidget.value = 0;
-                                if (endTimeWidget) endTimeWidget.value = 0;
-                                node.syncFramesFromTime();
+                                if (node.applyVideoPath) node.applyVideoPath(data.name);
                             } else {
                                 throw new Error(`Upload failed: ${resp.statusText}`);
                             }
@@ -1101,7 +1112,12 @@ app.registerExtension({
                     }
                 });
 
-                if (videoWidget && videoWidget.value) node.updatePreview(videoWidget.value);
+                // FIX: Initialize preview if path or video widget already has a value on creation
+                const initialPath = pathWidget && pathWidget.value ? pathWidget.value : (videoWidget ? videoWidget.value : "");
+                if (initialPath && node.applyVideoPath) {
+                    node.applyVideoPath(initialPath);
+                }
+
                 return r;
             };
         }
