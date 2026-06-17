@@ -601,20 +601,9 @@ app.registerExtension({
             refreshGallery(isRearranging);
         }
 
-        // --- CRITICAL FIX FOR V3 ---
         function syncOutputs(count) {
             if (!node.outputs) return;
-            
-            // V3 nodes have static schemas defined in the backend. 
-            // We CANNOT add or remove outputs dynamically in V3, or the node will crash.
-            const isV3 = checkIsV3();
-            if (isV3) {
-                // In V3, all 51 outputs are always present. Just update layout.
-                updateLayout();
-                return;
-            }
 
-            // V1 LiteGraph dynamic output logic
             let changed = false;
             const targetImageOutputs = Math.max(3, count);
             const targetTotal = targetImageOutputs + 1; 
@@ -904,6 +893,7 @@ app.registerExtension({
                 `;
                 numBadge.innerText = (index + 1).toString();
 
+                // --- Crop Button (Centered & Enlarged) ---
                 const cropBtn = document.createElement("div");
                 cropBtn.className = "pw-crop-btn";
                 cropBtn.style.cssText = `
