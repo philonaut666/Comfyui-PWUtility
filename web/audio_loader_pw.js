@@ -9,9 +9,7 @@ app.registerExtension({
             const onDrawBackground = nodeType.prototype.onDrawBackground;
             
             nodeType.prototype.onDrawBackground = function (ctx) {
-                if (onDrawBackground) {
-                    onDrawBackground.apply(this, arguments);
-                }
+                if (onDrawBackground) onDrawBackground.apply(this, arguments);
             };
             
             nodeType.prototype.onNodeCreated = function () {
@@ -35,21 +33,17 @@ app.registerExtension({
                             w.type = "hidden";
                             w.hidden = true;
                             w.computeSize = () => [0, 0];
-                            
                             const currentWidth = node.size[0];
                             const recommendedHeight = node.computeSize()[1];
                             node.setSize([currentWidth, recommendedHeight]);
-                            
-                            if (app.graph) {
-                                app.graph.setDirtyCanvas(true, true);
-                            }
+                            if (app.graph) app.graph.setDirtyCanvas(true, true);
                         }
                     }
                 }, 10);
 
                 Object.defineProperty(node, 'imgs', {
                     get: function() { return undefined; },
-                    set: function(val) { /* Ignore attempts by ComfyUI to set an image preview */ },
+                    set: function(val) { /* Ignore */ },
                     configurable: true
                 });
 
@@ -60,12 +54,7 @@ app.registerExtension({
                         body.append("image", file);
                         body.append("type", "input");
                         body.append("subfolder", "");
-                        
-                        const resp = await api.fetchApi("/upload/image", {
-                            method: "POST",
-                            body,
-                        });
-
+                        const resp = await api.fetchApi("/upload/image", { method: "POST", body });
                         if (resp.status === 200) {
                             const data = await resp.json();
                             const audioWidget = node.widgets && node.widgets.find(w => w.name === "audio");
@@ -75,9 +64,7 @@ app.registerExtension({
                                 if (audioWidget.options && audioWidget.options.values && !audioWidget.options.values.includes(data.name)) {
                                     audioWidget.options.values.push(data.name);
                                 }
-                                if (audioWidget.callback) {
-                                    audioWidget.callback(data.name);
-                                }
+                                if (audioWidget.callback) audioWidget.callback(data.name);
                                 app.graph.setDirtyCanvas(true, false);
                             }
                         }
@@ -101,51 +88,21 @@ app.registerExtension({
                 const container = document.createElement("div");
                 const defaultBg = "rgba(30, 30, 30, 0.9)";
                 Object.assign(container.style, {
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "10px", 
-                    width: "100%",
-                    padding: "10px", 
-                    boxSizing: "border-box",
-                    background: defaultBg,
-                    borderRadius: "6px",
-                    color: "white",
-                    fontFamily: "sans-serif",
-                    marginTop: "8px",
-                    flexShrink: "0",
-                    transition: "background 0.2s"
+                    display: "flex", flexDirection: "column", gap: "10px", width: "100%",
+                    padding: "10px", boxSizing: "border-box", background: defaultBg,
+                    borderRadius: "6px", color: "white", fontFamily: "sans-serif",
+                    marginTop: "8px", flexShrink: "0", transition: "background 0.2s"
                 });
 
                 const playerTop = document.createElement("div");
-                Object.assign(playerTop.style, {
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "0 2px",
-                    marginBottom: "-4px"
-                });
+                Object.assign(playerTop.style, { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 2px", marginBottom: "-4px" });
                 
                 const playerTitle = document.createElement("span");
                 playerTitle.textContent = "No audio selected";
-                Object.assign(playerTitle.style, {
-                    fontSize: "11px",
-                    color: "#aaa",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    maxWidth: "140px"
-                });
+                Object.assign(playerTitle.style, { fontSize: "11px", color: "#aaa", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "140px" });
 
                 const trimLength = document.createElement("span");
-                Object.assign(trimLength.style, {
-                    fontSize: "11px",
-                    color: "#38bdf8",
-                    fontWeight: "bold",
-                    background: "rgba(56, 189, 248, 0.1)",
-                    padding: "3px 6px",
-                    borderRadius: "4px",
-                    whiteSpace: "nowrap"
-                });
+                Object.assign(trimLength.style, { fontSize: "11px", color: "#38bdf8", fontWeight: "bold", background: "rgba(56, 189, 248, 0.1)", padding: "3px 6px", borderRadius: "4px", whiteSpace: "nowrap" });
                 trimLength.textContent = "Trimmed: 0.0s";
 
                 playerTop.appendChild(playerTitle);
@@ -193,17 +150,13 @@ app.registerExtension({
                         playerTitle.textContent = fname;
                         audioSrc = api.apiURL(`/view?filename=${encodeURIComponent(fname)}&type=input&subfolder=${encodeURIComponent(subfolder)}`);
                     }
-                    if (isNewFile) {
-                        audioEl.src = audioSrc;
-                    }
+                    if (isNewFile) audioEl.src = audioSrc;
                 };
 
                 const _execHandler = ({ detail }) => {
                     if (!detail || String(detail.node) !== String(node.id)) return;
                     const out = detail.output;
-                    if (out && out.audio_path && out.audio_path.length) {
-                        applyAudioPath(out.audio_path[0]);
-                    }
+                    if (out && out.audio_path && out.audio_path.length) applyAudioPath(out.audio_path[0]);
                 };
                 api.addEventListener("executed", _execHandler);
 
@@ -214,62 +167,22 @@ app.registerExtension({
                 };
 
                 const trimArea = document.createElement("div");
-                Object.assign(trimArea.style, {
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "6px",
-                    background: "rgba(0, 0, 0, 0.35)",
-                    padding: "12px",
-                    borderRadius: "6px",
-                    border: "1px solid rgba(255, 255, 255, 0.05)"
-                });
+                Object.assign(trimArea.style, { display: "flex", flexDirection: "column", gap: "6px", background: "rgba(0, 0, 0, 0.35)", padding: "12px", borderRadius: "6px", border: "1px solid rgba(255, 255, 255, 0.05)" });
 
                 const timeRuler = document.createElement("div");
-                Object.assign(timeRuler.style, {
-                    position: "relative",
-                    width: "100%",
-                    height: "22px",
-                    fontSize: "10px",
-                    color: "#aaa",
-                    pointerEvents: "none",
-                    userSelect: "none"
-                });
+                Object.assign(timeRuler.style, { position: "relative", width: "100%", height: "22px", fontSize: "10px", color: "#aaa", pointerEvents: "none", userSelect: "none" });
                 trimArea.appendChild(timeRuler);
 
                 const sliderBox = document.createElement("div");
-                Object.assign(sliderBox.style, {
-                    position: "relative",
-                    width: "100%",
-                    height: "24px",
-                    background: "#111",
-                    borderRadius: "4px",
-                    cursor: "pointer",
-                    userSelect: "none",
-                    boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)"
-                });
+                Object.assign(sliderBox.style, { position: "relative", width: "100%", height: "24px", background: "#111", borderRadius: "4px", cursor: "pointer", userSelect: "none", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)" });
 
                 const fill = document.createElement("div");
-                Object.assign(fill.style, {
-                    position: "absolute",
-                    height: "100%",
-                    background: "rgba(14, 165, 233, 0.35)",
-                    pointerEvents: "none"
-                });
+                Object.assign(fill.style, { position: "absolute", height: "100%", background: "rgba(14, 165, 233, 0.35)", pointerEvents: "none" });
                 sliderBox.appendChild(fill);
 
                 const createHandle = (color) => {
                     const h = document.createElement("div");
-                    Object.assign(h.style, {
-                        position: "absolute",
-                        top: "0",
-                        width: "8px",
-                        height: "100%",
-                        background: color,
-                        transform: "translateX(-50%)",
-                        pointerEvents: "none",
-                        boxShadow: "0 0 4px rgba(0,0,0,0.8)",
-                        borderRadius: "2px"
-                    });
+                    Object.assign(h.style, { position: "absolute", top: "0", width: "8px", height: "100%", background: color, transform: "translateX(-50%)", pointerEvents: "none", boxShadow: "0 0 4px rgba(0,0,0,0.8)", borderRadius: "2px" });
                     return h;
                 };
 
@@ -278,15 +191,11 @@ app.registerExtension({
                 sliderBox.appendChild(startHandle);
                 sliderBox.appendChild(endHandle);
                 trimArea.appendChild(sliderBox);
-                
                 container.appendChild(trimArea);
 
                 const widget = this.addDOMWidget("audio_ui", "audio_ui", container);
                 this.size = [475, this.computeSize()[1]];
-                
-                widget.computeSize = function(width) {
-                    return [width, 200];
-                };
+                widget.computeSize = function(width) { return [width, 200]; };
 
                 setTimeout(() => {
                     const audioWidget = node.widgets && node.widgets.find(w => w.name === "audio");
@@ -296,7 +205,7 @@ app.registerExtension({
                     const preSilenceWidget = node.widgets && node.widgets.find(w => w.name === "pre_silence");
                     const postSilenceWidget = node.widgets && node.widgets.find(w => w.name === "post_silence");
                     
-                    let duration = 0;
+                    let duration = 0; // 【关键】初始为 0，确保 end_time 和 duration 保持 0.00
                     let dragging = null;
                     let dragOffset = 0;
                     let dragSelectionWidth = 0;
@@ -305,15 +214,10 @@ app.registerExtension({
                     if (durationWidget) {
                         const origCallback = durationWidget.callback;
                         durationWidget.callback = function(v) {
-                            if (!duration || isUpdatingDuration) {
-                                if (origCallback) origCallback.apply(this, arguments);
-                                return;
-                            }
-                            
+                            if (!duration || isUpdatingDuration) { if (origCallback) origCallback.apply(this, arguments); return; }
                             isUpdatingDuration = true;
                             let d = parseFloat(v) || 0;
                             if (d < 0) d = 0;
-                            
                             let pre = preSilenceWidget ? parseFloat(preSilenceWidget.value) || 0 : 0;
                             let post = postSilenceWidget ? parseFloat(postSilenceWidget.value) || 0 : 0;
                             let availableForAudio = d - pre - post;
@@ -322,18 +226,10 @@ app.registerExtension({
                             let s = startWidget ? parseFloat(startWidget.value) || 0 : 0;
                             let newStart = s;
                             let newEnd = s + availableForAudio;
-
-                            if (newEnd > duration) {
-                                newEnd = duration;
-                                newStart = Math.max(0, duration - availableForAudio);
-                            }
-
+                            if (newEnd > duration) { newEnd = duration; newStart = Math.max(0, duration - availableForAudio); }
                             if (startWidget) startWidget.value = parseFloat(newStart.toFixed(2));
                             if (endWidget) endWidget.value = parseFloat(newEnd.toFixed(2));
-
-                            updateUI(true);
-                            app.graph.setDirtyCanvas(true, false);
-                            
+                            updateUI(true); app.graph.setDirtyCanvas(true, false);
                             if (origCallback) origCallback.apply(this, arguments);
                             isUpdatingDuration = false;
                         };
@@ -342,7 +238,8 @@ app.registerExtension({
                     if (audioWidget) {
                         const updateAudio = (overridePath) => {
                             const filename = overridePath || audioWidget.value;
-                            if (!filename || filename === "none") {
+                            // 【关键】兼容空字符串、none 或 undefined，直接返回，不触发加载
+                            if (!filename || filename === "none" || filename === "") {
                                 playerTitle.textContent = "No audio selected";
                                 return;
                             }
@@ -351,8 +248,7 @@ app.registerExtension({
                                 audioSrc = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
                                 playerTitle.textContent = filename.split(/[\\/]/).pop();
                             } else {
-                                let fname = filename;
-                                let subfolder = "";
+                                let fname = filename, subfolder = "";
                                 if (fname.includes("/") || fname.includes("\\")) {
                                     const sep = fname.includes("/") ? "/" : "\\";
                                     const parts = fname.split(sep);
@@ -365,75 +261,39 @@ app.registerExtension({
                             audioEl.src = audioSrc;
                         };
                         audioWidget.callback = function() {
-                            if (!node._initializing) {
-                                node._should_reset_trim = true;
-                            }
+                            if (!node._initializing) node._should_reset_trim = true;
                             updateAudio();
                         };
                         updateAudio();
                         node._updateAudio = updateAudio;
                     }
 
-                    container.ondragover = (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        container.style.background = "rgba(14, 165, 233, 0.2)";
-                    };
-                    container.ondragleave = (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        container.style.background = defaultBg;
-                    };
-                    container.ondrop = async (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        container.style.background = defaultBg;
-                        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                            handleFileUpload(e.dataTransfer.files[0]);
-                        }
-                    };
+                    container.ondragover = (e) => { e.preventDefault(); e.stopPropagation(); container.style.background = "rgba(14, 165, 233, 0.2)"; };
+                    container.ondragleave = (e) => { e.preventDefault(); e.stopPropagation(); container.style.background = defaultBg; };
+                    container.ondrop = async (e) => { e.preventDefault(); e.stopPropagation(); container.style.background = defaultBg; if (e.dataTransfer.files && e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files[0]); };
 
-                    const formatTime = (secs) => {
-                        if (secs < 60) return secs.toFixed(1) + "s";
-                        const m = Math.floor(secs / 60);
-                        const s = (secs % 60).toFixed(1);
-                        return `${m}:${s.padStart(4, '0')}`;
-                    };
+                    const formatTime = (secs) => { if (secs < 60) return secs.toFixed(1) + "s"; const m = Math.floor(secs / 60); const s = (secs % 60).toFixed(1); return `${m}:${s.padStart(4, '0')}`; };
 
                     const updateRuler = () => {
                         timeRuler.innerHTML = '';
                         if (!duration) return;
-                        const numMajorTicks = 5;
-                        const subTicks = 4;
-                        const totalTicks = (numMajorTicks - 1) * subTicks; 
+                        const numMajorTicks = 5; const subTicks = 4; const totalTicks = (numMajorTicks - 1) * subTicks; 
                         for (let i = 0; i <= totalTicks; i++) {
-                            const pct = i / totalTicks;
-                            const t = duration * pct;
-                            const isMajor = i % subTicks === 0;
+                            const pct = i / totalTicks; const t = duration * pct; const isMajor = i % subTicks === 0;
                             const tickWrapper = document.createElement("div");
-                            Object.assign(tickWrapper.style, {
-                                position: "absolute", left: `${pct * 100}%`, top: "0",
-                                display: "flex", flexDirection: "column", alignItems: "center", transform: "translateX(-50%)"
-                            });
+                            Object.assign(tickWrapper.style, { position: "absolute", left: `${pct * 100}%`, top: "0", display: "flex", flexDirection: "column", alignItems: "center", transform: "translateX(-50%)" });
                             if (i === 0) { tickWrapper.style.transform = "none"; tickWrapper.style.alignItems = "flex-start"; }
                             if (i === totalTicks) { tickWrapper.style.transform = "translateX(-100%)"; tickWrapper.style.alignItems = "flex-end"; }
                             const line = document.createElement("div");
-                            Object.assign(line.style, {
-                                width: isMajor ? "2px" : "1px", height: isMajor ? "6px" : "4px",
-                                background: isMajor ? "#aaa" : "#555", marginBottom: "2px", borderRadius: "1px"
-                            });
+                            Object.assign(line.style, { width: isMajor ? "2px" : "1px", height: isMajor ? "6px" : "4px", background: isMajor ? "#aaa" : "#555", marginBottom: "2px", borderRadius: "1px" });
                             tickWrapper.appendChild(line);
-                            if (isMajor) {
-                                const label = document.createElement("div");
-                                label.textContent = formatTime(t);
-                                tickWrapper.appendChild(label);
-                            }
+                            if (isMajor) { const label = document.createElement("div"); label.textContent = formatTime(t); tickWrapper.appendChild(label); }
                             timeRuler.appendChild(tickWrapper);
                         }
                     };
                     
                     const updateUI = (syncPlayer = false) => {
-                        if (!duration) return;
+                        if (!duration) return; // 未加载音频时不更新 UI
                         let s = startWidget ? parseFloat(startWidget.value) || 0 : 0;
                         let e = endWidget ? parseFloat(endWidget.value) || 0 : 0;
                         let pre = preSilenceWidget ? parseFloat(preSilenceWidget.value) || 0 : 0;
@@ -442,23 +302,16 @@ app.registerExtension({
                         if (e === 0 || e > duration) e = duration;
                         if (s > e) s = e;
                         
-                        const sPct = (s / duration) * 100;
-                        const ePct = (e / duration) * 100;
-                        startHandle.style.left = `${sPct}%`;
-                        endHandle.style.left = `${ePct}%`;
-                        fill.style.left = `${sPct}%`;
-                        fill.style.width = `${ePct - sPct}%`;
+                        const sPct = (s / duration) * 100; const ePct = (e / duration) * 100;
+                        startHandle.style.left = `${sPct}%`; endHandle.style.left = `${ePct}%`;
+                        fill.style.left = `${sPct}%`; fill.style.width = `${ePct - sPct}%`;
                         
                         const currentDur = parseFloat((e - s + pre + post).toFixed(2));
                         trimLength.textContent = `Trimmed: ${currentDur}s`;
-                        
                         if (durationWidget && durationWidget.value !== currentDur) {
-                            isUpdatingDuration = true;
-                            durationWidget.value = currentDur;
-                            isUpdatingDuration = false;
+                            isUpdatingDuration = true; durationWidget.value = currentDur; isUpdatingDuration = false;
                         }
-                        
-                        if (syncPlayer && audioEl.readyState >= 1) { audioEl.currentTime = s; }
+                        if (syncPlayer && audioEl.readyState >= 1) audioEl.currentTime = s;
                     };
 
                     audioEl.onloadedmetadata = () => {
@@ -469,13 +322,9 @@ app.registerExtension({
                             node._should_reset_trim = false;
                         } else {
                             let e = endWidget ? parseFloat(endWidget.value) || 0 : 0;
-                            if (endWidget && (e === 0 || e > duration)) { 
-                                endWidget.value = parseFloat(duration.toFixed(2)); 
-                            }
+                            if (endWidget && (e === 0 || e > duration)) endWidget.value = parseFloat(duration.toFixed(2)); 
                         }
-                        updateRuler(); 
-                        updateUI();
-                        app.graph.setDirtyCanvas(true, false);
+                        updateRuler(); updateUI(); app.graph.setDirtyCanvas(true, false);
                     };
 
                     audioEl.ontimeupdate = () => {
@@ -490,14 +339,11 @@ app.registerExtension({
                         let s = startWidget ? parseFloat(startWidget.value) || 0 : 0;
                         let e = endWidget ? parseFloat(endWidget.value) || duration : duration;
                         if (e === 0) e = duration;
-                        if (audioEl.currentTime < s || audioEl.currentTime >= e) { audioEl.currentTime = s; }
+                        if (audioEl.currentTime < s || audioEl.currentTime >= e) audioEl.currentTime = s;
                     };
 
                     [startWidget, endWidget, preSilenceWidget, postSilenceWidget].forEach(w => {
-                        if (w) {
-                            const orig = w.callback;
-                            w.callback = function() { updateUI(true); if(orig) orig.apply(this, arguments); };
-                        }
+                        if (w) { const orig = w.callback; w.callback = function() { updateUI(true); if(orig) orig.apply(this, arguments); }; }
                     });
 
                     sliderBox.onpointerdown = (e) => {
@@ -507,22 +353,11 @@ app.registerExtension({
                         const val = (x / rect.width) * duration;
                         let s = startWidget ? parseFloat(startWidget.value) || 0 : 0;
                         let e_val = endWidget ? parseFloat(endWidget.value) || duration : duration;
-                        
                         const handleTolerance = (10 / rect.width) * duration;
-                        
-                        if (val > s + handleTolerance && val < e_val - handleTolerance) {
-                            dragging = 'center';
-                            dragOffset = val - s;
-                            dragSelectionWidth = e_val - s;
-                        } else if (Math.abs(val - s) < Math.abs(val - e_val)) {
-                            dragging = 'start';
-                            if(startWidget) startWidget.value = parseFloat(Math.min(val, e_val).toFixed(2));
-                        } else {
-                            dragging = 'end';
-                            if(endWidget) endWidget.value = parseFloat(Math.max(val, s).toFixed(2));
-                        }
-                        updateUI(true); app.graph.setDirtyCanvas(true, false);
-                        sliderBox.setPointerCapture(e.pointerId);
+                        if (val > s + handleTolerance && val < e_val - handleTolerance) { dragging = 'center'; dragOffset = val - s; dragSelectionWidth = e_val - s; }
+                        else if (Math.abs(val - s) < Math.abs(val - e_val)) { dragging = 'start'; if(startWidget) startWidget.value = parseFloat(Math.min(val, e_val).toFixed(2)); }
+                        else { dragging = 'end'; if(endWidget) endWidget.value = parseFloat(Math.max(val, s).toFixed(2)); }
+                        updateUI(true); app.graph.setDirtyCanvas(true, false); sliderBox.setPointerCapture(e.pointerId);
                     };
 
                     sliderBox.onpointermove = (e) => {
@@ -530,42 +365,17 @@ app.registerExtension({
                         const rect = sliderBox.getBoundingClientRect();
                         const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
                         const val = (x / rect.width) * duration;
-                        if (dragging === 'start') {
-                            let e_val = endWidget ? parseFloat(endWidget.value) || duration : duration;
-                            if(startWidget) startWidget.value = parseFloat(Math.min(val, e_val).toFixed(2));
-                        } else if (dragging === 'end') {
-                            const s = startWidget ? parseFloat(startWidget.value) || 0 : 0;
-                            if(endWidget) endWidget.value = parseFloat(Math.max(val, s).toFixed(2));
-                        } else if (dragging === 'center') {
-                            let newStart = val - dragOffset;
-                            let newEnd = newStart + dragSelectionWidth;
-                            
-                            if (newStart < 0) {
-                                newStart = 0;
-                                newEnd = dragSelectionWidth;
-                            } else if (newEnd > duration) {
-                                newEnd = duration;
-                                newStart = duration - dragSelectionWidth;
-                            }
-                            
-                            if(startWidget) startWidget.value = parseFloat(newStart.toFixed(2));
-                            if(endWidget) endWidget.value = parseFloat(newEnd.toFixed(2));
-                        }
+                        if (dragging === 'start') { let e_val = endWidget ? parseFloat(endWidget.value) || duration : duration; if(startWidget) startWidget.value = parseFloat(Math.min(val, e_val).toFixed(2)); }
+                        else if (dragging === 'end') { const s = startWidget ? parseFloat(startWidget.value) || 0 : 0; if(endWidget) endWidget.value = parseFloat(Math.max(val, s).toFixed(2)); }
+                        else if (dragging === 'center') { let newStart = val - dragOffset; let newEnd = newStart + dragSelectionWidth; if (newStart < 0) { newStart = 0; newEnd = dragSelectionWidth; } else if (newEnd > duration) { newEnd = duration; newStart = duration - dragSelectionWidth; } if(startWidget) startWidget.value = parseFloat(newStart.toFixed(2)); if(endWidget) endWidget.value = parseFloat(newEnd.toFixed(2)); }
                         updateUI(true); app.graph.setDirtyCanvas(true, false);
                     };
 
                     sliderBox.onpointerup = (e) => { dragging = null; sliderBox.releasePointerCapture(e.pointerId); };
-
                     setTimeout(() => { node._initializing = false; }, 500);
-
                 }, 100);
 
-                node.onExecuted = function (output) {
-                    if (output && output.audio_path && output.audio_path.length) {
-                        applyAudioPath(output.audio_path[0]);
-                    }
-                };
-
+                node.onExecuted = function (output) { if (output && output.audio_path && output.audio_path.length) applyAudioPath(output.audio_path[0]); };
                 return r;
             }
         }
