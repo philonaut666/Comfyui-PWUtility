@@ -8,7 +8,6 @@ app.registerExtension({
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             const onDrawBackground = nodeType.prototype.onDrawBackground;
             
-            // --- V1 LiteGraph Image Preview Hider ---
             nodeType.prototype.onDrawBackground = function (ctx) {
                 if (onDrawBackground) {
                     onDrawBackground.apply(this, arguments);
@@ -16,17 +15,12 @@ app.registerExtension({
             };
             
             nodeType.prototype.onNodeCreated = function () {
-                // Ensure standard creation logic runs first
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
-                const node = this; // Capture the node instance
+                const node = this;
                 
-                // Track if we are in the initial loading phase to prevent resetting saved trim values
                 node._initializing = true;
                 node._should_reset_trim = false;
                 
-                // ====================================================================
-                // FIX: HIDE DEFAULT COMFYUI AUDIO PLAYER SAFELY
-                // ====================================================================
                 setTimeout(() => {
                     if (node.widgets) {
                         const nativeWidgetIndex = node.widgets.findIndex(w => w.name === "audioUI");
@@ -42,8 +36,6 @@ app.registerExtension({
                             w.hidden = true;
                             w.computeSize = () => [0, 0];
                             
-                            // Only update height to account for the hidden widget, 
-                            // preserving the width (whether it's the default 475 or a user-saved value).
                             const currentWidth = node.size[0];
                             const recommendedHeight = node.computeSize()[1];
                             node.setSize([currentWidth, recommendedHeight]);
@@ -52,18 +44,15 @@ app.registerExtension({
                                 app.graph.setDirtyCanvas(true, true);
                             }
                         }
-                    }
+                }
                 }, 10);
-                // ====================================================================
 
-                // --- THE CORE FIX FOR COMFYUI V2 ---
                 Object.defineProperty(node, 'imgs', {
                     get: function() { return undefined; },
                     set: function(val) { /* Ignore attempts by ComfyUI to set an image preview */ },
                     configurable: true
                 });
 
-                // Shared upload handler
                 const handleFileUpload = async (file) => {
                     if (!file.type.startsWith('audio/') && !file.type.startsWith('video/')) return false;
                     try {
@@ -81,7 +70,6 @@ app.registerExtension({
                             const data = await resp.json();
                             const audioWidget = node.widgets && node.widgets.find(w => w.name === "audio");
                             if (audioWidget) {
-                                // Manual upload should always reset the trim range
                                 node._should_reset_trim = true;
                                 audioWidget.value = data.name;
                                 if (audioWidget.options && audioWidget.options.values && !audioWidget.options.values.includes(data.name)) {
@@ -110,7 +98,6 @@ app.registerExtension({
                     return false;
                 };
 
-                // 1. Build the Main Custom HTML Container
                 const container = document.createElement("div");
                 const defaultBg = "rgba(30, 30, 30, 0.9)";
                 Object.assign(container.style, {
@@ -174,17 +161,12 @@ app.registerExtension({
                 node._audioEl = audioEl;
                 node._playerTitle = playerTitle;
 
-                // ===================================
-                // Core preview updater
-                // ===================================
                 const applyAudioPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
-
                     const isNewFile = (p !== node._lastLoadedAudioPath);
                     node._lastLoadedAudioPath = p;
 
-                    // Only reset trim when switching to a DIFFERENT file.
                     if (isNewFile) {
                         const endW = node.widgets && node.widgets.find(w => w.name === "end_time");
                         const startW = node.widgets && node.widgets.find(w => w.name === "start_time");
@@ -193,14 +175,12 @@ app.registerExtension({
                         node._should_reset_trim = true;
                     }
 
-                    // Build the src URL based on path type
                     let audioSrc;
                     const isAbsolute = (p.length >= 2 && p[1] === ':') || p.startsWith('/');
                     if (isAbsolute) {
                         audioSrc = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(p)}`);
                         playerTitle.textContent = p.split(/[\/\\]/).pop();
                     } else {
-                        // Relative path: safe to sync the dropdown widget value
                         const audioW = node.widgets && node.widgets.find(w => w.name === "audio");
                         if (audioW) audioW.value = p;
                         let fname = p, subfolder = "";
@@ -213,13 +193,11 @@ app.registerExtension({
                         playerTitle.textContent = fname;
                         audioSrc = api.apiURL(`/view?filename=${encodeURIComponent(fname)}&type=input&subfolder=${encodeURIComponent(subfolder)}`);
                     }
-                    // Only reload the audio element when the file changes
                     if (isNewFile) {
                         audioEl.src = audioSrc;
                     }
                 };
 
-                // Primary: api event listener
                 const _execHandler = ({ detail }) => {
                     if (!detail || String(detail.node) !== String(node.id)) return;
                     const out = detail.output;
@@ -229,7 +207,6 @@ app.registerExtension({
                 };
                 api.addEventListener("executed", _execHandler);
 
-                // Cleanup listener when node is removed
                 const _origRemoved = node.onRemoved;
                 node.onRemoved = function () {
                     api.removeEventListener("executed", _execHandler);
@@ -304,34 +281,31 @@ app.registerExtension({
                 
                 container.appendChild(trimArea);
 
-                // 4. Attach container to the node UI
                 const widget = this.addDOMWidget("audio_ui", "audio_ui", container);
-                
-                // --- DEFAULT SIZE FOR NEW NODES ---
                 this.size = [475, this.computeSize()[1]];
                 
                 widget.computeSize = function(width) {
                     return [width, 200];
                 };
 
-                // 5. Bind Node Data to UI dynamically 
                 setTimeout(() => {
                     const audioWidget = node.widgets && node.widgets.find(w => w.name === "audio");
                     const startWidget = node.widgets && node.widgets.find(w => w.name === "start_time");
                     const endWidget = node.widgets && node.widgets.find(w => w.name === "end_time");
                     const durationWidget = node.widgets && node.widgets.find(w => w.name === "duration");
+                    // 新增：获取前后置静音 widget
+                    const preSilenceWidget = node.widgets && node.widgets.find(w => w.name === "pre_silence");
+                    const postSilenceWidget = node.widgets && node.widgets.find(w => w.name === "post_silence");
                     
                     let duration = 0;
                     let dragging = null;
                     let dragOffset = 0;
                     let dragSelectionWidth = 0;
-                    let isUpdatingDuration = false; // Flag to prevent infinite loops
+                    let isUpdatingDuration = false;
 
-                    // Hook into the Python-generated native duration widget
                     if (durationWidget) {
                         const origCallback = durationWidget.callback;
                         durationWidget.callback = function(v) {
-                            // If we're internally triggering it, ignore it
                             if (!duration || isUpdatingDuration) {
                                 if (origCallback) origCallback.apply(this, arguments);
                                 return;
@@ -340,16 +314,20 @@ app.registerExtension({
                             isUpdatingDuration = true;
                             let d = parseFloat(v) || 0;
                             if (d < 0) d = 0;
-                            if (d > duration) d = duration;
+                            
+                            // 新增：计算扣除静音后的可用音频时长
+                            let pre = preSilenceWidget ? parseFloat(preSilenceWidget.value) || 0 : 0;
+                            let post = postSilenceWidget ? parseFloat(postSilenceWidget.value) || 0 : 0;
+                            let availableForAudio = d - pre - post;
+                            if (availableForAudio < 0) availableForAudio = 0;
 
                             let s = startWidget ? parseFloat(startWidget.value) || 0 : 0;
                             let newStart = s;
-                            let newEnd = s + d;
+                            let newEnd = s + availableForAudio;
 
-                            // If adding duration pushes past the end of the audio, shift the start time back instead
                             if (newEnd > duration) {
                                 newEnd = duration;
-                                newStart = duration - d;
+                                newStart = Math.max(0, duration - availableForAudio);
                             }
 
                             if (startWidget) startWidget.value = parseFloat(newStart.toFixed(2));
@@ -371,7 +349,6 @@ app.registerExtension({
                                 return;
                             }
                             let audioSrc;
-                            // Absolute path: serve via custom view API
                             if (filename.match(/^[a-zA-Z]:\\/) || filename.startsWith('/')) {
                                 audioSrc = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
                                 playerTitle.textContent = filename.split(/[\\/]/).pop();
@@ -390,15 +367,12 @@ app.registerExtension({
                             audioEl.src = audioSrc;
                         };
                         audioWidget.callback = function() {
-                            // If user manually changes the dropdown, flag for trim reset
                             if (!node._initializing) {
                                 node._should_reset_trim = true;
                             }
                             updateAudio();
                         };
                         updateAudio();
-
-                        // Store updateAudio so onExecuted (outside setTimeout) can call it
                         node._updateAudio = updateAudio;
                     }
 
@@ -464,8 +438,12 @@ app.registerExtension({
                         if (!duration) return;
                         let s = startWidget ? parseFloat(startWidget.value) || 0 : 0;
                         let e = endWidget ? parseFloat(endWidget.value) || 0 : 0;
+                        let pre = preSilenceWidget ? parseFloat(preSilenceWidget.value) || 0 : 0;
+                        let post = postSilenceWidget ? parseFloat(postSilenceWidget.value) || 0 : 0;
+
                         if (e === 0 || e > duration) e = duration;
                         if (s > e) s = e;
+                        
                         const sPct = (s / duration) * 100;
                         const ePct = (e / duration) * 100;
                         startHandle.style.left = `${sPct}%`;
@@ -473,9 +451,10 @@ app.registerExtension({
                         fill.style.left = `${sPct}%`;
                         fill.style.width = `${ePct - sPct}%`;
                         
-                        // Sync native duration widget seamlessly to match UI handles
-                        const currentDur = parseFloat((e - s).toFixed(2));
+                        // 新增：计算包含前后置静音的总时长
+                        const currentDur = parseFloat((e - s + pre + post).toFixed(2));
                         trimLength.textContent = `Trimmed: ${currentDur}s`;
+                        
                         if (durationWidget && durationWidget.value !== currentDur) {
                             isUpdatingDuration = true;
                             durationWidget.value = currentDur;
@@ -487,20 +466,16 @@ app.registerExtension({
 
                     audioEl.onloadedmetadata = () => {
                         duration = audioEl.duration;
-                        
-                        // Handle trim reset for new audio selection
                         if (node._should_reset_trim) {
                             if (startWidget) startWidget.value = 0;
                             if (endWidget) endWidget.value = parseFloat(duration.toFixed(2));
                             node._should_reset_trim = false;
                         } else {
-                            // Default clamping logic for initial load or out-of-bounds saved values
                             let e = endWidget ? parseFloat(endWidget.value) || 0 : 0;
                             if (endWidget && (e === 0 || e > duration)) { 
                                 endWidget.value = parseFloat(duration.toFixed(2)); 
                             }
                         }
-                        
                         updateRuler(); 
                         updateUI();
                         app.graph.setDirtyCanvas(true, false);
@@ -521,7 +496,8 @@ app.registerExtension({
                         if (audioEl.currentTime < s || audioEl.currentTime >= e) { audioEl.currentTime = s; }
                     };
 
-                    [startWidget, endWidget].forEach(w => {
+                    // 新增：将 pre_silence 和 post_silence 加入监听列表
+                    [startWidget, endWidget, preSilenceWidget, postSilenceWidget].forEach(w => {
                         if (w) {
                             const orig = w.callback;
                             w.callback = function() { updateUI(true); if(orig) orig.apply(this, arguments); };
@@ -536,7 +512,6 @@ app.registerExtension({
                         let s = startWidget ? parseFloat(startWidget.value) || 0 : 0;
                         let e_val = endWidget ? parseFloat(endWidget.value) || duration : duration;
                         
-                        // Define a "handle tolerance" zone (approx 10px on each side) to prioritize resizing over dragging
                         const handleTolerance = (10 / rect.width) * duration;
                         
                         if (val > s + handleTolerance && val < e_val - handleTolerance) {
@@ -569,7 +544,6 @@ app.registerExtension({
                             let newStart = val - dragOffset;
                             let newEnd = newStart + dragSelectionWidth;
                             
-                            // Clamp to bounds
                             if (newStart < 0) {
                                 newStart = 0;
                                 newEnd = dragSelectionWidth;
@@ -586,12 +560,10 @@ app.registerExtension({
 
                     sliderBox.onpointerup = (e) => { dragging = null; sliderBox.releasePointerCapture(e.pointerId); };
 
-                    // Exit initialization phase
                     setTimeout(() => { node._initializing = false; }, 500);
 
                 }, 100);
 
-                // Fallback: node.onExecuted (for ComfyUI versions that call it directly)
                 node.onExecuted = function (output) {
                     if (output && output.audio_path && output.audio_path.length) {
                         applyAudioPath(output.audio_path[0]);
