@@ -45,7 +45,6 @@ class VideoLoaderPW:
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "end_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "duration_frames": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
-                # FIX 2: Default frame_rate changed from 24 to 25
                 "frame_rate": ("INT", {"default": 25, "min": 1, "max": 120, "step": 1, "tooltip": "Force the video to a specific frame rate for extraction."}),
                 "display_mode": (["seconds", "frames"], {"default": "seconds"}),
                 "crop_x": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
@@ -54,7 +53,8 @@ class VideoLoaderPW:
                 "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
             },
             "optional": {
-                "path": ("STRING", {"forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
+                # FIX: Removed forceInput: True to allow the widget to be visible/editable and trigger JS preview updates.
+                "path": ("STRING", {"default": "", "tooltip": "Path from LocalMedia Manager to auto-load video"}),
             }
         }
 
@@ -64,6 +64,7 @@ class VideoLoaderPW:
     CATEGORY = "PW/Video"
 
     def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, path=None, **kwargs):
+        # If a path is connected from LocalMedia Manager, use it in priority over the widget value
         video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
 
         if not video_to_load:
