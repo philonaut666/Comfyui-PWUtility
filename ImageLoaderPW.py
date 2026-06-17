@@ -81,6 +81,7 @@ class ImageLoaderPW:
             },
         }
 
+    # Keep 51 outputs in backend to prevent ComfyUI execution engine crashes when JS dynamically adds outputs
     RETURN_TYPES = ("IMAGE",) * 51
     RETURN_NAMES = ("pack_images",) + tuple(f"image_{i+1}" for i in range(50))
     FUNCTION = "load_images"
@@ -211,11 +212,33 @@ class ImageLoaderPW:
             except Exception as e:
                 print(f"Error loading {path}: {e}")
 
-        # Output as Python LIST of tensors (mapped to "pack_images" port)
+        # Output as Batched Tensor (B, H, W, C) for the "pack_images" port 
+        # This ensures compatibility with standard nodes like Preview Image
         if len(results) > 0:
-            pack_images = results 
+            first_shape = results[0].shape
+            all_same_shape = all(r.shape == first_shape for r in results)
+            
+            if all_same_shape:
+                pack_images = torch.cat(results, dim=0)
+            else:
+                # If dimensions differ (e.g., keep proportion without fixed size), pad them to max dimensions
+                try:
+                    max_h = max(r.shape[1] for r in results)
+                    max_w = max(r.shape[2] for r in results)
+                    padded_results = []
+                    for r in results:
+                        pad_h = max_h - r.shape[1]
+                        pad_w = max_w - r.shape[2]
+                        # F.pad format for (N, H, W, C) is (left, right, top, bottom, front, back) -> (0, 0, 0, pad_w, 0, pad_h)
+                        padded = F.pad(r, (0, 0, 0, pad_w, 0, pad_h), value=0.0)
+                        padded_results.append(padded)
+                    pack_images = torch.cat(padded_results, dim=0)
+                except Exception as e:
+                    print(f"ImageLoaderPW Warning: Failed to pad images for batching: {e}. Outputting first image only.")
+                    pack_images = results[0]
         else:
-            pack_images = []
+            # Fallback empty tensor if no valid paths
+            pack_images = torch.zeros((1, 64, 64, 3))
 
         # Pad individual outputs exactly to length 50 as defined in RETURN_TYPES
         padded_results = results + [torch.zeros((1, 64, 64, 3))] * (50 - len(results))
