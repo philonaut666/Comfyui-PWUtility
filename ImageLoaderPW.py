@@ -72,8 +72,11 @@ class ImageLoaderPW:
         return {
             "required": {
                 "image_paths": ("STRING", {"default": "", "multiline": True}),
+                "scale_mode": (["scale dimensions", "scale longer", "scale shorter"],),
                 "width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1}),
                 "height": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1}),
+                "longer_size": ("INT", {"default": 1024, "min": 0, "max": 8192, "step": 1}),
+                "shorter_size": ("INT", {"default": 1024, "min": 0, "max": 8192, "step": 1}),
                 "interpolation": (["lanczos", "nearest", "bilinear", "bicubic", "area", "nearest-exact"],),
                 "resize_method": (["keep proportion", "stretch", "pad", "crop"],),
                 "multiple_of": ("INT", {"default": 32, "min": 0, "max": 512, "step": 1}),
@@ -81,14 +84,9 @@ class ImageLoaderPW:
             },
         }
 
-    # Keep 51 outputs in backend to prevent ComfyUI execution engine crashes when JS dynamically adds outputs
     RETURN_TYPES = ("IMAGE",) * 51
     RETURN_NAMES = ("image_list",) + tuple(f"image_{i+1}" for i in range(50))
-    
-    # CRITICAL: Tells ComfyUI that the first output is a Python List of Images, 
-    # allowing nodes like Preview Image to correctly iterate and preview it.
     OUTPUT_IS_LIST = (True,) + (False,) * 50 
-    
     FUNCTION = "load_images"
     CATEGORY = "PWUtility"
 
@@ -182,9 +180,14 @@ class ImageLoaderPW:
 
         return outputs
 
-    def load_images(self, image_paths, width, height, interpolation, resize_method, multiple_of, img_compression):
+    def load_images(self, image_paths, scale_mode, width, height, longer_size, shorter_size, interpolation, resize_method, multiple_of, img_compression):
         results = []
         valid_paths = [p.strip() for p in image_paths.split("\n") if p.strip()]
+
+        def align_to_multiple(val, multiple):
+            if multiple <= 1:
+                return val
+            return round(val / multiple) * multiple
 
         for path in valid_paths:
             try:
@@ -202,8 +205,35 @@ class ImageLoaderPW:
 
                 image_np = np.array(image).astype(np.float32) / 255.0
                 image_tensor = torch.from_numpy(image_np)[None,]
+                
+                _, oh, ow, _ = image_tensor.shape
+                
+                target_w, target_h = width, height
+                use_internal_multiple = multiple_of
 
-                image_tensor = self.resize_image(image_tensor, width, height, resize_method, interpolation, multiple_of)
+                if scale_mode == "scale longer":
+                    base_size = longer_size if longer_size > 0 else max(oh, ow)
+                    if oh >= ow:
+                        target_h = align_to_multiple(base_size, multiple_of)
+                        target_w = align_to_multiple(ow * (target_h / oh), multiple_of)
+                    else:
+                        target_w = align_to_multiple(base_size, multiple_of)
+                        target_h = align_to_multiple(oh * (target_w / ow), multiple_of)
+                    target_w, target_h = int(max(1, target_w)), int(max(1, target_h))
+                    use_internal_multiple = 0  # Skip internal alignment as we already did it perfectly
+                    
+                elif scale_mode == "scale shorter":
+                    base_size = shorter_size if shorter_size > 0 else min(oh, ow)
+                    if oh <= ow:
+                        target_h = align_to_multiple(base_size, multiple_of)
+                        target_w = align_to_multiple(ow * (target_h / oh), multiple_of)
+                    else:
+                        target_w = align_to_multiple(base_size, multiple_of)
+                        target_h = align_to_multiple(oh * (target_w / ow), multiple_of)
+                    target_w, target_h = int(max(1, target_w)), int(max(1, target_h))
+                    use_internal_multiple = 0  # Skip internal alignment
+
+                image_tensor = self.resize_image(image_tensor, target_w, target_h, resize_method, interpolation, use_internal_multiple)
      
                 if img_compression > 0:
                     img_np = (image_tensor[0].numpy() * 255).clip(0, 255).astype(np.uint8)
@@ -217,19 +247,15 @@ class ImageLoaderPW:
             except Exception as e:
                 print(f"Error loading {path}: {e}")
 
-        # Construct the Image List exactly like Impact Pack's Make Image List
-        # It collects all valid, processed image tensors in order
         image_list = []
         for r in results:
             image_list.append(r)
             
         if not image_list:
-            image_list = [] # Fallback to empty list if no images were loaded
+            image_list = [] 
 
-        # Pad individual outputs exactly to length 50 as defined in RETURN_TYPES
         padded_results = results + [torch.zeros((1, 64, 64, 3))] * (50 - len(results))
 
-        # Return the Image List first, followed by the individual padded items
         return (image_list, *padded_results[:50])
 
 NODE_CLASS_MAPPINGS = {
