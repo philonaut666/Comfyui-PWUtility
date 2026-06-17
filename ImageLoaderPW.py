@@ -88,7 +88,7 @@ class ImageLoaderPW(io.ComfyNode):
                 io.Int.Input("img_compression", default=18, min=0, max=100, step=1),
             ],
             outputs=[
-                io.Image.Output(display_name="IMAGES"), # Changed to IMAGES
+                io.Image.Output(display_name="IMAGES"), 
             ] + [
                 io.Image.Output(display_name=f"image_{i+1}") for i in range(50)
             ]
@@ -186,7 +186,7 @@ class ImageLoaderPW(io.ComfyNode):
         return outputs
 
     @classmethod
-    def execute(cls, image_paths, width, height, interpolation, resize_method, multiple_of, img_compression):
+    def execute(cls, image_paths="", width=0, height=0, interpolation="lanczos", resize_method="keep proportion", multiple_of=32, img_compression=18, **kwargs):
         results = []
         valid_paths = [p.strip() for p in image_paths.split("\n") if p.strip()]
 
@@ -221,14 +221,10 @@ class ImageLoaderPW(io.ComfyNode):
             except Exception as e:
                 print(f"Error loading {path}: {e}")
 
-        # Create a standard ComfyUI IMAGE batch (Batched Tensor) so it can connect to Preview Image
         if len(results) > 0:
             try:
-                # Try to concatenate directly if all images have the same dimensions
                 IMAGES = torch.cat(results, dim=0)
             except Exception as e:
-                # Fallback: If dimensions differ (e.g., 'keep proportion' was used), 
-                # resize all images to match the first image's dimensions to form a valid batch.
                 print(f"ImageLoaderPW Warning: Images have different dimensions. Resizing all to match the first image to create a valid batch.")
                 target_h, target_w = results[0].shape[1], results[0].shape[2]
                 resized_results = [results[0]]
@@ -237,15 +233,11 @@ class ImageLoaderPW(io.ComfyNode):
                     resized_results.append(resized)
                 IMAGES = torch.cat(resized_results, dim=0)
         else:
-            # Fallback empty tensor if no valid paths
             IMAGES = torch.zeros((1, 64, 64, 3))
             results = [IMAGES]
 
-        # Pad individual outputs exactly to length 50 as defined in schema
         padded_results = results + [torch.zeros((1, 64, 64, 3))] * (50 - len(results))
 
-        # V3 API return format
         return io.NodeOutput(IMAGES, *padded_results[:50])
 
-# V3 API Export
 NODE_CLASSES = [ImageLoaderPW]
