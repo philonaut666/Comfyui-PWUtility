@@ -66,7 +66,6 @@ class AudioLoaderPW:
                 "fps": ("FLOAT", {"default": 25.0, "min": 0.0, "max": 1000.0, "step": 0.001, "tooltip": "Frames per second"}),
                 "pre_silence": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Silence in seconds to add before the audio"}),
                 "post_silence": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Silence in seconds to add after the audio"}),
-                # 需求 1: 使用字符串键 "align_8n+1" 以支持 UI 显示，避免 Python 语法错误
                 "align_8n+1": ("BOOLEAN", {"default": False, "tooltip": "Pad audio to make total frames equal to 8n+1 based on fps"}),
             },
             "optional": {
@@ -85,9 +84,7 @@ class AudioLoaderPW:
         return True
 
     def load_audio(self, audio, start_time, end_time, duration, fps, pre_silence, post_silence, path=None, **kwargs):
-        # 需求 1: 通过 kwargs 安全获取包含特殊字符的参数名
         align_flag = kwargs.get("align_8n+1", False)
-        
         audio_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else audio
 
         try:
@@ -131,7 +128,6 @@ class AudioLoaderPW:
         if trimmed_waveform.shape[1] == 0:
             trimmed_waveform = torch.zeros((waveform.shape[0], 1), dtype=waveform.dtype, device=waveform.device)
         
-        # 添加前置和后置静音
         pre_silence_frames = int(pre_silence * sample_rate)
         post_silence_frames = int(post_silence * sample_rate)
         
@@ -140,20 +136,23 @@ class AudioLoaderPW:
         
         final_waveform = torch.cat((pre_silence_waveform, trimmed_waveform, post_silence_waveform), dim=1)
         
-        # --- 需求 2 & 3: 8n+1 帧对齐逻辑 (全程保持浮点数计算) ---
+        # ==========================================
+        # 8n+1 帧对齐逻辑 (严格遵循：仅不符合时才计算和补齐)
+        # ==========================================
         if align_flag and fps > 0:
-            # 1. 计算总输出的 audio 长度 (秒)
+            # 1. 计算当前总输出的 audio 长度 (秒)
             audio_length_sec = final_waveform.shape[1] / sample_rate
             
-            # 2. 依据输入的 fps 计算总帧数 (保持小数，不使用 round)
+            # 2. 依据输入的 fps 计算总帧数 (全程保持浮点数)
             total_frames = audio_length_sec * fps
             
             # 3. 判断该帧数是否符合 8n+1 的标准
-            # 即 (total_frames - 1) / 8 是否为整数。考虑浮点精度，使用极小阈值判断
             n = (total_frames - 1) / 8
             is_valid = abs(n - round(n)) < 1e-5
             
             if not is_valid:
+                # 【仅在不符合时】执行以下计算和补齐操作
+                
                 # 4. 按照 ceil(frames/8)*8+1 的公式算出新的总帧数 (保持浮点数)
                 new_total_frames = math.ceil(total_frames / 8) * 8 + 1
                 
@@ -161,7 +160,6 @@ class AudioLoaderPW:
                 diff_frames = new_total_frames - total_frames
                 
                 # 6. 将帧数差额转换为采样点差额，并在音频最后添加这个差额的空音频
-                # (仅在生成 Tensor shape 的最后一步使用 int 转换)
                 diff_samples = int(diff_frames * sample_rate / fps)
                 
                 if diff_samples > 0:
@@ -171,7 +169,7 @@ class AudioLoaderPW:
                 # 7. duration 按照新的总帧数的值根据 fps 换算为秒数进行输出
                 final_duration = float(new_total_frames / fps)
             else:
-                # 如果符合 8n+1 标准，则不添加空音频，duration 直接输出 audio 长度（秒）
+                # 【当符合 8n+1 时】不进行后续计算，不补空音频，直接输出当前 audio 长度
                 final_duration = float(audio_length_sec)
         else:
             # 开关关闭，不进行判断，直接输出音频和基于 sample_rate 的 duration
