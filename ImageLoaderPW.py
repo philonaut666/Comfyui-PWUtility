@@ -86,7 +86,6 @@ class ImageLoaderPW:
             },
         }
 
-    # Keep 51 outputs in backend to prevent ComfyUI execution engine crashes when JS dynamically adds outputs
     RETURN_TYPES = ("IMAGE",) * 51
     RETURN_NAMES = ("IMAGES",) + tuple(f"image_{i+1}" for i in range(50))
     FUNCTION = "load_images"
@@ -155,7 +154,6 @@ class ImageLoaderPW:
         outputs = image.permute(0, 3, 1, 2)
 
         if interpolation == "lanczos":
-            # Fallback for older ComfyUI versions that might not have lanczos in utils
             if hasattr(comfy.utils, 'lanczos'):
                 outputs = comfy.utils.lanczos(outputs, width, height)
             else:
@@ -221,11 +219,21 @@ class ImageLoaderPW:
             except Exception as e:
                 print(f"Error loading {path}: {e}")
 
-        # Output directly as a Python List of Tensors (Image List).
-        IMAGES = results if len(results) > 0 else []
+        # 核心修改：严格清洗数据，确保每个 Tensor 都是标准的 (1, H, W, 3) float32
+        # 直接输出 Python List，完全模仿 Image Manager 的 pack_images 行为
+        clean_results = []
+        for r in results:
+            if r.dtype != torch.float32:
+                r = r.to(torch.float32)
+            if r.ndim == 3:
+                r = r.unsqueeze(0)
+            clean_results.append(r)
+            
+        # IMAGES 端口输出 List，保持所有图片原始尺寸，且兼容 Preview Image 遍历
+        IMAGES = clean_results if len(clean_results) > 0 else [torch.zeros((1, 64, 64, 3), dtype=torch.float32)]
 
-        # Pad individual outputs exactly to length 50 as defined in RETURN_TYPES
-        padded_results = results + [torch.zeros((1, 64, 64, 3))] * (50 - len(results))
+        # 独立端口 (image_1, image_2...) 依然输出原始 List 中的元素
+        padded_results = clean_results + [torch.zeros((1, 64, 64, 3), dtype=torch.float32)] * (50 - len(clean_results))
 
         return (IMAGES, *padded_results[:50])
 
