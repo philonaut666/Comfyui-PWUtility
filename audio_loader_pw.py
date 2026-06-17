@@ -54,14 +54,12 @@ class AudioLoaderPW:
                 except:
                     files = sorted(all_files)
         
-        if not files or len(files) == 0:
-            files = ["none"]
+        # 【核心修改】始终在列表首位插入空字符串，防止 ComfyUI 自动选中 input 目录下的第一个真实音频
+        files = [""] + files if files else [""]
 
         return {
             "required": {
-                # 移除 audio 的默认值，仅保留上传功能
                 "audio": (files, {"audio_upload": True}),
-                # 默认值设置为 0.0 (前端配合 step 0.01 会显示为 0.00)
                 "start_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "end_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "duration": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
@@ -90,7 +88,8 @@ class AudioLoaderPW:
         audio_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else audio
 
         try:
-            if audio_to_load and audio_to_load != "none" and os.path.isabs(audio_to_load):
+            # 【修改】兼容空字符串 "" 和 "none"
+            if audio_to_load not in ["", "none"] and os.path.isabs(audio_to_load):
                 audio_path = audio_to_load
                 if os.path.exists(audio_path):
                     input_dir = folder_paths.get_input_directory()
@@ -100,13 +99,14 @@ class AudioLoaderPW:
                         shutil.copy2(audio_path, dest_path)
                     audio_to_load = dest_name
             else:
-                audio_path = folder_paths.get_annotated_filepath(audio_to_load) if audio_to_load != "none" else ""
+                audio_path = folder_paths.get_annotated_filepath(audio_to_load) if audio_to_load not in ["", "none"] else ""
         except:
             audio_path = ""
         
-        if audio_to_load == "none" or not audio_path or not os.path.exists(audio_path):
-            missing_info = audio_to_load if audio_to_load != "none" else "None selected"
-            print(f"!!! [AudioLoaderPW] Warning: Audio file '{missing_info}' not found. Outputting 1 second of silence.")
+        # 【修改】空值或未找到文件时，输出静音
+        if audio_to_load in ["", "none"] or not audio_path or not os.path.exists(audio_path):
+            missing_info = audio_to_load if audio_to_load not in ["", "none"] else "None selected"
+            print(f"!!! [AudioLoaderPW] Warning: Audio file '{missing_info}' not found or empty. Outputting 1 second of silence.")
             sample_rate = 44100
             waveform = torch.zeros((2, 44100))
         else:
@@ -139,7 +139,7 @@ class AudioLoaderPW:
         final_waveform = torch.cat((pre_silence_waveform, trimmed_waveform, post_silence_waveform), dim=1)
         
         # ==========================================
-        # 8n+1 帧对齐逻辑 (严格遵循：仅不符合时才计算和补齐)
+        # 8n+1 帧对齐逻辑
         # ==========================================
         if align_flag and fps > 0:
             audio_length_sec = final_waveform.shape[1] / sample_rate
