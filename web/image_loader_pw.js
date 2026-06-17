@@ -6,7 +6,6 @@ app.registerExtension({
     async nodeCreated(node) {
         if (node.comfyClass !== "ImageLoaderPW") return;
 
-        // Helper to detect if we are in the new Nodes 2.0 / V3 Web Component frontend
         let v3NodeElement = null;
         function checkIsV3() {
             if (v3NodeElement) return true;
@@ -22,12 +21,11 @@ app.registerExtension({
             return false;
         }
 
-        // --- 1. UI Setup: Main Container ---
         const container = document.createElement("div");
         container.style.cssText = `
             width: 100%;
             min-height: 250px; 
-            min-width: 100px; /* Reduced from 400px to allow thin resizing in V3 */
+            min-width: 100px;
             background: #222222;
             border: 1px solid #353545;
             border-radius: 4px;
@@ -41,7 +39,6 @@ app.registerExtension({
             overflow: hidden;
         `;
 
-        // Top Bar for Actions
         const topBar = document.createElement("div");
         topBar.style.cssText = "display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center; width: 100%; gap: 8px;";
         
@@ -97,7 +94,6 @@ app.registerExtension({
         fileInput.style.display = "none";
         container.appendChild(fileInput);
 
-        // Add the Widget to the Node
         const galleryWidget = node.addDOMWidget("Gallery", "html_gallery", container, { serialize: false });
         
         galleryWidget.computeSize = function() {
@@ -147,10 +143,8 @@ app.registerExtension({
             refreshGallery(isRearranging);
         }
 
-        // --- 2. Logic: Output Syncing & Dynamic Packing ---
         function syncOutputs(count) {
             if (!node.outputs) return;
-
             let changed = false;
             const targetTotal = count + 1;
             const wasFresh = node.outputs.length >= 50;
@@ -213,7 +207,6 @@ app.registerExtension({
             }
             
             bestS = Math.max(10, Math.floor(bestS)); 
-            
             grid.style.gridTemplateColumns = `repeat(${bestCols}, ${bestS}px)`;
             grid.style.gridAutoRows = `${bestS}px`;
         }
@@ -233,9 +226,7 @@ app.registerExtension({
 
                 if (!v3EventsAttached) {
                     v3EventsAttached = true;
-                    v3NodeElement.addEventListener("dragover", (e) => {
-                        e.preventDefault(); 
-                    });
+                    v3NodeElement.addEventListener("dragover", (e) => { e.preventDefault(); });
                     v3NodeElement.addEventListener("drop", (e) => {
                         if (e.dataTransfer && e.dataTransfer.files) {
                             const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
@@ -269,7 +260,6 @@ app.registerExtension({
 
             let targetW = Math.max(node.size[0], minW);
             let targetH = forceShrink ? absoluteMinHeight : node.size[1];
-
             targetH = Math.max(targetH, absoluteMinHeight);
 
             if (node.size[0] !== targetW || node.size[1] !== targetH) {
@@ -279,17 +269,14 @@ app.registerExtension({
 
             const availableGalleryHeight = targetH - galleryY - paddingBottom;
             container.style.height = availableGalleryHeight + "px";
-
             isLayouting = false;
         }
 
-        // --- OVERRIDE LOGIC FOR RESIZING --- 
         const origOnResize = node.onResize;
         node.onResize = function(size) {
             const isV3 = checkIsV3();
             const minW = isV3 ? 100 : 220;
             const paddingBottom = isV3 ? 15 : 25;
-
             const galleryY = galleryWidget.last_y || 40;
             const minOutputsHeight = (this.outputs ? this.outputs.length : 1) * 20;
             const absoluteMinHeight = Math.max(galleryY + 250 + paddingBottom, minOutputsHeight + 40);
@@ -367,7 +354,6 @@ app.registerExtension({
         });
         resizeObserver.observe(gridWrapper);
 
-        // --- 3. Logic: Gallery Rendering ---
         let draggedNode = null;
         let lastSwapX = 0;
         let lastSwapY = 0;
@@ -463,6 +449,7 @@ app.registerExtension({
                         Array.from(draggedNode.children).forEach(c => c.style.opacity = "1");
                     }
                     draggedNode = null; 
+                    
                     const newPaths = Array.from(grid.children).map(n => n.dataset.path);
                     const currentVal = (pathsWidget?.value || "").trim();
                     if (newPaths.join("\n") !== currentVal) {
@@ -523,7 +510,6 @@ app.registerExtension({
             }
         }
 
-        // --- 4. Logic: File Handling ---
         async function handleFiles(files) {
             const uploaded = [];
             for (const file of files) {
@@ -598,7 +584,6 @@ app.registerExtension({
             if (e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
         };
 
-        // --- 5. Logic: Paste Handling ---
         const pasteHandler = (e) => {
             if (app.canvas.selected_nodes && app.canvas.selected_nodes[node.id]) {
                 const items = e.clipboardData?.items;
