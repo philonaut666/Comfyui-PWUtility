@@ -96,6 +96,7 @@ class ImageLoaderPW:
         x = y = x2 = y2 = 0
         pad_left = pad_right = pad_top = pad_bottom = 0
 
+        # Internal alignment (used primarily for scale dimensions)
         if multiple_of > 1:
             width = width - (width % multiple_of)
             height = height - (height % multiple_of)
@@ -146,7 +147,7 @@ class ImageLoaderPW:
             width = new_width
             height = new_height
             
-        else:
+        else: # stretch
             width = width if width > 0 else ow
             height = height if height > 0 else oh
 
@@ -167,14 +168,15 @@ class ImageLoaderPW:
             if x > 0 or y > 0 or x2 > 0 or y2 > 0:
                 outputs = outputs[:, y:y2, x:x2, :]
 
+        # Final safety crop to ensure multiple_of compliance
         if multiple_of > 1 and (outputs.shape[2] % multiple_of != 0 or outputs.shape[1] % multiple_of != 0):
-            width = outputs.shape[2]
-            height = outputs.shape[1]
-            x = (width % multiple_of) // 2
-            y = (height % multiple_of) // 2
-            x2 = width - ((width % multiple_of) - x)
-            y2 = height - ((height % multiple_of) - y)
-            outputs = outputs[:, y:y2, x:x2, :]
+            w = outputs.shape[2]
+            h = outputs.shape[1]
+            cx = (w % multiple_of) // 2
+            cy = (h % multiple_of) // 2
+            cx2 = w - ((w % multiple_of) - cx)
+            cy2 = h - ((h % multiple_of) - cy)
+            outputs = outputs[:, cy:cy2, cx:cx2, :]
         
         outputs = torch.clamp(outputs, 0, 1)
 
@@ -209,6 +211,7 @@ class ImageLoaderPW:
                 _, oh, ow, _ = image_tensor.shape
                 
                 target_w, target_h = width, height
+                actual_resize_method = resize_method
                 use_internal_multiple = multiple_of
 
                 if scale_mode == "scale longer":
@@ -220,7 +223,11 @@ class ImageLoaderPW:
                         target_w = align_to_multiple(base_size, multiple_of)
                         target_h = align_to_multiple(oh * (target_w / ow), multiple_of)
                     target_w, target_h = int(max(1, target_w)), int(max(1, target_h))
-                    use_internal_multiple = 0  # Skip internal alignment as we already did it perfectly
+                    
+                    # CRITICAL FIX: Bypass internal keep proportion recalculation
+                    if resize_method == "keep proportion":
+                        actual_resize_method = "stretch"
+                    use_internal_multiple = 0  # External alignment is perfect
                     
                 elif scale_mode == "scale shorter":
                     base_size = shorter_size if shorter_size > 0 else min(oh, ow)
@@ -231,9 +238,13 @@ class ImageLoaderPW:
                         target_w = align_to_multiple(base_size, multiple_of)
                         target_h = align_to_multiple(oh * (target_w / ow), multiple_of)
                     target_w, target_h = int(max(1, target_w)), int(max(1, target_h))
-                    use_internal_multiple = 0  # Skip internal alignment
+                    
+                    # CRITICAL FIX: Bypass internal keep proportion recalculation
+                    if resize_method == "keep proportion":
+                        actual_resize_method = "stretch"
+                    use_internal_multiple = 0  # External alignment is perfect
 
-                image_tensor = self.resize_image(image_tensor, target_w, target_h, resize_method, interpolation, use_internal_multiple)
+                image_tensor = self.resize_image(image_tensor, target_w, target_h, actual_resize_method, interpolation, use_internal_multiple)
      
                 if img_compression > 0:
                     img_np = (image_tensor[0].numpy() * 255).clip(0, 255).astype(np.uint8)
