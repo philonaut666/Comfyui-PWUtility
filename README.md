@@ -31,7 +31,9 @@ Linkage Config中，通过点击右侧加号添加组并设置组的状态。组
 
 ### multiple_of：要求长宽都能被该数值整除。
 
-### resize_method： 选择用于处理比例的方式。包括keep proportion保持原图比例，stretch拉伸，crop, pad。但是可能造成与multiple_of的值的矛盾：当选择keep proportion，且保持原图比例导致长宽某一边的尺寸无法满足被multiple_of整除时，会自动降级为stretch，造成轻微形变（通常不超过1%）以满足能被multiple of整除的要求。选择pad或者crop，则会严格计算出multiple of的倍数作为边界框进行crop或者pad填充尺寸。
+### resize_method： 选择用于处理比例的方式。
+- 包括keep proportion保持原图比例，stretch拉伸，crop, pad。
+- 但是可能造成与multiple_of的值的矛盾：当选择keep proportion，且保持原图比例导致长宽某一边的尺寸无法满足被multiple_of整除时，会自动降级为stretch，造成轻微形变（通常不超过1%）以满足能被multiple of整除的要求。选择pad或者crop，则会严格计算出multiple of的倍数作为边界框进行crop或者pad填充尺寸。
 
 ## License
 
