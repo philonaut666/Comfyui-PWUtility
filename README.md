@@ -23,6 +23,16 @@ Linkage Config中，通过点击右侧加号添加组并设置组的状态。组
 
 <img width="419" height="318" alt="GroupSwitchADV2" src="https://github.com/user-attachments/assets/146a684a-89d1-4042-8bea-92d7b8964e19" />
 
+## Image Loader PW
+### scale mode: 选择缩放方式。
+#### scale dimensions：设置宽和高。
+长宽都为0则是保持原图尺寸。
+但是会遇到比例问题，通过下面的resize_method来进行计算，会将长和宽更快达到给定值的设置为给定值，另一边根据resize mothod的设定的方式重新进行计算。
+
+### multiple_of：要求长宽都能被该数值整除。
+
+### resize_method： 选择用于处理比例的方式。包括keep proportion保持原图比例，stretch拉伸，crop, pad。但是可能造成与multiple_of的值的矛盾：当选择keep proportion，且保持原图比例导致长宽某一边的尺寸无法满足被multiple_of整除时，会自动降级为stretch，造成轻微形变（通常不超过1%）以满足能被multiple of整除的要求。选择pad或者crop，则会严格计算出multiple of的倍数作为边界框进行crop或者pad填充尺寸。
+
 ## License
 
 MIT
