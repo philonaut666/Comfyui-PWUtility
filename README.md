@@ -42,3 +42,5 @@ MIT
 ## Credits
 
 - [zhihui_nodes_comfyui](https://github.com/zhihui6/zhihui_nodes_comfyui) Group Switch Manager
+- [WhatDreamsCost-ComfyUI](https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI)
+- [myWhatDreamsCost-ComfyUI](https://github.com/huanggou666/myWhatDreamsCost-ComfyUI)
