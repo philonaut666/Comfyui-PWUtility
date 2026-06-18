@@ -80,7 +80,7 @@ class ImageLoaderPW:
                 "interpolation": (["lanczos", "nearest", "bilinear", "bicubic", "area", "nearest-exact"],),
                 "resize_method": (["keep proportion", "stretch", "pad", "crop"],),
                 "pad_color": ("STRING", {"default": "0,0,0"}),
-                "crop_position": (["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"],),
+                "crop_position": (["center", "top", "bottom", "left", "right"],),
                 "multiple_of": ("INT", {"default": 32, "min": 0, "max": 512, "step": 1}),
                 "img_compression": ("INT", {"default": 18, "min": 0, "max": 100, "step": 1}),
             },
@@ -134,7 +134,7 @@ class ImageLoaderPW:
             new_width = round(ow * ratio)
             new_height = round(oh * ratio)
             
-            # Calculate crop position
+            # Calculate crop position (Only center, top, bottom, left, right)
             if crop_position == "center":
                 x = (new_width - width) // 2
                 y = (new_height - height) // 2
@@ -150,18 +150,6 @@ class ImageLoaderPW:
             elif crop_position == "right":
                 x = new_width - width
                 y = (new_height - height) // 2
-            elif crop_position == "top-left":
-                x = 0
-                y = 0
-            elif crop_position == "top-right":
-                x = new_width - width
-                y = 0
-            elif crop_position == "bottom-left":
-                x = 0
-                y = new_height - height
-            elif crop_position == "bottom-right":
-                x = new_width - width
-                y = new_height - height
             else:
                 x = (new_width - width) // 2
                 y = (new_height - height) // 2
