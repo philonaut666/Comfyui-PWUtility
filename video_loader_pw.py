@@ -44,35 +44,35 @@ class VideoLoaderPW:
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "end_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "duration_frames": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
-                "frame_rate": ("INT", {"default": 25, "min": 1, "max": 120, "step": 1, "tooltip": "Force the video to a specific frame rate for extraction."}),
+                "frame_rate": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 120.0, "step": 0.1, "tooltip": "Force the video to a specific frame rate for extraction."}),
                 "display_mode": (["seconds", "frames"], {"default": "seconds"}),
                 "crop_x": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_y": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
-                "split_mode": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Purple only, 2: Purple & Green"}),
-                "split_purple_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
-                "split_purple_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
-                "split_green_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
-                "split_green_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
+                "split_account": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Front only, 2: Front & Back"}),
+                "split_front_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
+                "split_front_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
+                "split_back_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
+                "split_back_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
             },
             "optional": {
                 "path": ("STRING", {"forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
             }
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "STRING", "STRING")
-    RETURN_NAMES = ("images", "audio", "duration", "frame_count", "video_info", "split_info")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "FLOAT", "STRING", "STRING")
+    RETURN_NAMES = ("images", "audio", "duration", "frame_count", "fps", "video_info", "split_info")
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_mode=0, split_purple_point=0.0, split_purple_point_frame=0, split_green_point=0.0, split_green_point_frame=0, path=None, **kwargs):
+    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_account=0, split_front_point=0.0, split_front_point_frame=0, split_back_point=0.0, split_back_point_frame=0, path=None, **kwargs):
         video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
 
         if not video_to_load:
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
             empty_audio = {"waveform": torch.zeros((1, 1, 44100)), "sample_rate": 44100}
-            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, empty_audio, 0.0, 0, "{}", "{}")}
+            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, empty_audio, 0.0, 0, float(frame_rate), "{}", "{}")}
 
         video_path = video_to_load
         if not os.path.exists(video_path):
@@ -140,8 +140,9 @@ class VideoLoaderPW:
         manual_crop_right = max(0, min(manual_crop_right, orig_w - manual_crop_left - 1))
         manual_crop_bottom = max(0, min(manual_crop_bottom, orig_h - manual_crop_top - 1))
 
+        fr = float(frame_rate) if frame_rate > 0 else 25.0
+        
         if display_mode == "frames":
-            fr = float(frame_rate) if frame_rate > 0 else 25.0
             actual_start_time = float(start_frame) / fr
             actual_end_time = float(end_frame) / fr if (end_frame > 0 and end_frame > start_frame) else video_duration
         else:
@@ -164,7 +165,7 @@ class VideoLoaderPW:
             
             container.seek(seek_pts, stream=video_stream, backward=True)
             
-            frame_interval = 1.0 / float(frame_rate) if frame_rate > 0 else 1.0/25.0
+            frame_interval = 1.0 / fr
             expected_target_time = actual_start_time
             
             alloc_end_time = actual_end_time if actual_end_time != float('inf') else video_duration
@@ -298,12 +299,10 @@ class VideoLoaderPW:
         final_duration_sec = float(max(0.0, actual_end_time - actual_start_time))
         frame_count = image_tensor.shape[0] if (frames_loaded > 0 or len(frames) > 0) else 0
         if frame_count == 0 and final_duration_sec > 0:
-            calc_fr = float(frame_rate) if frame_rate > 0 else 25.0
-            frame_count = int(np.floor(final_duration_sec * calc_fr))
+            frame_count = int(np.floor(final_duration_sec * fr))
 
         loaded_h = int(image_tensor.shape[1]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
         loaded_w = int(image_tensor.shape[2]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
-        loaded_fps = float(frame_rate) if frame_rate > 0 else 25.0
         
         video_info = json.dumps({
             "source_fps":         source_fps,
@@ -311,29 +310,45 @@ class VideoLoaderPW:
             "source_duration":    source_duration,
             "source_width":       orig_w,
             "source_height":      orig_h,
-            "loaded_fps":         loaded_fps,
+            "loaded_fps":         fr,
             "loaded_frame_count": frame_count,
             "loaded_duration":    final_duration_sec,
             "loaded_width":       loaded_w,
             "loaded_height":      loaded_h,
         }, indent=4)
 
+        # 构建 split_info
         split_info_dict = {}
-        if split_mode >= 1:
-            split_info_dict["split_purple"] = {
-                "time_sec": split_purple_point,
-                "frame": split_purple_point_frame
+        if split_account >= 1:
+            split_info_dict["split_front"] = {
+                "time_sec": split_front_point,
+                "frame": split_front_point_frame
             }
-        if split_mode == 2:
-            split_info_dict["split_green"] = {
-                "time_sec": split_green_point,
-                "frame": split_green_point_frame
+        if split_account == 2:
+            split_info_dict["split_back"] = {
+                "time_sec": split_back_point,
+                "frame": split_back_point_frame
             }
+            split_info_dict["split_generate"] = {
+                "start_time_sec": split_front_point,
+                "start_frame": split_front_point_frame,
+                "end_time_sec": split_back_point,
+                "end_frame": split_back_point_frame
+            }
+        elif split_account == 1:
+            # 单分割点时，默认生成区域为起点到分割点
+            split_info_dict["split_generate"] = {
+                "start_time_sec": actual_start_time,
+                "start_frame": start_frame if display_mode == "frames" else int(actual_start_time * fr),
+                "end_time_sec": split_front_point,
+                "end_frame": split_front_point_frame
+            }
+            
         split_info_str = json.dumps(split_info_dict)
 
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
-            "result": (image_tensor, audio_dict, final_duration_sec, frame_count, video_info, split_info_str)
+            "result": (image_tensor, audio_dict, final_duration_sec, frame_count, float(frame_rate), video_info, split_info_str)
         }
 
 NODE_CLASS_MAPPINGS = {"VideoLoaderPW": VideoLoaderPW}
