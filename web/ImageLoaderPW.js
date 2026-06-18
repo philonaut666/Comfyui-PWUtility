@@ -699,7 +699,8 @@ app.registerExtension({
         }
 
         function optimizeGrid(gridW, gridH) {
-            const paths = (pathsWidget?.value || "").split(/\n|,/).map(s => s.trim()).filter(s => s);
+            // FIX: Changed split(/\n|,/) to split('\n') to support filenames with commas
+            const paths = (pathsWidget?.value || "").split('\n').map(s => s.trim()).filter(s => s);
             const N = paths.length;
             
             if (N === 0) {
@@ -886,7 +887,8 @@ app.registerExtension({
 
         function refreshGallery(isRearranging = false) {
             grid.innerHTML = "";
-            const paths = (pathsWidget?.value || "").split(/\n|,/).map(s => s.trim()).filter(s => s);
+            // FIX: Changed split(/\n|,/) to split('\n') to support filenames with commas
+            const paths = (pathsWidget?.value || "").split('\n').map(s => s.trim()).filter(s => s);
             
             if (!isRearranging) {
                 syncOutputs(paths.length);
