@@ -26,7 +26,7 @@ Linkage Config中，通过点击右侧加号添加组并设置组的状态。组
 ## Image Loader PW
 ### scale mode: 选择缩放方式。
 #### scale dimensions：设置宽和高。
-- 长宽都为0则是保持原图尺寸。
+- 长宽都为0则是保持原图尺寸。注意，此时是绕开multiple_of的，真正的原图不做任何修改直出！
 - 但是会遇到比例问题，通过下面的resize_method来进行计算，会将长和宽更快达到给定值的设置为给定值，另一边根据resize mothod的设定的方式重新进行计算。
 
 ### multiple_of：要求长宽都能被该数值整除。
