@@ -23,7 +23,14 @@ Linkage Config中，通过点击右侧加号添加组并设置组的状态。组
 
 <img width="419" height="318" alt="GroupSwitchADV2" src="https://github.com/user-attachments/assets/146a684a-89d1-4042-8bea-92d7b8964e19" />
 
-## Image Loader PW
+## Image Loader PW：
+本地上传图片(可多图），并调整尺寸。
+
+### Upload Images：本地上传图片，可多图批量上传。
+- 支持拖拽上传。
+- 支持拖拽改变顺序。
+- 图片中心出现✂️图案可对图片进行手动crop。
+
 ### scale mode: 选择缩放方式。
 #### scale dimensions：设置宽和高。
 - 长宽都为0则是保持原图尺寸。注意，此时是绕开multiple_of的，真正的原图不做任何修改直出！
