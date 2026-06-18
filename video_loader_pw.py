@@ -24,7 +24,6 @@ async def upload_chunk(request):
     total_chunks = int(post.get("total_chunks"))
     upload_dir = folder_paths.get_input_directory()
     file_path = os.path.join(upload_dir, filename)
-    
     mode = "ab" if chunk_index > 0 else "wb"
     with open(file_path, mode) as f:
         f.write(file.file.read())
@@ -45,31 +44,32 @@ class VideoLoaderPW:
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "end_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "duration_frames": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
-                # FIX 2: Default frame_rate changed from 24 to 25
                 "frame_rate": ("INT", {"default": 25, "min": 1, "max": 120, "step": 1, "tooltip": "Force the video to a specific frame rate for extraction."}),
                 "display_mode": (["seconds", "frames"], {"default": "seconds"}),
                 "crop_x": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_y": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
+                "split_mode": ("INT", {"default": 0, "min": 0, "max": 1, "step": 1, "tooltip": "0: No split, 1: Enable split marker"}),
+                "split_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
             },
             "optional": {
                 "path": ("STRING", {"forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
             }
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "STRING")
-    RETURN_NAMES = ("images", "audio", "duration", "frame_count", "video_info")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "STRING", "STRING")
+    RETURN_NAMES = ("images", "audio", "duration", "frame_count", "video_info", "split_info")
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, path=None, **kwargs):
+    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_mode=0, split_point=0.0, path=None, **kwargs):
         video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
 
         if not video_to_load:
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
             empty_audio = {"waveform": torch.zeros((1, 1, 44100)), "sample_rate": 44100}
-            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, empty_audio, 0.0, 0, "{}")}
+            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, empty_audio, 0.0, 0, "{}", "{}")}
 
         video_path = video_to_load
         if not os.path.exists(video_path):
@@ -77,7 +77,7 @@ class VideoLoaderPW:
             if os.path.exists(video_path_annotated):
                 video_path = video_path_annotated
             else:
-                video_path_input = os.path.join(folder_paths.get_input_directory(), video_to_load)
+                video_path_input = os.path.join(folder_paths.get_input_directory(), video_to_load) 
                 if os.path.exists(video_path_input):
                     video_path = video_path_input
                 else:
@@ -151,7 +151,7 @@ class VideoLoaderPW:
         frames = []
         image_tensor = None
         frames_loaded = 0
-         
+        
         if video_stream:
             video_stream.thread_type = "AUTO"
             if video_stream.time_base:
@@ -263,15 +263,15 @@ class VideoLoaderPW:
                         
                     if first_frame_time is None:
                         first_frame_time = frame_time
-                         
+                          
                     resampled_frames = resampler.resample(frame)
                     for r_frame in resampled_frames:
                         audio_data.append(r_frame.to_ndarray())
-                         
+                          
                 if audio_data:
                     waveform_np = np.concatenate(audio_data, axis=1)
                     waveform = torch.from_numpy(waveform_np).float()
-                    
+                     
                     if first_frame_time is None:
                         first_frame_time = 0.0
                          
@@ -284,7 +284,7 @@ class VideoLoaderPW:
                         waveform = waveform[:, start_sample:end_sample]
                     else:
                         waveform = waveform[:, start_sample:]
-                         
+                          
                     waveform = waveform.unsqueeze(0)
                     audio_dict = {"waveform": waveform, "sample_rate": sample_rate}
             except Exception as e:
@@ -303,21 +303,29 @@ class VideoLoaderPW:
         loaded_fps = float(frame_rate) if frame_rate > 0 else 25.0
         
         video_info = json.dumps({
-             "source_fps":         source_fps,
-             "source_frame_count": source_frame_count,
-             "source_duration":    source_duration,
-             "source_width":       orig_w,
-             "source_height":      orig_h,
-             "loaded_fps":         loaded_fps,
-             "loaded_frame_count": frame_count,
-             "loaded_duration":    final_duration_sec,
-             "loaded_width":       loaded_w,
-             "loaded_height":      loaded_h,
+            "source_fps":         source_fps,
+            "source_frame_count": source_frame_count,
+            "source_duration":    source_duration,
+            "source_width":       orig_w,
+            "source_height":      orig_h,
+            "loaded_fps":         loaded_fps,
+            "loaded_frame_count": frame_count,
+            "loaded_duration":    final_duration_sec,
+            "loaded_width":       loaded_w,
+            "loaded_height":      loaded_h,
         }, indent=4)
+
+        # 处理新增的分割点信息输出
+        split_info_str = "{}"
+        if split_mode == 1:
+            split_info_str = json.dumps({
+                "split_time_sec": split_point,
+                "split_frame": int(split_point * loaded_fps)
+            })
 
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
-            "result": (image_tensor, audio_dict, final_duration_sec, frame_count, video_info)
+            "result": (image_tensor, audio_dict, final_duration_sec, frame_count, video_info, split_info_str)
         }
 
 NODE_CLASS_MAPPINGS = {"VideoLoaderPW": VideoLoaderPW}
