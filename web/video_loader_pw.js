@@ -79,8 +79,35 @@ app.registerExtension({
                 const splitGreenWidget = this.widgets.find((w) => w.name === "split_green_point");
                 const splitGreenFrameWidget = this.widgets.find((w) => w.name === "split_green_point_frame");
 
+                // ================= 状态变量与辅助函数提升 (解决 TDZ 报错) =================
                 let isSyncing = false;
                 let isFramesMode = false;
+                let duration = 0;
+                let dragging = null;
+                let dragOffset = 0;
+                let dragSelectionWidth = 0;
+                let isUpdatingDuration = false;
+                let cropDragging = null;
+                let dragStartX = 0;
+                let dragStartY = 0;
+                let dragStartCropX = 0;
+                let dragStartCropY = 0;
+                let dragStartCropW = 1;
+                let dragStartCropH = 1;
+                let dragCounter = 0;
+                let currentAspectRatio = 0;
+                let isCropVisible = false;
+
+                const getActiveDuration = () => {
+                    if (duration > 0) return duration;
+                    let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
+                    let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
+                    let maxVal = Math.max(e, s);
+                    return maxVal > 0 ? Math.max(maxVal, 1.0) : 1.0;
+                };
+
+                const formatTime = (secs) => `${secs.toFixed(2)}s`;
+                // =======================================================================
 
                 function setWidgetVisibility(w, visible, typeStr) {
                     if (!w) return;
@@ -517,7 +544,6 @@ app.registerExtension({
                 cropBtn.textContent = "Crop";
                 Object.assign(cropBtn.style, { background: "rgba(255, 255, 255, 0.1)", color: "white", border: "none", borderRadius: "4px", padding: "0 8px", height: "22px", fontSize: "12px", fontWeight: "bold", cursor: "pointer" });
 
-                let isCropVisible = false;
                 const cropUIContainer = document.createElement("div");
                 Object.assign(cropUIContainer.style, { display: "flex", alignItems: "center", gap: "6px", zIndex: "11" });
 
@@ -564,8 +590,6 @@ app.registerExtension({
                 rightContainer.appendChild(cropBtn);
                 rightContainer.appendChild(trimLength);
                 playerTop.appendChild(rightContainer);
-
-                let currentAspectRatio = 0;
 
                 const handleManualDimensionInput = (isWidth) => {
                     const vw = videoPreview.videoWidth;
@@ -798,19 +822,6 @@ app.registerExtension({
                     });
                 }, 100);
 
-                let duration = 0;
-                let dragging = null;
-                let dragOffset = 0;
-                let dragSelectionWidth = 0;
-                let isUpdatingDuration = false;
-                let cropDragging = null;
-                let dragStartX = 0;
-                let dragStartY = 0;
-                let dragStartCropX = 0;
-                let dragStartCropY = 0;
-                let dragStartCropW = 1;
-                let dragStartCropH = 1;
-
                 const updateCropUI = () => {
                     const vw = videoPreview.videoWidth;
                     const vh = videoPreview.videoHeight;
@@ -958,14 +969,6 @@ app.registerExtension({
                     resizeObserver.disconnect();
                     if (oldOnRemoved) oldOnRemoved.apply(this, arguments);
                 }
-
-                const getActiveDuration = () => {
-                    if (duration > 0) return duration;
-                    let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
-                    let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
-                    let maxVal = Math.max(e, s);
-                    return maxVal > 0 ? Math.max(maxVal, 1.0) : 1.0;
-                };
                 
                 const setupSplitHandleEvents = (handle, setVal) => {
                     let splitDragging = false;
@@ -1097,10 +1100,6 @@ app.registerExtension({
                         isUpdatingDuration = false;
                     };
                 }
-
-                const formatTime = (secs) => {
-                    return `${secs.toFixed(2)}s`;
-                };
 
                 const updateRuler = () => {
                     timeRuler.innerHTML = '';
@@ -1253,7 +1252,6 @@ app.registerExtension({
                     sliderBox.releasePointerCapture(e.pointerId);
                 };
 
-                let dragCounter = 0;
                 container.addEventListener("dragenter", (e) => {
                     e.preventDefault(); dragCounter++;
                     if (dragCounter === 1) {
