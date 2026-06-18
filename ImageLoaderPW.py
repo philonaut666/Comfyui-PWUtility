@@ -169,6 +169,7 @@ class ImageLoaderPW:
                 outputs = outputs[:, y:y2, x:x2, :]
 
         # Final safety crop to ensure multiple_of compliance
+        # Only triggers when multiple_of is explicitly enabled (>0)
         if multiple_of > 1 and (outputs.shape[2] % multiple_of != 0 or outputs.shape[1] % multiple_of != 0):
             w = outputs.shape[2]
             h = outputs.shape[1]
@@ -224,7 +225,6 @@ class ImageLoaderPW:
                         target_h = align_to_multiple(oh * (target_w / ow), multiple_of)
                     target_w, target_h = int(max(1, target_w)), int(max(1, target_h))
                     
-                    # CRITICAL FIX: Bypass internal keep proportion recalculation
                     if resize_method == "keep proportion":
                         actual_resize_method = "stretch"
                     use_internal_multiple = 0  # External alignment is perfect
@@ -239,10 +239,15 @@ class ImageLoaderPW:
                         target_h = align_to_multiple(oh * (target_w / ow), multiple_of)
                     target_w, target_h = int(max(1, target_w)), int(max(1, target_h))
                     
-                    # CRITICAL FIX: Bypass internal keep proportion recalculation
                     if resize_method == "keep proportion":
                         actual_resize_method = "stretch"
                     use_internal_multiple = 0  # External alignment is perfect
+
+                elif scale_mode == "scale dimensions":
+                    # FIX: When both width and height are 0, it means "keep original size".
+                    # Disable multiple_of enforcement to prevent unwanted cropping of the original image.
+                    if width == 0 and height == 0:
+                        use_internal_multiple = 0
 
                 image_tensor = self.resize_image(image_tensor, target_w, target_h, actual_resize_method, interpolation, use_internal_multiple)
      
