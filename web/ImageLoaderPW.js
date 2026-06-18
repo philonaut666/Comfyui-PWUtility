@@ -585,7 +585,7 @@ app.registerExtension({
             setTimeout(() => clearInterval(hideInterval), 1000);
         }
 
-        // --- Resize & Pad Widgets Visibility Logic ---
+        // --- Resize, Pad & Crop Widgets Visibility Logic ---
         const scaleModeWidget = node.widgets.find(w => w.name === "scale_mode");
         const widthWidget = node.widgets.find(w => w.name === "width");
         const heightWidget = node.widgets.find(w => w.name === "height");
@@ -593,6 +593,7 @@ app.registerExtension({
         const shorterWidget = node.widgets.find(w => w.name === "shorter_size");
         const resizeMethodWidget = node.widgets.find(w => w.name === "resize_method");
         const padColorWidget = node.widgets.find(w => w.name === "pad_color");
+        const cropPositionWidget = node.widgets.find(w => w.name === "crop_position");
 
         function updateResizeWidgetsVisibility() {
             const mode = scaleModeWidget ? scaleModeWidget.value : "scale dimensions";
@@ -618,6 +619,7 @@ app.registerExtension({
             setHidden(longerWidget, mode !== "scale longer");
             setHidden(shorterWidget, mode !== "scale shorter");
             setHidden(padColorWidget, rMode !== "pad");
+            setHidden(cropPositionWidget, rMode !== "crop");
 
             if (node.graph) node.graph.setDirtyCanvas(true, true);
         }
