@@ -296,7 +296,7 @@ class VideoLoaderPW:
 
         container.close()
         
-        final_duration_sec = float(max(0.0, actual_end_time - actual_start_time))
+        final_duration_sec = round(float(max(0.0, actual_end_time - actual_start_time)), 2)
         frame_count = image_tensor.shape[0] if (frames_loaded > 0 or len(frames) > 0) else 0
         if frame_count == 0 and final_duration_sec > 0:
             frame_count = int(np.floor(final_duration_sec * fr))
@@ -305,20 +305,20 @@ class VideoLoaderPW:
         loaded_w = int(image_tensor.shape[2]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
         
         video_info = json.dumps({
-            "source_fps":         source_fps,
+            "source_fps":         round(source_fps, 2),
             "source_frame_count": source_frame_count,
-            "source_duration":    source_duration,
+            "source_duration":    round(source_duration, 2),
             "source_width":       orig_w,
             "source_height":      orig_h,
-            "loaded_fps":         fr,
+            "loaded_fps":         round(fr, 2),
             "loaded_frame_count": frame_count,
             "loaded_duration":    final_duration_sec,
             "loaded_width":       loaded_w,
             "loaded_height":      loaded_h,
         }, indent=4)
 
-        # ================= 重新计算 Split Info 逻辑 =================
-        # 1. 计算全局起点和终点 (基于左侧和右侧蓝色滑块)
+        # ================= 重新计算 Split Info 逻辑 (局部坐标系映射) =================
+        # 1. 计算全局起点和终点 (基于左侧和右侧蓝色滑块的绝对帧)
         if display_mode == "frames":
             g_start_frame = int(start_frame)
             g_end_frame = int(end_frame)
@@ -332,27 +332,30 @@ class VideoLoaderPW:
         # 全局边界牵制
         g_start_frame = max(0, g_start_frame)
         g_end_frame = max(g_start_frame, g_end_frame)
+        
+        # 局部坐标系终点 (以左侧蓝色滑块为0点)
+        g_end_local = g_end_frame - g_start_frame
 
-        # 辅助函数：计算各段详细信息
-        def calc_segment(seg_start_frame, seg_end_frame):
-            if seg_end_frame < seg_start_frame:
+        # 辅助函数：计算各段详细信息 (基于局部帧索引，全程保持两位小数)
+        def calc_segment(seg_start_local, seg_end_local):
+            if seg_end_local < seg_start_local:
                 return {
-                    "start_time_sec": round(seg_start_frame / fr, 4),
-                    "start_frame": seg_start_frame,
-                    "end_time_sec": round((seg_start_frame - 1) / fr, 4),
-                    "end_frame": seg_start_frame - 1,
-                    "time_sec": 0.0,
+                    "start_time_sec": round(seg_start_local / fr, 2),
+                    "start_frame": seg_start_local,
+                    "end_time_sec": round(max(0, seg_start_local - 1) / fr, 2),
+                    "end_frame": max(0, seg_start_local - 1),
+                    "time_sec": 0.00,
                     "frame": 0
                 }
             
-            frames = seg_end_frame - seg_start_frame + 1
+            frames = seg_end_local - seg_start_local + 1
             t_sec = frames / fr
             return {
-                "start_time_sec": round(seg_start_frame / fr, 4),
-                "start_frame": seg_start_frame,
-                "end_time_sec": round(seg_end_frame / fr, 4),
-                "end_frame": seg_end_frame,
-                "time_sec": round(t_sec, 4),
+                "start_time_sec": round(seg_start_local / fr, 2),
+                "start_frame": seg_start_local,
+                "end_time_sec": round(seg_end_local / fr, 2),
+                "end_frame": seg_end_local,
+                "time_sec": round(t_sec, 2),
                 "frame": frames
             }
 
@@ -360,36 +363,42 @@ class VideoLoaderPW:
         
         if split_account == 0:
             # 无分割，全段属于 generate
-            split_info_dict["split_generate"] = calc_segment(g_start_frame, g_end_frame)
+            split_info_dict["split_generate"] = calc_segment(0, g_end_local)
             
         elif split_account == 1:
             # 仅有紫色滑块 (Front)
-            p_frame = int(split_front_point_frame)
-            p_frame = max(g_start_frame + 1, min(p_frame, g_end_frame + 1))
+            p_abs = int(split_front_point_frame)
+            p_local = p_abs - g_start_frame
             
-            # split_front: 全局起点 到 紫色滑块前一帧
-            split_info_dict["split_front"] = calc_segment(g_start_frame, p_frame - 1)
-            # split_generate: 紫色滑块 到 全局终点
-            split_info_dict["split_generate"] = calc_segment(p_frame, g_end_frame)
+            # 牵制: 至少比起点大1帧 (即 local >= 1)
+            p_local = max(1, min(p_local, g_end_local + 1))
+            
+            # split_front: 0 到 p_local - 1
+            split_info_dict["split_front"] = calc_segment(0, p_local - 1)
+            # split_generate: p_local 到 g_end_local
+            split_info_dict["split_generate"] = calc_segment(p_local, g_end_local)
             
         elif split_account == 2:
             # 有紫色 (Front) 和 绿色 (Back) 滑块
-            p_frame = int(split_front_point_frame)
-            g_frame = int(split_back_point_frame)
+            p_abs = int(split_front_point_frame)
+            g_abs = int(split_back_point_frame)
+            
+            p_local = p_abs - g_start_frame
+            g_local = g_abs - g_start_frame
             
             # 牵制与防重叠
-            p_frame = max(g_start_frame + 1, min(p_frame, g_end_frame))
-            g_frame = max(p_frame + 1, min(g_frame, g_end_frame + 1))
+            p_local = max(1, min(p_local, g_end_local))
+            g_local = max(p_local + 1, min(g_local, g_end_local + 1))
             
-            # split_front: 全局起点 到 紫色滑块前一帧
-            split_info_dict["split_front"] = calc_segment(g_start_frame, p_frame - 1)
-            # split_generate: 紫色滑块 到 绿色滑块前一帧
-            split_info_dict["split_generate"] = calc_segment(p_frame, g_frame - 1)
-            # split_back: 绿色滑块 到 全局终点
-            split_info_dict["split_back"] = calc_segment(g_frame, g_end_frame)
+            # split_front: 0 到 p_local - 1
+            split_info_dict["split_front"] = calc_segment(0, p_local - 1)
+            # split_generate: p_local 到 g_local - 1
+            split_info_dict["split_generate"] = calc_segment(p_local, g_local - 1)
+            # split_back: g_local 到 g_end_local
+            split_info_dict["split_back"] = calc_segment(g_local, g_end_local)
             
         split_info_str = json.dumps(split_info_dict)
-        # ============================================================
+        # ===========================================================================
 
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
