@@ -4,6 +4,7 @@ import numpy as np
 import folder_paths
 import av
 import json
+import math
 from server import PromptServer
 from aiohttp import web
 import comfy.utils
@@ -50,29 +51,30 @@ class VideoLoaderPW:
                 "crop_y": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
-                "split_account": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Front only, 2: Front & Back"}),
+                "split_count": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Front only, 2: Front & Back"}),
                 "split_front_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "split_front_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "split_back_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "split_back_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
+                "align_8n_plus_1": ("BOOLEAN", {"default": True, "tooltip": "Align generate segment to 8n+1 frames by adjusting split points or repeating end frames."}),
             },
             "optional": {
                 "path": ("STRING", {"forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
             }
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "FLOAT", "STRING", "STRING")
-    RETURN_NAMES = ("images", "audio", "duration", "frame_count", "fps", "video_info", "split_info")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "FLOAT", "STRING", "STRING", "INT")
+    RETURN_NAMES = ("images", "audio", "duration", "frame_count", "fps", "video_info", "split_info", "repeat_end")
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_account=0, split_front_point=0.0, split_front_point_frame=0, split_back_point=0.0, split_back_point_frame=0, path=None, **kwargs):
+    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_front_point=0.0, split_front_point_frame=0, split_back_point=0.0, split_back_point_frame=0, align_8n_plus_1=True, path=None, **kwargs):
         video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
 
         if not video_to_load:
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
             empty_audio = {"waveform": torch.zeros((1, 1, 44100)), "sample_rate": 44100}
-            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, empty_audio, 0.0, 0, float(frame_rate), "{}", "{}")}
+            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, empty_audio, 0.0, 0, float(frame_rate), "{}", "{}", 0)}
 
         video_path = video_to_load
         if not os.path.exists(video_path):
@@ -317,8 +319,7 @@ class VideoLoaderPW:
             "loaded_height":      loaded_h,
         }, indent=4)
 
-        # ================= 重新计算 Split Info 逻辑 (局部坐标系映射) =================
-        # 1. 计算全局起点和终点 (基于左侧和右侧蓝色滑块的绝对帧)
+        # ================= 重新计算 Split Info 逻辑 (局部坐标系映射 & 8n+1 对齐) =================
         if display_mode == "frames":
             g_start_frame = int(start_frame)
             g_end_frame = int(end_frame)
@@ -329,14 +330,12 @@ class VideoLoaderPW:
             else:
                 g_end_frame = int(round(actual_end_time * fr))
                 
-        # 全局边界牵制
         g_start_frame = max(0, g_start_frame)
         g_end_frame = max(g_start_frame, g_end_frame)
-        
-        # 局部坐标系终点 (以左侧蓝色滑块为0点)
         g_end_local = g_end_frame - g_start_frame
+        
+        repeat_end = 0
 
-        # 辅助函数：计算各段详细信息 (基于局部帧索引，全程保持两位小数)
         def calc_segment(seg_start_local, seg_end_local):
             if seg_end_local < seg_start_local:
                 return {
@@ -361,40 +360,64 @@ class VideoLoaderPW:
 
         split_info_dict = {}
         
-        if split_account == 0:
-            # 无分割，全段属于 generate
+        if split_count == 0:
+            total_frames = g_end_local + 1
+            if align_8n_plus_1 and (total_frames - 1) % 8 != 0:
+                new_total_frames = math.ceil(total_frames / 8) * 8 + 1
+                repeat_end = new_total_frames - total_frames
+                
+                if image_tensor is not None and image_tensor.shape[0] > 0 and repeat_end > 0:
+                    last_frame = image_tensor[-1:]
+                    repeat_frames = last_frame.repeat(repeat_end, 1, 1, 1)
+                    image_tensor = torch.cat([image_tensor, repeat_frames], dim=0)
+                    
+                if audio_dict and "waveform" in audio_dict and audio_dict["waveform"].shape[-1] > 0 and repeat_end > 0:
+                    sample_rate = audio_dict.get("sample_rate", 44100)
+                    samples_to_add = int(round(repeat_end / fr * sample_rate))
+                    if samples_to_add > 0:
+                        waveform = audio_dict["waveform"]
+                        padding = torch.zeros((*waveform.shape[:-1], samples_to_add), dtype=waveform.dtype, device=waveform.device)
+                        audio_dict["waveform"] = torch.cat([waveform, padding], dim=-1)
+                        
+                g_end_local = new_total_frames - 1
+                frame_count = new_total_frames
+                final_duration_sec = round(g_end_local / fr, 2)
+                
             split_info_dict["split_generate"] = calc_segment(0, g_end_local)
             
-        elif split_account == 1:
-            # 仅有紫色滑块 (Front)
+        elif split_count == 1:
             p_abs = int(split_front_point_frame)
             p_local = p_abs - g_start_frame
-            
-            # 牵制: 至少比起点大1帧 (即 local >= 1)
             p_local = max(1, min(p_local, g_end_local + 1))
             
-            # split_front: 0 到 p_local - 1
+            if align_8n_plus_1:
+                diff = g_end_local - p_local
+                diff_new = math.ceil(diff / 8) * 8
+                p_local_new = g_end_local - diff_new
+                p_local = max(1, p_local_new)
+                
             split_info_dict["split_front"] = calc_segment(0, p_local - 1)
-            # split_generate: p_local 到 g_end_local
             split_info_dict["split_generate"] = calc_segment(p_local, g_end_local)
             
-        elif split_account == 2:
-            # 有紫色 (Front) 和 绿色 (Back) 滑块
+        elif split_count == 2:
             p_abs = int(split_front_point_frame)
             g_abs = int(split_back_point_frame)
             
             p_local = p_abs - g_start_frame
             g_local = g_abs - g_start_frame
             
-            # 牵制与防重叠
             p_local = max(1, min(p_local, g_end_local))
             g_local = max(p_local + 1, min(g_local, g_end_local + 1))
             
-            # split_front: 0 到 p_local - 1
+            if align_8n_plus_1:
+                diff = g_local - p_local
+                if diff < 1: diff = 1
+                diff_new = math.ceil((diff - 1) / 8) * 8 + 1
+                g_local_new = p_local + diff_new
+                g_local = min(g_end_local + 1, g_local_new)
+                
             split_info_dict["split_front"] = calc_segment(0, p_local - 1)
-            # split_generate: p_local 到 g_local - 1
             split_info_dict["split_generate"] = calc_segment(p_local, g_local - 1)
-            # split_back: g_local 到 g_end_local
             split_info_dict["split_back"] = calc_segment(g_local, g_end_local)
             
         split_info_str = json.dumps(split_info_dict)
@@ -402,7 +425,7 @@ class VideoLoaderPW:
 
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
-            "result": (image_tensor, audio_dict, final_duration_sec, frame_count, float(frame_rate), video_info, split_info_str)
+            "result": (image_tensor, audio_dict, final_duration_sec, frame_count, float(frame_rate), video_info, split_info_str, repeat_end)
         }
 
 NODE_CLASS_MAPPINGS = {"VideoLoaderPW": VideoLoaderPW}
