@@ -18,7 +18,7 @@ class VideoInfoPW:
     RETURN_TYPES = ("FLOAT", "INT", "FLOAT", "INT", "INT", "FLOAT", "INT", "FLOAT", "INT", "INT")
     RETURN_NAMES = ("source_fps", "source_frame_count", "source_duration", "source_width", "source_height", "loaded_fps", "loaded_frame_count", "loaded_duration", "loaded_width", "loaded_height")
     FUNCTION = "parse"
-    CATEGORY = "PW/Video"
+    CATEGORY = "PWUtility/Video"
     OUTPUT_NODE = False
 
     def parse(self, video_info: str):
