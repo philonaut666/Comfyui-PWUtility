@@ -79,6 +79,7 @@ class ImageLoaderPW:
                 "shorter_size": ("INT", {"default": 1024, "min": 0, "max": 8192, "step": 1}),
                 "interpolation": (["lanczos", "nearest", "bilinear", "bicubic", "area", "nearest-exact"],),
                 "resize_method": (["keep proportion", "stretch", "pad", "crop"],),
+                "pad_color": ("STRING", {"default": "0,0,0"}),
                 "multiple_of": ("INT", {"default": 32, "min": 0, "max": 512, "step": 1}),
                 "img_compression": ("INT", {"default": 18, "min": 0, "max": 100, "step": 1}),
             },
@@ -90,13 +91,12 @@ class ImageLoaderPW:
     FUNCTION = "load_images"
     CATEGORY = "PWUtility"
 
-    def resize_image(self, image, width, height, resize_method="keep proportion", interpolation="nearest", multiple_of=0):
+    def resize_image(self, image, width, height, resize_method="keep proportion", interpolation="nearest", multiple_of=0, pad_color=(0.0, 0.0, 0.0)):
         MAX_RESOLUTION = 8192
         _, oh, ow, _ = image.shape
         x = y = x2 = y2 = 0
         pad_left = pad_right = pad_top = pad_bottom = 0
 
-        # Internal alignment (used primarily for scale dimensions)
         if multiple_of > 1:
             width = width - (width % multiple_of)
             height = height - (height % multiple_of)
@@ -160,7 +160,8 @@ class ImageLoaderPW:
 
         if resize_method == 'pad':
             if pad_left > 0 or pad_right > 0 or pad_top > 0 or pad_bottom > 0:
-                outputs = F.pad(outputs, (pad_left, pad_right, pad_top, pad_bottom), value=0)
+                # Apply the custom pad_color (tuple of 3 floats between 0.0 and 1.0)
+                outputs = F.pad(outputs, (pad_left, pad_right, pad_top, pad_bottom), value=pad_color)
 
         outputs = outputs.permute(0, 2, 3, 1)
 
@@ -168,8 +169,6 @@ class ImageLoaderPW:
             if x > 0 or y > 0 or x2 > 0 or y2 > 0:
                 outputs = outputs[:, y:y2, x:x2, :]
 
-        # Final safety crop to ensure multiple_of compliance
-        # Only triggers when multiple_of is explicitly enabled (>0)
         if multiple_of > 1 and (outputs.shape[2] % multiple_of != 0 or outputs.shape[1] % multiple_of != 0):
             w = outputs.shape[2]
             h = outputs.shape[1]
@@ -183,7 +182,7 @@ class ImageLoaderPW:
 
         return outputs
 
-    def load_images(self, image_paths, scale_mode, width, height, longer_size, shorter_size, interpolation, resize_method, multiple_of, img_compression):
+    def load_images(self, image_paths, scale_mode, width, height, longer_size, shorter_size, interpolation, resize_method, pad_color, multiple_of, img_compression):
         results = []
         valid_paths = [p.strip() for p in image_paths.split("\n") if p.strip()]
 
@@ -191,6 +190,20 @@ class ImageLoaderPW:
             if multiple <= 1:
                 return val
             return round(val / multiple) * multiple
+
+        def parse_color(color_str):
+            try:
+                parts = [int(x.strip()) for x in color_str.split(",")]
+                if len(parts) == 3:
+                    return tuple(max(0, min(255, p)) / 255.0 for p in parts)
+                elif len(parts) == 1:
+                    val = max(0, min(255, parts[0])) / 255.0
+                    return (val, val, val)
+            except Exception:
+                pass
+            return (0.0, 0.0, 0.0) # Fallback to black
+
+        pad_color_rgb = parse_color(pad_color)
 
         for path in valid_paths:
             try:
@@ -227,7 +240,7 @@ class ImageLoaderPW:
                     
                     if resize_method == "keep proportion":
                         actual_resize_method = "stretch"
-                    use_internal_multiple = 0  # External alignment is perfect
+                    use_internal_multiple = 0
                     
                 elif scale_mode == "scale shorter":
                     base_size = shorter_size if shorter_size > 0 else min(oh, ow)
@@ -241,15 +254,13 @@ class ImageLoaderPW:
                     
                     if resize_method == "keep proportion":
                         actual_resize_method = "stretch"
-                    use_internal_multiple = 0  # External alignment is perfect
+                    use_internal_multiple = 0
 
                 elif scale_mode == "scale dimensions":
-                    # FIX: When both width and height are 0, it means "keep original size".
-                    # Disable multiple_of enforcement to prevent unwanted cropping of the original image.
                     if width == 0 and height == 0:
                         use_internal_multiple = 0
 
-                image_tensor = self.resize_image(image_tensor, target_w, target_h, actual_resize_method, interpolation, use_internal_multiple)
+                image_tensor = self.resize_image(image_tensor, target_w, target_h, actual_resize_method, interpolation, use_internal_multiple, pad_color_rgb)
      
                 if img_compression > 0:
                     img_np = (image_tensor[0].numpy() * 255).clip(0, 255).astype(np.uint8)
