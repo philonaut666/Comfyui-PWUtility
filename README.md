@@ -43,6 +43,12 @@ Linkage Config中，通过点击右侧加号添加组并设置组的状态。组
 - 但是可能造成与multiple_of的值的矛盾：当选择keep proportion，且保持原图比例导致长宽某一边的尺寸无法满足被multiple_of整除时，会自动降级为stretch，造成轻微形变（通常不超过1%）以满足能被multiple of整除的要求。选择pad或者crop，则会严格计算出multiple of的倍数作为边界框进行crop或者pad填充尺寸。
 - crop：先按照比例进行缩放到外圈覆盖目标尺寸，然后根据crop_position计算裁剪起始坐标 x 和 y，从而精准切出目标画面。left和right只适用于横向图片，用于纵向图片和center效果一样。top和bottom只针对纵向图片。
 
+## Video Loader PW
+可以与[local media manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager)联合使用
+
+## Audio Loader PW
+可以与[local media manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager)联合使用
+
 ## License
 
 MIT
