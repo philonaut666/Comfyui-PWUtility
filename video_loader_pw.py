@@ -50,8 +50,11 @@ class VideoLoaderPW:
                 "crop_y": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
-                "split_mode": ("INT", {"default": 0, "min": 0, "max": 1, "step": 1, "tooltip": "0: No split, 1: Enable split marker"}),
-                "split_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
+                "split_mode": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Purple only, 2: Purple & Green"}),
+                "split_purple_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
+                "split_purple_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
+                "split_green_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
+                "split_green_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
             },
             "optional": {
                 "path": ("STRING", {"forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
@@ -63,7 +66,7 @@ class VideoLoaderPW:
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_mode=0, split_point=0.0, path=None, **kwargs):
+    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_mode=0, split_purple_point=0.0, split_purple_point_frame=0, split_green_point=0.0, split_green_point_frame=0, path=None, **kwargs):
         video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
 
         if not video_to_load:
@@ -315,13 +318,18 @@ class VideoLoaderPW:
             "loaded_height":      loaded_h,
         }, indent=4)
 
-        # 处理新增的分割点信息输出
-        split_info_str = "{}"
-        if split_mode == 1:
-            split_info_str = json.dumps({
-                "split_time_sec": split_point,
-                "split_frame": int(split_point * loaded_fps)
-            })
+        split_info_dict = {}
+        if split_mode >= 1:
+            split_info_dict["split_purple"] = {
+                "time_sec": split_purple_point,
+                "frame": split_purple_point_frame
+            }
+        if split_mode == 2:
+            split_info_dict["split_green"] = {
+                "time_sec": split_green_point,
+                "frame": split_green_point_frame
+            }
+        split_info_str = json.dumps(split_info_dict)
 
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
