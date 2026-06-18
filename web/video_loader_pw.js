@@ -49,7 +49,7 @@ app.registerExtension({
                         }
                     }
                     this.domWidget.element.style.height = `${Math.max(150, size[1] - yOffset - 18)}px`;
-                }
+                } 
             };
 
             nodeType.prototype.onNodeCreated = function () {
@@ -72,6 +72,10 @@ app.registerExtension({
                 const cropYWidget = this.widgets.find((w) => w.name === "crop_y");
                 const cropWWidget = this.widgets.find((w) => w.name === "crop_w");
                 const cropHWidget = this.widgets.find((w) => w.name === "crop_h");
+                
+                // 新增 Widgets
+                const splitModeWidget = this.widgets.find((w) => w.name === "split_mode");
+                const splitPointWidget = this.widgets.find((w) => w.name === "split_point");
 
                 let isSyncing = false;
 
@@ -96,11 +100,17 @@ app.registerExtension({
                     setWidgetVisibility(cropWWidget, false, "FLOAT");
                     setWidgetVisibility(cropHWidget, false, "FLOAT");
 
+                    // 控制分割点 Widget 的可见性
+                    const isSplit = splitModeWidget && splitModeWidget.value === 1;
+                    setWidgetVisibility(splitPointWidget, isSplit, "FLOAT");
+
                     const minSize = node.computeSize();
                     node.size[0] = Math.max(node.size[0], minSize[0]);
                     node.size[1] = Math.max(node.size[1], minSize[1]);
                     if (node.onResize) node.onResize(node.size);
                     app.graph.setDirtyCanvas(true, true);
+                    
+                    if (typeof updateSplitHandle === 'function') updateSplitHandle();
                 };
 
                 node.syncFramesFromTime = function () {
@@ -136,7 +146,7 @@ app.registerExtension({
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
                     const fr = frameRateWidget.value || 25;
-                    
+                     
                     if (startTimeWidget && startFrameWidget) startTimeWidget.value = parseFloat(Math.max(0, startFrameWidget.value / fr).toFixed(3));
                     
                     let calcEndTime = endFrameWidget.value / fr;
@@ -155,7 +165,7 @@ app.registerExtension({
                         if (calcDur > maxDur) {
                             calcDur = maxDur;
                             if (durationFramesWidget) durationFramesWidget.value = Math.round(calcDur * fr);
-                        }
+                        } 
                         durationWidget.value = parseFloat(calcDur.toFixed(3));
                     }
                     isSyncing = false;
@@ -178,6 +188,23 @@ app.registerExtension({
                 bindWidget(startFrameWidget, true);
                 bindWidget(endFrameWidget, true);
                 bindWidget(frameRateWidget, false, true);
+                
+                // 绑定新增 Widget 的 Callback
+                if (splitModeWidget) {
+                    const orig = splitModeWidget.callback;
+                    splitModeWidget.callback = function () {
+                        if (orig) orig.apply(this, arguments);
+                        node.toggleWidgetVisibility();
+                        updateUI(true);
+                    };
+                }
+                if (splitPointWidget) {
+                    const orig = splitPointWidget.callback;
+                    splitPointWidget.callback = function () {
+                        if (orig) orig.apply(this, arguments);
+                        if (typeof updateSplitHandle === 'function') updateSplitHandle();
+                    };
+                }
 
                 node.updatePreview = function (filename) {
                     if (!filename) return;
@@ -374,7 +401,7 @@ app.registerExtension({
                         uploadFile(file);
                         return true;
                     }
-                    return false;
+                    return false; 
                 };
 
                 const originalOnRemove = node.onRemoved;
@@ -663,6 +690,18 @@ app.registerExtension({
                 const endHandle = createHandle("#38bdf8");
                 sliderBox.appendChild(startHandle);
                 sliderBox.appendChild(endHandle);
+                
+                // 新增紫色分割滑块
+                const splitHandle = document.createElement("div");
+                Object.assign(splitHandle.style, {
+                    position: "absolute", top: "0", width: "8px", height: "100%",
+                    background: "purple", transform: "translateX(-50%)",
+                    pointerEvents: "auto", cursor: "ew-resize",
+                    boxShadow: "0 0 4px rgba(0,0,0,0.8)", borderRadius: "2px",
+                    zIndex: "5", display: "none"
+                });
+                sliderBox.appendChild(splitHandle);
+
                 trimArea.appendChild(sliderBox);
                 container.appendChild(trimArea);
 
@@ -693,6 +732,8 @@ app.registerExtension({
                 let dragStartCropY = 0;
                 let dragStartCropW = 1;
                 let dragStartCropH = 1;
+                
+                let splitDragging = false;
 
                 const updateCropUI = () => {
                     const vw = videoPreview.videoWidth;
@@ -849,6 +890,50 @@ app.registerExtension({
                     let maxVal = Math.max(e, s);
                     return maxVal > 0 ? Math.max(maxVal, 1.0) : 1.0;
                 };
+                
+                // 新增：更新紫色分割滑块的位置与可见性
+                const updateSplitHandle = () => {
+                    if (!splitModeWidget || splitModeWidget.value !== 1 || !splitPointWidget) {
+                        splitHandle.style.display = "none";
+                        return;
+                    }
+                    splitHandle.style.display = "block";
+                    const activeDur = getActiveDuration();
+                    let val = parseFloat(splitPointWidget.value) || 0;
+                    if (val > activeDur) val = activeDur;
+                    if (val < 0) val = 0;
+                    const pct = activeDur > 0 ? (val / activeDur) * 100 : 0;
+                    splitHandle.style.left = `${pct}%`;
+                };
+
+                // 新增：紫色滑块拖动事件
+                splitHandle.addEventListener("pointerdown", (e) => {
+                    if (!splitModeWidget || splitModeWidget.value !== 1) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    splitDragging = true;
+                    splitHandle.setPointerCapture(e.pointerId);
+                });
+
+                splitHandle.addEventListener("pointermove", (e) => {
+                    if (!splitDragging) return;
+                    e.preventDefault();
+                    const rect = sliderBox.getBoundingClientRect();
+                    const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+                    const activeDur = getActiveDuration();
+                    const val = (x / rect.width) * activeDur;
+                    
+                    if (splitPointWidget) {
+                        splitPointWidget.value = parseFloat(val.toFixed(2));
+                    }
+                    updateSplitHandle();
+                    app.graph.setDirtyCanvas(true, false);
+                });
+
+                splitHandle.addEventListener("pointerup", (e) => {
+                    splitDragging = false;
+                    splitHandle.releasePointerCapture(e.pointerId);
+                });
 
                 if (durationWidget) {
                     const origCallback = durationWidget.callback;
@@ -919,7 +1004,6 @@ app.registerExtension({
                     };
                 }
 
-                // FIX: Display pure seconds with 2 decimal places when in Time mode
                 const formatTime = (secs) => {
                     return `${secs.toFixed(2)}s`;
                 };
@@ -984,6 +1068,8 @@ app.registerExtension({
                         isUpdatingDuration = false;
                     }
                     if (syncPlayer && duration > 0) videoPreview.currentTime = s;
+                    
+                    if (typeof updateSplitHandle === 'function') updateSplitHandle();
                 }
 
                 setTimeout(() => { updateRuler(); updateUI(); }, 50);
