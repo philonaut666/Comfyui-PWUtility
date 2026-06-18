@@ -25,7 +25,7 @@ class BoolGroupSwitch:
     RETURN_TYPES = ("*",)
     RETURN_NAMES = ("data_out",)
     FUNCTION = "process"
-    CATEGORY = "Comfyui-PWUtility"
+    CATEGORY = "PWUtility/Group"
 
     def process(self, condition, group_count, interrupt_node_id=0, group_targets_json="[]", trigger=None, **kwargs):
         targets = []
@@ -63,7 +63,7 @@ class GroupSwitchADV:
     
     RETURN_TYPES = ()
     FUNCTION = "do_nothing"
-    CATEGORY = "Comfyui-PWUtility"
+    CATEGORY = "PWUtility/Group"
 
     def do_nothing(self, **kwargs):
         return ()
