@@ -585,16 +585,18 @@ app.registerExtension({
             setTimeout(() => clearInterval(hideInterval), 1000);
         }
 
-        // --- Resize Widgets Visibility Logic ---
+        // --- Resize & Pad Widgets Visibility Logic ---
         const scaleModeWidget = node.widgets.find(w => w.name === "scale_mode");
         const widthWidget = node.widgets.find(w => w.name === "width");
         const heightWidget = node.widgets.find(w => w.name === "height");
         const longerWidget = node.widgets.find(w => w.name === "longer_size");
         const shorterWidget = node.widgets.find(w => w.name === "shorter_size");
+        const resizeMethodWidget = node.widgets.find(w => w.name === "resize_method");
+        const padColorWidget = node.widgets.find(w => w.name === "pad_color");
 
         function updateResizeWidgetsVisibility() {
-            if (!scaleModeWidget) return;
-            const mode = scaleModeWidget.value;
+            const mode = scaleModeWidget ? scaleModeWidget.value : "scale dimensions";
+            const rMode = resizeMethodWidget ? resizeMethodWidget.value : "keep proportion";
             
             const setHidden = (widget, isHidden) => {
                 if (!widget) return;
@@ -615,6 +617,7 @@ app.registerExtension({
             setHidden(heightWidget, mode !== "scale dimensions");
             setHidden(longerWidget, mode !== "scale longer");
             setHidden(shorterWidget, mode !== "scale shorter");
+            setHidden(padColorWidget, rMode !== "pad");
 
             if (node.graph) node.graph.setDirtyCanvas(true, true);
         }
@@ -623,6 +626,14 @@ app.registerExtension({
             const origScaleModeCallback = scaleModeWidget.callback;
             scaleModeWidget.callback = function(v) {
                 if (origScaleModeCallback) origScaleModeCallback.apply(this, [v]);
+                updateResizeWidgetsVisibility();
+            };
+        }
+
+        if (resizeMethodWidget) {
+            const origResizeMethodCallback = resizeMethodWidget.callback;
+            resizeMethodWidget.callback = function(v) {
+                if (origResizeMethodCallback) origResizeMethodCallback.apply(this, [v]);
                 updateResizeWidgetsVisibility();
             };
         }
