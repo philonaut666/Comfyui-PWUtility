@@ -317,34 +317,79 @@ class VideoLoaderPW:
             "loaded_height":      loaded_h,
         }, indent=4)
 
-        # 构建 split_info
+        # ================= 重新计算 Split Info 逻辑 =================
+        # 1. 计算全局起点和终点 (基于左侧和右侧蓝色滑块)
+        if display_mode == "frames":
+            g_start_frame = int(start_frame)
+            g_end_frame = int(end_frame)
+        else:
+            g_start_frame = int(round(actual_start_time * fr))
+            if actual_end_time == float('inf'):
+                g_end_frame = int(round(video_duration * fr))
+            else:
+                g_end_frame = int(round(actual_end_time * fr))
+                
+        # 全局边界牵制
+        g_start_frame = max(0, g_start_frame)
+        g_end_frame = max(g_start_frame, g_end_frame)
+
+        # 辅助函数：计算各段详细信息
+        def calc_segment(seg_start_frame, seg_end_frame):
+            if seg_end_frame < seg_start_frame:
+                return {
+                    "start_time_sec": round(seg_start_frame / fr, 4),
+                    "start_frame": seg_start_frame,
+                    "end_time_sec": round((seg_start_frame - 1) / fr, 4),
+                    "end_frame": seg_start_frame - 1,
+                    "time_sec": 0.0,
+                    "frame": 0
+                }
+            
+            frames = seg_end_frame - seg_start_frame + 1
+            t_sec = frames / fr
+            return {
+                "start_time_sec": round(seg_start_frame / fr, 4),
+                "start_frame": seg_start_frame,
+                "end_time_sec": round(seg_end_frame / fr, 4),
+                "end_frame": seg_end_frame,
+                "time_sec": round(t_sec, 4),
+                "frame": frames
+            }
+
         split_info_dict = {}
-        if split_account >= 1:
-            split_info_dict["split_front"] = {
-                "time_sec": split_front_point,
-                "frame": split_front_point_frame
-            }
-        if split_account == 2:
-            split_info_dict["split_back"] = {
-                "time_sec": split_back_point,
-                "frame": split_back_point_frame
-            }
-            split_info_dict["split_generate"] = {
-                "start_time_sec": split_front_point,
-                "start_frame": split_front_point_frame,
-                "end_time_sec": split_back_point,
-                "end_frame": split_back_point_frame
-            }
+        
+        if split_account == 0:
+            # 无分割，全段属于 generate
+            split_info_dict["split_generate"] = calc_segment(g_start_frame, g_end_frame)
+            
         elif split_account == 1:
-            # 单分割点时，默认生成区域为起点到分割点
-            split_info_dict["split_generate"] = {
-                "start_time_sec": actual_start_time,
-                "start_frame": start_frame if display_mode == "frames" else int(actual_start_time * fr),
-                "end_time_sec": split_front_point,
-                "end_frame": split_front_point_frame
-            }
+            # 仅有紫色滑块 (Front)
+            p_frame = int(split_front_point_frame)
+            p_frame = max(g_start_frame + 1, min(p_frame, g_end_frame + 1))
+            
+            # split_front: 全局起点 到 紫色滑块前一帧
+            split_info_dict["split_front"] = calc_segment(g_start_frame, p_frame - 1)
+            # split_generate: 紫色滑块 到 全局终点
+            split_info_dict["split_generate"] = calc_segment(p_frame, g_end_frame)
+            
+        elif split_account == 2:
+            # 有紫色 (Front) 和 绿色 (Back) 滑块
+            p_frame = int(split_front_point_frame)
+            g_frame = int(split_back_point_frame)
+            
+            # 牵制与防重叠
+            p_frame = max(g_start_frame + 1, min(p_frame, g_end_frame))
+            g_frame = max(p_frame + 1, min(g_frame, g_end_frame + 1))
+            
+            # split_front: 全局起点 到 紫色滑块前一帧
+            split_info_dict["split_front"] = calc_segment(g_start_frame, p_frame - 1)
+            # split_generate: 紫色滑块 到 绿色滑块前一帧
+            split_info_dict["split_generate"] = calc_segment(p_frame, g_frame - 1)
+            # split_back: 绿色滑块 到 全局终点
+            split_info_dict["split_back"] = calc_segment(g_frame, g_end_frame)
             
         split_info_str = json.dumps(split_info_dict)
+        # ============================================================
 
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
