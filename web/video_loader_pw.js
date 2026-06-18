@@ -110,7 +110,8 @@ app.registerExtension({
                     if (node.onResize) node.onResize(node.size);
                     app.graph.setDirtyCanvas(true, true);
                     
-                    if (typeof updateSplitHandle === 'function') updateSplitHandle();
+                    // 安全调用
+                    if (typeof node.updateSplitHandle === 'function') node.updateSplitHandle();
                 };
 
                 node.syncFramesFromTime = function () {
@@ -202,7 +203,7 @@ app.registerExtension({
                     const orig = splitPointWidget.callback;
                     splitPointWidget.callback = function () {
                         if (orig) orig.apply(this, arguments);
-                        if (typeof updateSplitHandle === 'function') updateSplitHandle();
+                        if (node.updateSplitHandle) node.updateSplitHandle();
                     };
                 }
 
@@ -702,6 +703,25 @@ app.registerExtension({
                 });
                 sliderBox.appendChild(splitHandle);
 
+                // 新增：更新紫色分割滑块的位置与可见性 (挂载到 node 上避免 TDZ)
+                node.updateSplitHandle = () => {
+                    if (!splitHandle) return; // 安全检查
+                    if (!splitModeWidget || splitModeWidget.value !== 1 || !splitPointWidget) {
+                        splitHandle.style.display = "none";
+                        return;
+                    }
+                    splitHandle.style.display = "block";
+                    const activeDur = getActiveDuration();
+                    let val = parseFloat(splitPointWidget.value) || 0;
+                    if (val > activeDur) val = activeDur;
+                    if (val < 0) val = 0;
+                    const pct = activeDur > 0 ? (val / activeDur) * 100 : 0;
+                    splitHandle.style.left = `${pct}%`;
+                };
+                
+                // 初始化调用一次
+                node.updateSplitHandle();
+
                 trimArea.appendChild(sliderBox);
                 container.appendChild(trimArea);
 
@@ -891,21 +911,6 @@ app.registerExtension({
                     return maxVal > 0 ? Math.max(maxVal, 1.0) : 1.0;
                 };
                 
-                // 新增：更新紫色分割滑块的位置与可见性
-                const updateSplitHandle = () => {
-                    if (!splitModeWidget || splitModeWidget.value !== 1 || !splitPointWidget) {
-                        splitHandle.style.display = "none";
-                        return;
-                    }
-                    splitHandle.style.display = "block";
-                    const activeDur = getActiveDuration();
-                    let val = parseFloat(splitPointWidget.value) || 0;
-                    if (val > activeDur) val = activeDur;
-                    if (val < 0) val = 0;
-                    const pct = activeDur > 0 ? (val / activeDur) * 100 : 0;
-                    splitHandle.style.left = `${pct}%`;
-                };
-
                 // 新增：紫色滑块拖动事件
                 splitHandle.addEventListener("pointerdown", (e) => {
                     if (!splitModeWidget || splitModeWidget.value !== 1) return;
@@ -926,7 +931,7 @@ app.registerExtension({
                     if (splitPointWidget) {
                         splitPointWidget.value = parseFloat(val.toFixed(2));
                     }
-                    updateSplitHandle();
+                    if (node.updateSplitHandle) node.updateSplitHandle();
                     app.graph.setDirtyCanvas(true, false);
                 });
 
@@ -1069,7 +1074,7 @@ app.registerExtension({
                     }
                     if (syncPlayer && duration > 0) videoPreview.currentTime = s;
                     
-                    if (typeof updateSplitHandle === 'function') updateSplitHandle();
+                    if (typeof node.updateSplitHandle === 'function') node.updateSplitHandle();
                 }
 
                 setTimeout(() => { updateRuler(); updateUI(); }, 50);
