@@ -73,7 +73,7 @@ app.registerExtension({
                 const cropWWidget = this.widgets.find((w) => w.name === "crop_w");
                 const cropHWidget = this.widgets.find((w) => w.name === "crop_h");
                 
-                const splitAccountWidget = this.widgets.find((w) => w.name === "split_account");
+                const splitAccountWidget = this.widgets.find((w) => w.name === "split_count");
                 const splitFrontWidget = this.widgets.find((w) => w.name === "split_front_point");
                 const splitFrontFrameWidget = this.widgets.find((w) => w.name === "split_front_point_frame");
                 const splitBackWidget = this.widgets.find((w) => w.name === "split_back_point");
