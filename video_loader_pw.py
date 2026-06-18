@@ -61,7 +61,7 @@ class VideoLoaderPW:
     RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "STRING")
     RETURN_NAMES = ("images", "audio", "duration", "frame_count", "video_info")
     FUNCTION = "load_video"
-    CATEGORY = "PW/Video"
+    CATEGORY = "PWUtility/Video"
 
     def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, path=None, **kwargs):
         video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
