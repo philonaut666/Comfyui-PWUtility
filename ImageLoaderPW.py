@@ -158,10 +158,23 @@ class ImageLoaderPW:
         else:
             outputs = F.interpolate(outputs, size=(height, width), mode=interpolation)
 
+        # --- FIXED PAD LOGIC ---
         if resize_method == 'pad':
             if pad_left > 0 or pad_right > 0 or pad_top > 0 or pad_bottom > 0:
-                # Apply the custom pad_color (tuple of 3 floats between 0.0 and 1.0)
-                outputs = F.pad(outputs, (pad_left, pad_right, pad_top, pad_bottom), value=pad_color)
+                B, C, H_new, W_new = outputs.shape
+                H_target = H_new + pad_top + pad_bottom
+                W_target = W_new + pad_left + pad_right
+                
+                r, g, b = pad_color
+                # Create a background tensor with the specified pad_color
+                background = torch.zeros((B, C, H_target, W_target), device=outputs.device, dtype=outputs.dtype)
+                background[:, 0, :, :] = r
+                background[:, 1, :, :] = g
+                background[:, 2, :, :] = b
+                
+                # Paste the resized image into the center
+                background[:, :, pad_top:pad_top+H_new, pad_left:pad_left+W_new] = outputs
+                outputs = background
 
         outputs = outputs.permute(0, 2, 3, 1)
 
