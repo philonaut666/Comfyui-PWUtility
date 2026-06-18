@@ -90,7 +90,7 @@ class ImageLoaderPW:
     RETURN_NAMES = ("image_list",) + tuple(f"image_{i+1}" for i in range(50))
     OUTPUT_IS_LIST = (True,) + (False,) * 50 
     FUNCTION = "load_images"
-    CATEGORY = "PWUtility"
+    CATEGORY = "PWUtility/Image"
 
     def resize_image(self, image, width, height, resize_method="keep proportion", interpolation="nearest", multiple_of=0, pad_color=(0.0, 0.0, 0.0), crop_position="center"):
         MAX_RESOLUTION = 8192
