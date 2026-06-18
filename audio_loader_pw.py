@@ -74,7 +74,7 @@ class AudioLoaderPW:
             }
         }
 
-    CATEGORY = "PWUtility/Audio"
+    CATEGORY = "🔮PWUtility/Audio"
     RETURN_TYPES = ("AUDIO", "FLOAT")
     RETURN_NAMES = ("audio", "duration")
     FUNCTION = "load_audio"
