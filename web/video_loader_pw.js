@@ -733,16 +733,17 @@ app.registerExtension({
                 const sliderBox = document.createElement("div");
                 Object.assign(sliderBox.style, { position: "relative", width: "100%", height: "24px", background: "#111", borderRadius: "4px", cursor: "pointer", userSelect: "none", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)", boxSizing: "border-box" });
 
-                const fillFront = document.createElement("div");
-                Object.assign(fillFront.style, { position: "absolute", height: "100%", background: "purple", pointerEvents: "none", opacity: "0.6" });
-                const fillGenerate = document.createElement("div");
-                Object.assign(fillGenerate.style, { position: "absolute", height: "100%", background: "rgba(14, 165, 233, 0.6)", pointerEvents: "none" });
-                const fillBack = document.createElement("div");
-                Object.assign(fillBack.style, { position: "absolute", height: "100%", background: "green", pointerEvents: "none", opacity: "0.6" });
+                // 物理颜色层 (不受 select_generate 影响)
+                const fillPurple = document.createElement("div");
+                Object.assign(fillPurple.style, { position: "absolute", height: "100%", background: "purple", pointerEvents: "none", opacity: "0.6" });
+                const fillBlue = document.createElement("div");
+                Object.assign(fillBlue.style, { position: "absolute", height: "100%", background: "rgba(14, 165, 233, 0.6)", pointerEvents: "none" });
+                const fillGreen = document.createElement("div");
+                Object.assign(fillGreen.style, { position: "absolute", height: "100%", background: "green", pointerEvents: "none", opacity: "0.6" });
                 
-                sliderBox.appendChild(fillFront);
-                sliderBox.appendChild(fillGenerate);
-                sliderBox.appendChild(fillBack);
+                sliderBox.appendChild(fillPurple);
+                sliderBox.appendChild(fillBlue);
+                sliderBox.appendChild(fillGreen);
 
                 const createHandle = (color) => {
                     const h = document.createElement("div");
@@ -849,7 +850,6 @@ app.registerExtension({
                             switchBox.onclick();
                         }
                         
-                        // 检查 Crop 状态并自动激活
                         const cw = cropWWidget ? parseFloat(cropWWidget.value) : 1;
                         const ch = cropHWidget ? parseFloat(cropHWidget.value) : 1;
                         const cx = cropXWidget ? parseFloat(cropXWidget.value) : 0;
@@ -1029,6 +1029,7 @@ app.registerExtension({
                         setVal(val);
                         if (duration > 0) videoPreview.currentTime = val;
                         node.updateSplitHandles();
+                        updateUI(); // 实时更新颜色层
                         app.graph.setDirtyCanvas(true, false);
                     });
 
@@ -1042,6 +1043,7 @@ app.registerExtension({
                         setVal(val);
                         if (duration > 0) videoPreview.currentTime = val;
                         node.updateSplitHandles();
+                        updateUI(); // 实时更新颜色层
                         app.graph.setDirtyCanvas(true, false);
                     });
 
@@ -1203,39 +1205,33 @@ app.registerExtension({
                     }
                     if (syncPlayer && duration > 0) videoPreview.currentTime = s;
                     
-                    // 更新 Fill 颜色区间
+                    // 物理区间渲染 (不受 select_generate 影响)
                     const toPct = (val) => Math.max(0, Math.min(100, (val / activeDur) * 100));
-                    let fS = 0, fE = 0, gS = 0, gE = 0, bS = 0, bE = 0;
+                    let pS = 0, pE = 0, bS = 0, bE = 0, gS = 0, gE = 0;
                     const s_val = s;
                     const e_val = visualEnd;
                     const p_val = splitPurpleWidget ? parseFloat(splitPurpleWidget.value) || 0 : 0;
                     const g_val = splitGreenWidget ? parseFloat(splitGreenWidget.value) || 0 : 0;
                     
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
-                    const sg = selectGenerateWidget ? selectGenerateWidget.value : "blue";
                     
                     if (sc === 0) {
-                        gS = s_val; gE = e_val;
+                        bS = s_val; bE = e_val;
                     } else if (sc === 1) {
-                        if (sg === "purple") {
-                            gS = s_val; gE = p_val;
-                            bS = p_val; bE = e_val;
-                        } else {
-                            fS = s_val; fE = p_val;
-                            gS = p_val; gE = e_val;
-                        }
+                        pS = s_val; pE = p_val;
+                        bS = p_val; bE = e_val;
                     } else if (sc === 2) {
-                        fS = s_val; fE = p_val;
-                        gS = p_val; gE = g_val;
-                        bS = g_val; bE = e_val;
+                        pS = s_val; pE = p_val;
+                        bS = p_val; bE = g_val;
+                        gS = g_val; gE = e_val;
                     }
                     
-                    fillFront.style.left = `${toPct(fS)}%`;
-                    fillFront.style.width = `${Math.max(0, toPct(fE) - toPct(fS))}%`;
-                    fillGenerate.style.left = `${toPct(gS)}%`;
-                    fillGenerate.style.width = `${Math.max(0, toPct(gE) - toPct(gS))}%`;
-                    fillBack.style.left = `${toPct(bS)}%`;
-                    fillBack.style.width = `${Math.max(0, toPct(bE) - toPct(bS))}%`;
+                    fillPurple.style.left = `${toPct(pS)}%`;
+                    fillPurple.style.width = `${Math.max(0, toPct(pE) - toPct(pS))}%`;
+                    fillBlue.style.left = `${toPct(bS)}%`;
+                    fillBlue.style.width = `${Math.max(0, toPct(bE) - toPct(bS))}%`;
+                    fillGreen.style.left = `${toPct(gS)}%`;
+                    fillGreen.style.width = `${Math.max(0, toPct(gE) - toPct(gS))}%`;
                     
                     if (typeof node.updateSplitHandles === 'function') node.updateSplitHandles();
                 }
