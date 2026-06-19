@@ -42,8 +42,9 @@ class VideoLoaderPW:
                 "start_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "end_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "duration": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
-                "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
-                "end_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
+                # 1-Based 帧数：1 代表第一帧
+                "start_frame": ("INT", {"default": 1, "min": 1, "max": 10000000, "step": 1}),
+                "end_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1, "tooltip": "0 means to the end"}),
                 "duration_frames": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "frame_rate": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 120.0, "step": 0.1, "tooltip": "Force the video to a specific frame rate for extraction."}),
                 "display_mode": (["seconds", "frames"], {"default": "seconds"}),
@@ -54,9 +55,9 @@ class VideoLoaderPW:
                 "align_8n+1": ("BOOLEAN", {"default": True, "tooltip": "Align generate segment to 8n+1 frames by adjusting split points or repeating end frames."}),
                 "split_count": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Purple only, 2: Purple & Green"}),
                 "split_purple_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
-                "split_purple_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
+                "split_purple_point_frame": ("INT", {"default": 1, "min": 1, "max": 10000000, "step": 1}),
                 "split_green_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
-                "split_green_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
+                "split_green_point_frame": ("INT", {"default": 1, "min": 1, "max": 10000000, "step": 1}),
                 "select_generate": (["blue", "purple"], {"default": "blue", "tooltip": "Which segment to use as generate when split_count=1"}),
             },
             "optional": {
@@ -146,9 +147,13 @@ class VideoLoaderPW:
 
         fr = float(frame_rate) if frame_rate > 0 else 25.0
         
+        # 核心修改：将 1-Based UI 帧数转换为 0-Based 内部索引
+        s_frame_0 = max(0, start_frame - 1)
+        e_frame_0 = max(0, end_frame - 1) if end_frame > 0 else 0
+        
         if display_mode == "frames":
-            actual_start_time = float(start_frame) / fr
-            actual_end_time = float(end_frame) / fr if (end_frame >= 0 and end_frame >= start_frame) else video_duration
+            actual_start_time = float(s_frame_0) / fr
+            actual_end_time = float(e_frame_0) / fr if (end_frame > 0 and e_frame_0 >= s_frame_0) else video_duration
         else:
             actual_start_time = start_time
             actual_end_time = end_time if (end_time > 0 and end_time > start_time) else video_duration
@@ -300,12 +305,10 @@ class VideoLoaderPW:
 
         container.close()
         
-        # 【修正1】：严格基于实际提取的帧数计算时长，确保 duration_frames = end - start + 1 的逻辑闭环
+        final_duration_sec = round(float(max(0.0, actual_end_time - actual_start_time)), 2)
         frame_count = image_tensor.shape[0] if (frames_loaded > 0 or len(frames) > 0) else 0
-        if frame_count > 0:
-            final_duration_sec = round(frame_count / fr, 2)
-        else:
-            final_duration_sec = round(float(max(0.0, actual_end_time - actual_start_time)), 2)
+        if frame_count == 0 and final_duration_sec > 0:
+            frame_count = int(np.floor(final_duration_sec * fr))
 
         loaded_h = int(image_tensor.shape[1]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
         loaded_w = int(image_tensor.shape[2]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
@@ -324,8 +327,8 @@ class VideoLoaderPW:
         }, indent=4)
 
         if display_mode == "frames":
-            g_start_frame = int(start_frame)
-            g_end_frame = int(end_frame)
+            g_start_frame = s_frame_0
+            g_end_frame = e_frame_0 if end_frame > 0 else int(round(video_duration * fr))
         else:
             g_start_frame = int(round(actual_start_time * fr))
             if actual_end_time == float('inf'):
@@ -387,8 +390,9 @@ class VideoLoaderPW:
                 final_duration_sec = round(g_end_local / fr, 2)
                 
         elif split_count == 1:
-            p_abs = int(split_purple_point_frame)
-            p_local = p_abs - g_start_frame
+            # 核心修改：将 1-Based 分割点转换为 0-Based 内部索引
+            p_abs_0 = max(0, split_purple_point_frame - 1)
+            p_local = p_abs_0 - g_start_frame
             p_local = max(1, min(p_local, g_end_local + 1))
             
             select_gen = (select_generate == "purple")
@@ -411,11 +415,11 @@ class VideoLoaderPW:
                 split_info_dict["split_back"] = calc_segment(p_local, g_end_local)
                 
         elif split_count == 2:
-            p_abs = int(split_purple_point_frame)
-            g_abs = int(split_green_point_frame)
+            p_abs_0 = max(0, split_purple_point_frame - 1)
+            g_abs_0 = max(0, split_green_point_frame - 1)
             
-            p_local = p_abs - g_start_frame
-            g_local = g_abs - g_start_frame
+            p_local = p_abs_0 - g_start_frame
+            g_local = g_abs_0 - g_start_frame
             
             p_local = max(1, min(p_local, g_end_local))
             g_local = max(p_local + 1, min(g_local, g_end_local + 1))
