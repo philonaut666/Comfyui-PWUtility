@@ -58,6 +58,7 @@ app.registerExtension({
                 
                 node.accurateFrameCount = 0;
                 node.accurateDuration = 0;
+                node._lastLoadedVideoPath = ""; // 状态锁：防止重复加载视频
 
                 const videoWidget = this.widgets.find((w) => w.name === "video");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
@@ -163,16 +164,12 @@ app.registerExtension({
                     if (endTimeWidget && endFrameWidget) endFrameWidget.value = Math.max(0, calcEndFrame);
                     
                     if (durationWidget && durationFramesWidget) {
-                        let calcDurFrames = Math.round(durationWidget.value * fr);
                         const startF = parseInt(startFrameWidget.value) || 0;
                         const endF = parseInt(endFrameWidget.value) || 0;
-                        const maxDurFrames = Math.max(0, endF - startF);
-                        
-                        if (calcDurFrames > maxDurFrames) {
-                            calcDurFrames = maxDurFrames;
-                            if (durationWidget) durationWidget.value = parseFloat((calcDurFrames / fr).toFixed(3));
-                        }
+                        // 【修正1】：帧数 = 结束帧 - 开始帧 + 1
+                        let calcDurFrames = Math.max(0, endF - startF + 1); 
                         durationFramesWidget.value = calcDurFrames;
+                        if (durationWidget) durationWidget.value = parseFloat((calcDurFrames / fr).toFixed(3));
                     }
                     isSyncing = false;
                 };
@@ -194,16 +191,12 @@ app.registerExtension({
                     if (endTimeWidget && endFrameWidget) endTimeWidget.value = parseFloat(Math.max(0, calcEndTime).toFixed(3));
                     
                     if (durationWidget && durationFramesWidget) {
-                        let calcDur = durationFramesWidget.value / fr;
-                        const startT = parseFloat(startTimeWidget.value) || 0;
-                        const endT = parseFloat(endTimeWidget.value) || 0;
-                        const maxDur = Math.max(0, endT - startT);
-                        
-                        if (calcDur > maxDur) {
-                            calcDur = maxDur;
-                            if (durationFramesWidget) durationFramesWidget.value = Math.round(calcDur * fr);
-                        } 
-                        durationWidget.value = parseFloat(calcDur.toFixed(3));
+                        const startF = parseInt(startFrameWidget.value) || 0;
+                        const endF = parseInt(endFrameWidget.value) || 0;
+                        // 【修正1】：帧数 = 结束帧 - 开始帧 + 1
+                        let calcDurFrames = Math.max(0, endF - startF + 1);
+                        durationFramesWidget.value = calcDurFrames;
+                        durationWidget.value = parseFloat((calcDurFrames / fr).toFixed(3));
                     }
                     isSyncing = false;
                 };
@@ -254,39 +247,44 @@ app.registerExtension({
                     };
                 }
 
-                // 【修复 2】：增加 URL 去重校验，防止相同路径被重复赋值导致浏览器重新缓冲视频
                 node.updatePreview = function (filename) {
                     if (!filename) return;
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
                     if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
                     else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
-                    
-                    if (videoPreview) {
-                        if (videoPreview.src === url) return; // 核心拦截逻辑
-                        videoPreview.src = url;
-                    }
+                    if (videoPreview && videoPreview.src !== url) videoPreview.src = url;
                 };
 
+                // 【修正2】：增加状态锁，仅在文件路径真正改变时才重新加载视频
                 if (videoWidget) {
                     const originalCallback = videoWidget.callback;
                     videoWidget.callback = function () {
                         if (originalCallback) originalCallback.apply(this, arguments);
-                        if (node.updatePreview) node.updatePreview(this.value);
+                        const p = this.value;
+                        if (p && p !== node._lastLoadedVideoPath) {
+                            node._lastLoadedVideoPath = p;
+                            if (node.updatePreview) node.updatePreview(p);
+                            if (startTimeWidget) startTimeWidget.value = 0;
+                            if (endTimeWidget) endTimeWidget.value = 0;
+                            if (node.syncFramesFromTime) node.syncFramesFromTime();
+                        }
                     };
                 }
 
+                // 【修正2】：增加状态锁，防止外部传入 path 时重复刷新
                 const applyVideoPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
-                    const isNewFile = (p !== node._lastLoadedVideoPath);
-                    node._lastLoadedVideoPath = p;
-                    if (videoWidget) videoWidget.value = p;
-                    if (isNewFile) {
+                    if (p !== node._lastLoadedVideoPath) {
+                        node._lastLoadedVideoPath = p;
+                        if (videoWidget && videoWidget.value !== p) videoWidget.value = p;
                         if (node.updatePreview) node.updatePreview(p);
                         if (startTimeWidget) startTimeWidget.value = 0;
                         if (endTimeWidget) endTimeWidget.value = 0;
                         if (node.syncFramesFromTime) node.syncFramesFromTime();
+                    } else {
+                        if (videoWidget && videoWidget.value !== p) videoWidget.value = p;
                     }
                 };
 
@@ -387,6 +385,7 @@ app.registerExtension({
                     try {
                         if (errorMsg) errorMsg.style.display = "none";
                         if (file.path) {
+                            node._lastLoadedVideoPath = file.path;
                             videoWidget.value = file.path;
                             node.updatePreview(file.path);
                             if (startTimeWidget) startTimeWidget.value = 0;
@@ -415,6 +414,7 @@ app.registerExtension({
                                 if (resp.status !== 200) throw new Error("Chunk upload failed");
                                 if (i === totalChunks - 1) {
                                     const data = await resp.json();
+                                    node._lastLoadedVideoPath = data.name;
                                     videoWidget.value = data.name;
                                     node.updatePreview(data.name);
                                     if (startTimeWidget) startTimeWidget.value = 0;
@@ -429,6 +429,7 @@ app.registerExtension({
                             if (resp.status === 413) throw new Error("File too large.");
                             if (resp.status === 200) {
                                 const data = await resp.json();
+                                node._lastLoadedVideoPath = data.name;
                                 videoWidget.value = data.name;
                                 node.updatePreview(data.name);
                                 if (startTimeWidget) startTimeWidget.value = 0;
@@ -1089,23 +1090,22 @@ app.registerExtension({
                         
                         let d = parseFloat(v) || 0;
                         let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
-                        let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
+                        const fr = parseFloat(frameRateWidget.value) || 25.0;
                         
-                        let maxDur = Math.max(0, e - s);
-                        if (d > maxDur) d = maxDur;
-                        if (d < 0) d = 0;
-                        
-                        let newStart = s;
                         let newEnd = s + d;
-                        
                         if (node.accurateDuration > 0 && newEnd > node.accurateDuration) {
                             newEnd = node.accurateDuration;
-                            newStart = Math.max(0, newEnd - d);
                         }
-
-                        if (startTimeWidget) startTimeWidget.value = parseFloat(newStart.toFixed(2));
-                        if (endTimeWidget) endTimeWidget.value = parseFloat(newEnd.toFixed(2));
-                        node.syncFramesFromTime();
+                        
+                        if (endTimeWidget) endTimeWidget.value = parseFloat(newEnd.toFixed(3));
+                        
+                        const startF = parseInt(startFrameWidget.value) || 0;
+                        const endF = Math.round(newEnd * fr);
+                        if (endFrameWidget) endFrameWidget.value = endF;
+                        
+                        // 【修正1】：帧数 = 结束帧 - 开始帧 + 1
+                        const calcDurFrames = Math.max(0, endF - startF + 1);
+                        if (durationFramesWidget) durationFramesWidget.value = calcDurFrames;
                         
                         if (duration === 0) updateRuler();
                         updateUI(true);
@@ -1122,25 +1122,24 @@ app.registerExtension({
                         isUpdatingDuration = true;
                         const fr = parseFloat(frameRateWidget.value) || 25.0;
                         
-                        let d = parseInt(v) || 0;
-                        let s = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
-                        let e = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
+                        let d_frames = parseInt(v) || 0;
+                        if (d_frames < 0) d_frames = 0;
                         
-                        let maxDurFrames = Math.max(0, e - s);
-                        if (d > maxDurFrames) d = maxDurFrames;
-                        if (d < 0) d = 0;
+                        let startF = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
+                        // 【修正1】：end_frame = start_frame + duration_frames - 1
+                        let newEndF = startF + d_frames - 1; 
                         
-                        let newStart = s;
-                        let newEnd = s + d;
-                        
-                        if (node.accurateFrameCount > 0 && newEnd > node.accurateFrameCount) {
-                            newEnd = node.accurateFrameCount;
-                            newStart = Math.max(0, newEnd - d);
+                        if (node.accurateFrameCount > 0 && newEndF >= node.accurateFrameCount) {
+                            newEndF = node.accurateFrameCount - 1;
                         }
-
-                        if (startFrameWidget) startFrameWidget.value = newStart;
-                        if (endFrameWidget) endFrameWidget.value = newEnd;
-                        node.syncTimeFromFrames();
+                        if (newEndF < startF) newEndF = startF;
+                        
+                        if (endFrameWidget) endFrameWidget.value = newEndF;
+                        if (endTimeWidget) endTimeWidget.value = parseFloat((newEndF / fr).toFixed(3));
+                        
+                        const actualDurFrames = Math.max(0, newEndF - startF + 1);
+                        if (durationWidget) durationWidget.value = parseFloat((actualDurFrames / fr).toFixed(3));
+                        if (durationFramesWidget.value !== actualDurFrames) durationFramesWidget.value = actualDurFrames;
                         
                         if (duration === 0) updateRuler();
                         updateUI(true);
@@ -1203,8 +1202,17 @@ app.registerExtension({
 
                     if (duration > 0 && !isUpdatingDuration) {
                         isUpdatingDuration = true;
-                        if (durationWidget && durationWidget.value !== currentDur) durationWidget.value = currentDur;
-                        if (durationFramesWidget && durationFramesWidget.value !== Math.round(currentDur * fr)) durationFramesWidget.value = Math.round(currentDur * fr);
+                        const startF = parseInt(startFrameWidget.value) || 0;
+                        const endF = parseInt(endFrameWidget.value) || 0;
+                        // 【修正1】：帧数 = 结束帧 - 开始帧 + 1
+                        const calcDurFrames = Math.max(0, endF - startF + 1);
+                        
+                        if (durationWidget && durationWidget.value !== parseFloat((calcDurFrames / fr).toFixed(3))) {
+                            durationWidget.value = parseFloat((calcDurFrames / fr).toFixed(3));
+                        }
+                        if (durationFramesWidget && durationFramesWidget.value !== calcDurFrames) {
+                            durationFramesWidget.value = calcDurFrames;
+                        }
                         isUpdatingDuration = false;
                     }
                     if (syncPlayer && duration > 0) videoPreview.currentTime = s;
@@ -1354,7 +1362,10 @@ app.registerExtension({
                     }
                 });
 
-                if (videoWidget && videoWidget.value) node.updatePreview(videoWidget.value);
+                if (videoWidget && videoWidget.value) {
+                    node._lastLoadedVideoPath = videoWidget.value;
+                    node.updatePreview(videoWidget.value);
+                }
                 return r;
             };
         }
