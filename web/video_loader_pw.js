@@ -64,7 +64,6 @@ app.registerExtension({
                 const displayModeWidget = this.widgets.find((w) => w.name === "display_mode");
                 const startTimeWidget = this.widgets.find((w) => w.name === "start_time");
                 const endTimeWidget = this.widgets.find((w) => w.name === "end_time");
-                const durationWidget = this.widgets.find((w) => w.name === "duration");
                 const startFrameWidget = this.widgets.find((w) => w.name === "start_frame");
                 const endFrameWidget = this.widgets.find((w) => w.name === "end_frame");
                 const cropXWidget = this.widgets.find((w) => w.name === "crop_x");
@@ -118,7 +117,6 @@ app.registerExtension({
                     isFramesMode = displayModeWidget && displayModeWidget.value === "frames";
                     setWidgetVisibility(startTimeWidget, !isFramesMode, "FLOAT");
                     setWidgetVisibility(endTimeWidget, !isFramesMode, "FLOAT");
-                    setWidgetVisibility(durationWidget, !isFramesMode, "FLOAT");
                     setWidgetVisibility(startFrameWidget, isFramesMode, "INT");
                     setWidgetVisibility(endFrameWidget, isFramesMode, "INT");
                     setWidgetVisibility(displayModeWidget, false, "combo");
@@ -234,15 +232,13 @@ app.registerExtension({
                         const mode = splitCountWidget.value;
                         if (mode >= 1 && splitPurpleWidget && splitPurpleWidget.value === 0) {
                             let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
-                            const fr = parseFloat(frameRateWidget.value) || 25.0;
-                            splitPurpleWidget.value = parseFloat((s + (1.0 / fr)).toFixed(3));
+                            splitPurpleWidget.value = s;
                             node.syncFramesFromTime();
                         }
                         if (mode === 2 && splitGreenWidget && splitGreenWidget.value === 0) {
                             let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
                             if (e === 0) e = getActiveDuration();
-                            const fr = parseFloat(frameRateWidget.value) || 25.0;
-                            splitGreenWidget.value = parseFloat((e - (1.0 / fr)).toFixed(3));
+                            splitGreenWidget.value = e;
                             node.syncFramesFromTime();
                         }
                         node.toggleWidgetVisibility();
@@ -312,7 +308,6 @@ app.registerExtension({
                                     endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
                                     
                                     if (endTimeWidget) endTimeWidget.value = parseFloat(info.source_duration.toFixed(3));
-                                    if (durationWidget) durationWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     
                                     updateRuler();
                                     updateUI(true);
@@ -351,7 +346,6 @@ app.registerExtension({
                                 if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
                                     endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
                                     if (endTimeWidget) endTimeWidget.value = parseFloat(info.source_duration.toFixed(3));
-                                    if (durationWidget) durationWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     updateRuler();
                                     updateUI(true);
                                 }
@@ -779,27 +773,19 @@ app.registerExtension({
                     const activeDur = getActiveDuration();
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
-                    const frame_interval = 1.0 / fr;
                     
                     let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
                     let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
                     if (e === 0) e = activeDur;
-
-                    let min_front = s + frame_interval;
-                    let max_back = e - frame_interval;
-                    if (min_front > max_back) {
-                        min_front = s;
-                        max_back = e;
-                    }
 
                     if (sc < 1 || !splitPurpleWidget) {
                         splitPurpleHandle.style.display = "none";
                     } else {
                         splitPurpleHandle.style.display = "block";
                         let val = isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value);
-                        let maxVal = sc === 2 ? ((isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value)) - frame_interval) : max_back;
+                        let maxVal = sc === 2 ? ((isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value))) : e;
                         
-                        val = Math.max(min_front, Math.min(val, maxVal));
+                        val = Math.max(s, Math.min(val, maxVal));
                         
                         if (isFramesMode) {
                             let new_f = Math.round(val * fr);
@@ -817,9 +803,9 @@ app.registerExtension({
                     } else {
                         splitGreenHandle.style.display = "block";
                         let val = isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value);
-                        let minVal = sc >= 1 ? ((isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value)) + frame_interval) : min_front;
+                        let minVal = sc >= 1 ? ((isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value))) : s;
                         
-                        val = Math.max(minVal, Math.min(val, max_back));
+                        val = Math.max(minVal, Math.min(val, e));
                         
                         if (isFramesMode) {
                             let new_f = Math.round(val * fr);
@@ -1013,46 +999,6 @@ app.registerExtension({
                     if (oldOnRemoved) oldOnRemoved.apply(this, arguments);
                 }
                 
-                const setupSplitHandleEvents = (handle, setVal) => {
-                    let splitDragging = false;
-                    handle.addEventListener("pointerdown", (e) => {
-                        if (handle.style.display === "none") return;
-                        e.preventDefault();
-                        e.stopPropagation();
-                        splitDragging = true;
-                        handle.setPointerCapture(e.pointerId);
-                        
-                        const activeDur = getActiveDuration();
-                        const rect = sliderBox.getBoundingClientRect();
-                        const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-                        const val = (x / rect.width) * activeDur;
-                        setVal(val);
-                        if (duration > 0) videoPreview.currentTime = val;
-                        node.updateSplitHandles();
-                        updateUI();
-                        app.graph.setDirtyCanvas(true, false);
-                    });
-
-                    handle.addEventListener("pointermove", (e) => {
-                        if (!splitDragging) return;
-                        e.preventDefault();
-                        const activeDur = getActiveDuration();
-                        const rect = sliderBox.getBoundingClientRect();
-                        const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-                        const val = (x / rect.width) * activeDur;
-                        setVal(val);
-                        if (duration > 0) videoPreview.currentTime = val;
-                        node.updateSplitHandles();
-                        updateUI();
-                        app.graph.setDirtyCanvas(true, false);
-                    });
-
-                    handle.addEventListener("pointerup", (e) => {
-                        splitDragging = false;
-                        handle.releasePointerCapture(e.pointerId);
-                    });
-                };
-
                 const setPurpleVal = (val) => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     if (isFramesMode) {
@@ -1074,40 +1020,135 @@ app.registerExtension({
                     }
                 };
 
-                setupSplitHandleEvents(splitPurpleHandle, setPurpleVal);
-                setupSplitHandleEvents(splitGreenHandle, setGreenVal);
-
-                if (durationWidget) {
-                    const origCallback = durationWidget.callback;
-                    durationWidget.callback = function (v) {
-                        if (isUpdatingDuration) { if (origCallback) origCallback.apply(this, arguments); return; }
-                        isUpdatingDuration = true;
+                const setupPurpleHandleEvents = () => {
+                    let splitDragging = false;
+                    splitPurpleHandle.addEventListener("pointerdown", (e) => {
+                        if (splitPurpleHandle.style.display === "none") return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        splitDragging = true;
+                        splitPurpleHandle.setPointerCapture(e.pointerId);
                         
-                        let d = parseFloat(v) || 0;
+                        const activeDur = getActiveDuration();
+                        const rect = sliderBox.getBoundingClientRect();
+                        const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+                        let val = (x / rect.width) * activeDur;
+                        
                         let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
-                        let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
-                        
-                        let maxDur = e > 0 ? Math.max(0, e - s) : Math.max(0, (node.accurateDuration || 0) - s);
-                        if (d > maxDur) d = maxDur;
-                        if (d < 0) d = 0;
-                        
-                        let newEnd = s + d;
-                        
-                        if (node.accurateDuration > 0 && newEnd > node.accurateDuration) {
-                            newEnd = node.accurateDuration;
-                            d = newEnd - s;
+                        let e_val = endTimeWidget ? parseFloat(endTimeWidget.value) || activeDur : activeDur;
+                        if (e_val === 0) e_val = activeDur;
+                        const sc = splitCountWidget ? splitCountWidget.value : 0;
+                        let maxVal = e_val;
+                        if (sc === 2 && splitGreenWidget) {
+                            maxVal = isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value);
                         }
-
-                        if (endTimeWidget) endTimeWidget.value = parseFloat(newEnd.toFixed(3));
-                        node.syncFramesFromTime();
+                        val = Math.max(s, Math.min(val, maxVal));
                         
-                        if (duration === 0) updateRuler();
-                        updateUI(true);
+                        setPurpleVal(val);
+                        if (duration > 0) videoPreview.currentTime = val;
+                        node.updateSplitHandles();
+                        updateUI();
                         app.graph.setDirtyCanvas(true, false);
-                        if (origCallback) origCallback.apply(this, arguments);
-                        isUpdatingDuration = false;
-                    };
-                }
+                    });
+
+                    splitPurpleHandle.addEventListener("pointermove", (e) => {
+                        if (!splitDragging) return;
+                        e.preventDefault();
+                        const activeDur = getActiveDuration();
+                        const rect = sliderBox.getBoundingClientRect();
+                        const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+                        let val = (x / rect.width) * activeDur;
+                        
+                        let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
+                        let e_val = endTimeWidget ? parseFloat(endTimeWidget.value) || activeDur : activeDur;
+                        if (e_val === 0) e_val = activeDur;
+                        const sc = splitCountWidget ? splitCountWidget.value : 0;
+                        const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                        let maxVal = e_val;
+                        if (sc === 2 && splitGreenWidget) {
+                            maxVal = isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value);
+                        }
+                        val = Math.max(s, Math.min(val, maxVal));
+                        
+                        setPurpleVal(val);
+                        if (duration > 0) videoPreview.currentTime = val;
+                        node.updateSplitHandles();
+                        updateUI();
+                        app.graph.setDirtyCanvas(true, false);
+                    });
+
+                    splitPurpleHandle.addEventListener("pointerup", (e) => {
+                        splitDragging = false;
+                        splitPurpleHandle.releasePointerCapture(e.pointerId);
+                    });
+                };
+
+                const setupGreenHandleEvents = () => {
+                    let splitDragging = false;
+                    splitGreenHandle.addEventListener("pointerdown", (e) => {
+                        if (splitGreenHandle.style.display === "none") return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        splitDragging = true;
+                        splitGreenHandle.setPointerCapture(e.pointerId);
+                        
+                        const activeDur = getActiveDuration();
+                        const rect = sliderBox.getBoundingClientRect();
+                        const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+                        let val = (x / rect.width) * activeDur;
+                        
+                        let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
+                        let e_val = endTimeWidget ? parseFloat(endTimeWidget.value) || activeDur : activeDur;
+                        if (e_val === 0) e_val = activeDur;
+                        const sc = splitCountWidget ? splitCountWidget.value : 0;
+                        const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                        let minVal = s;
+                        if (sc >= 1 && splitPurpleWidget) {
+                            minVal = isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value);
+                        }
+                        val = Math.max(minVal, Math.min(val, e_val));
+                        
+                        setGreenVal(val);
+                        if (duration > 0) videoPreview.currentTime = val;
+                        node.updateSplitHandles();
+                        updateUI();
+                        app.graph.setDirtyCanvas(true, false);
+                    });
+
+                    splitGreenHandle.addEventListener("pointermove", (e) => {
+                        if (!splitDragging) return;
+                        e.preventDefault();
+                        const activeDur = getActiveDuration();
+                        const rect = sliderBox.getBoundingClientRect();
+                        const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+                        let val = (x / rect.width) * activeDur;
+                        
+                        let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
+                        let e_val = endTimeWidget ? parseFloat(endTimeWidget.value) || activeDur : activeDur;
+                        if (e_val === 0) e_val = activeDur;
+                        const sc = splitCountWidget ? splitCountWidget.value : 0;
+                        const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                        let minVal = s;
+                        if (sc >= 1 && splitPurpleWidget) {
+                            minVal = isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value);
+                        }
+                        val = Math.max(minVal, Math.min(val, e_val));
+                        
+                        setGreenVal(val);
+                        if (duration > 0) videoPreview.currentTime = val;
+                        node.updateSplitHandles();
+                        updateUI();
+                        app.graph.setDirtyCanvas(true, false);
+                    });
+
+                    splitGreenHandle.addEventListener("pointerup", (e) => {
+                        splitDragging = false;
+                        splitGreenHandle.releasePointerCapture(e.pointerId);
+                    });
+                };
+
+                setupPurpleHandleEvents();
+                setupGreenHandleEvents();
 
                 const updateRuler = () => {
                     timeRuler.innerHTML = '';
@@ -1160,11 +1201,6 @@ app.registerExtension({
 
                     trimLength.textContent = isFrames ? `Trimmed: ${Math.round(currentDur * fr)} frames` : `Trimmed: ${formatTime(currentDur)}`;
 
-                    if (duration > 0 && !isUpdatingDuration) {
-                        isUpdatingDuration = true;
-                        if (durationWidget && durationWidget.value !== currentDur) durationWidget.value = currentDur;
-                        isUpdatingDuration = false;
-                    }
                     if (syncPlayer && duration > 0) videoPreview.currentTime = s;
                     
                     const toPct = (val) => Math.max(0, Math.min(100, (val / activeDur) * 100));
