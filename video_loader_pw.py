@@ -393,12 +393,12 @@ class VideoLoaderPW:
             
             if align_8n_plus_1:
                 if not select_gen:
-                    # generate is [p_local, g_end_local]
+                    # generate 是蓝区 [p_local, g_end_local]
                     N = g_end_local - p_local + 1
                     target_N = math.ceil((N - 1) / 8) * 8 + 1
                     p_local = max(1, g_end_local - target_N + 1)
                 else:
-                    # generate is [0, p_local - 1]
+                    # generate 是紫区 [0, p_local - 1]
                     N = p_local
                     target_N = math.ceil((N - 1) / 8) * 8 + 1
                     p_local = min(g_end_local + 1, target_N)
