@@ -648,23 +648,41 @@ app.registerExtension({
                         app.graph.setDirtyCanvas(true, false);
                     }
                 };
-
-                cropBtn.onclick = () => {
-                    isCropVisible = !isCropVisible;
-                    cropBtn.style.background = isCropVisible ? "#38bdf8" : "rgba(255, 255, 255, 0.1)";
-                    cropBtn.style.color = isCropVisible ? "black" : "white";
-                    if (isCropVisible) {
-                        cropBox.style.display = "block";
-                        cropEditContainer.style.display = "flex";
-                        cropDims.style.display = "none";
-                    } else {
-                        cropBox.style.display = "none";
-                        cropEditContainer.style.display = "none";
-                    }
-                    if (isCropVisible) { videoPreview.pause(); videoPreview.controls = false; } 
-                    else { videoPreview.controls = true; }
-                    updateCropUI();
-                };
+	            cropBtn.onclick = () => {
+	                isCropVisible = !isCropVisible;
+	                cropBtn.style.background = isCropVisible ? "#38bdf8" : "rgba(255, 255, 255, 0.1)";
+	                cropBtn.style.color = isCropVisible ? "black" : "white";
+                
+	                if (isCropVisible) {
+	                    // 开启 Crop 模式
+    	                cropBox.style.display = "block";
+        	            cropEditContainer.style.display = "flex";
+            	        cropDims.style.display = "none";
+                	    videoPreview.pause(); 
+             	       videoPreview.controls = false;
+            	    } else {
+                	    // 关闭 Crop 模式
+	                    cropBox.style.display = "none";
+    	                cropEditContainer.style.display = "none";
+        	            videoPreview.controls = true;
+                    
+            	        // 【核心修改】：将 Crop 参数重置为默认值，确保 Crop 彻底不起效
+	                    if (cropXWidget) cropXWidget.value = 0.0;
+    	                if (cropYWidget) cropYWidget.value = 0.0;
+        	            if (cropWWidget) cropWWidget.value = 1.0;
+            	        if (cropHWidget) cropHWidget.value = 1.0;
+                    
+                	    // 重置 UI 控件状态 (比例选择器和宽高输入框)
+	                    currentAspectRatio = 0;
+    	                if (arSelect) arSelect.value = "0"; // 0 对应 Freeform
+        	            if (wInput) wInput.value = "";
+            	        if (hInput) hInput.value = "";
+                    
+                	    // 通知 ComfyUI 参数已变更，触发节点重绘与数据更新
+                    	app.graph.setDirtyCanvas(true, false);
+  	              }
+    	            updateCropUI();
+        	    };
 
                 container.appendChild(playerTop);
 
