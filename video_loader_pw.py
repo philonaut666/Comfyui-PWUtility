@@ -42,7 +42,6 @@ class VideoLoaderPW:
                 "start_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "end_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "duration": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
-                # 1-Based 帧数：1 代表第一帧
                 "start_frame": ("INT", {"default": 1, "min": 1, "max": 10000000, "step": 1}),
                 "end_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1, "tooltip": "0 means to the end"}),
                 "duration_frames": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
@@ -147,19 +146,24 @@ class VideoLoaderPW:
 
         fr = float(frame_rate) if frame_rate > 0 else 25.0
         
-        # 核心修改：将 1-Based UI 帧数转换为 0-Based 内部索引
         s_frame_0 = max(0, start_frame - 1)
-        e_frame_0 = max(0, end_frame - 1) if end_frame > 0 else 0
+        e_frame_1 = end_frame if end_frame > 0 else 0
         
         if display_mode == "frames":
             actual_start_time = float(s_frame_0) / fr
-            actual_end_time = float(e_frame_0) / fr if (end_frame > 0 and e_frame_0 >= s_frame_0) else video_duration
+            actual_end_time = float(e_frame_1) / fr if e_frame_1 > 0 else video_duration
         else:
             actual_start_time = start_time
             actual_end_time = end_time if (end_time > 0 and end_time > start_time) else video_duration
 
         if actual_end_time <= 0:
             actual_end_time = float('inf')
+
+        # 核心修复：计算精确的目标帧数，用于强制截断，杜绝浮点数误差
+        target_frame_count = -1
+        if display_mode == "frames" and e_frame_1 > 0:
+            target_frame_count = e_frame_1 - s_frame_0
+            if target_frame_count < 0: target_frame_count = 0
 
         frames = []
         image_tensor = None
@@ -213,6 +217,10 @@ class VideoLoaderPW:
                     frame_rgb = frame_rgb[manual_crop_top:orig_h-manual_crop_bottom, manual_crop_left:orig_w-manual_crop_right, :]
                 
                 while expected_target_time <= frame_time + 1e-5 and expected_target_time <= actual_end_time + 1e-5:
+                    # 核心修复：达到目标帧数直接退出，保证帧数绝对精确
+                    if target_frame_count >= 0 and frames_loaded >= target_frame_count:
+                        break
+                        
                     if image_tensor is None and expected_frames > 0:
                         height, width = frame_rgb.shape[:2]
                         alloc_frames = expected_frames + 50
@@ -305,10 +313,9 @@ class VideoLoaderPW:
 
         container.close()
         
-        final_duration_sec = round(float(max(0.0, actual_end_time - actual_start_time)), 2)
         frame_count = image_tensor.shape[0] if (frames_loaded > 0 or len(frames) > 0) else 0
-        if frame_count == 0 and final_duration_sec > 0:
-            frame_count = int(np.floor(final_duration_sec * fr))
+        # 核心修复：根据实际提取的帧数反推精确的秒数，保证 duration * fps == frame_count
+        final_duration_sec = round(float(frame_count / fr), 2)
 
         loaded_h = int(image_tensor.shape[1]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
         loaded_w = int(image_tensor.shape[2]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
@@ -328,7 +335,7 @@ class VideoLoaderPW:
 
         if display_mode == "frames":
             g_start_frame = s_frame_0
-            g_end_frame = e_frame_0 if end_frame > 0 else int(round(video_duration * fr))
+            g_end_frame = e_frame_1 - 1 if e_frame_1 > 0 else int(round(video_duration * fr))
         else:
             g_start_frame = int(round(actual_start_time * fr))
             if actual_end_time == float('inf'):
@@ -390,7 +397,6 @@ class VideoLoaderPW:
                 final_duration_sec = round(g_end_local / fr, 2)
                 
         elif split_count == 1:
-            # 核心修改：将 1-Based 分割点转换为 0-Based 内部索引
             p_abs_0 = max(0, split_purple_point_frame - 1)
             p_local = p_abs_0 - g_start_frame
             p_local = max(1, min(p_local, g_end_local + 1))
