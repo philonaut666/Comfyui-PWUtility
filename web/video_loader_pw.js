@@ -254,13 +254,18 @@ app.registerExtension({
                     };
                 }
 
+                // 【修复 2】：增加 URL 去重校验，防止相同路径被重复赋值导致浏览器重新缓冲视频
                 node.updatePreview = function (filename) {
                     if (!filename) return;
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
                     if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
                     else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
-                    if (videoPreview) videoPreview.src = url;
+                    
+                    if (videoPreview) {
+                        if (videoPreview.src === url) return; // 核心拦截逻辑
+                        videoPreview.src = url;
+                    }
                 };
 
                 if (videoWidget) {
@@ -733,7 +738,6 @@ app.registerExtension({
                 const sliderBox = document.createElement("div");
                 Object.assign(sliderBox.style, { position: "relative", width: "100%", height: "24px", background: "#111", borderRadius: "4px", cursor: "pointer", userSelect: "none", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)", boxSizing: "border-box" });
 
-                // 物理颜色层 (不受 select_generate 影响)
                 const fillPurple = document.createElement("div");
                 Object.assign(fillPurple.style, { position: "absolute", height: "100%", background: "purple", pointerEvents: "none", opacity: "0.6" });
                 const fillBlue = document.createElement("div");
@@ -1029,7 +1033,7 @@ app.registerExtension({
                         setVal(val);
                         if (duration > 0) videoPreview.currentTime = val;
                         node.updateSplitHandles();
-                        updateUI(); // 实时更新颜色层
+                        updateUI();
                         app.graph.setDirtyCanvas(true, false);
                     });
 
@@ -1043,7 +1047,7 @@ app.registerExtension({
                         setVal(val);
                         if (duration > 0) videoPreview.currentTime = val;
                         node.updateSplitHandles();
-                        updateUI(); // 实时更新颜色层
+                        updateUI();
                         app.graph.setDirtyCanvas(true, false);
                     });
 
@@ -1205,7 +1209,6 @@ app.registerExtension({
                     }
                     if (syncPlayer && duration > 0) videoPreview.currentTime = s;
                     
-                    // 物理区间渲染 (不受 select_generate 影响)
                     const toPct = (val) => Math.max(0, Math.min(100, (val / activeDur) * 100));
                     let pS = 0, pE = 0, bS = 0, bE = 0, gS = 0, gE = 0;
                     const s_val = s;
