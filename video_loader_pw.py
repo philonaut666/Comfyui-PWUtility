@@ -51,12 +51,12 @@ class VideoLoaderPW:
                 "crop_y": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
+                "align_8n+1": ("BOOLEAN", {"default": True, "tooltip": "Align generate segment to 8n+1 frames by adjusting split points or repeating end frames."}),
                 "split_count": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Front only, 2: Front & Back"}),
                 "split_front_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "split_front_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "split_back_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "split_back_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
-                "align_8n_plus_1": ("BOOLEAN", {"default": True, "tooltip": "Align generate segment to 8n+1 frames by adjusting split points or repeating end frames."}),
             },
             "optional": {
                 "path": ("STRING", {"forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
@@ -68,7 +68,10 @@ class VideoLoaderPW:
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_front_point=0.0, split_front_point_frame=0, split_back_point=0.0, split_back_point_frame=0, align_8n_plus_1=True, path=None, **kwargs):
+    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_front_point=0.0, split_front_point_frame=0, split_back_point=0.0, split_back_point_frame=0, path=None, **kwargs):
+        # 从 kwargs 中安全获取带有 "+" 号的参数
+        align_8n_plus_1 = kwargs.get("align_8n+1", True)
+        
         video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
 
         if not video_to_load:
@@ -383,7 +386,7 @@ class VideoLoaderPW:
                 frame_count = new_total_frames
                 final_duration_sec = round(g_end_local / fr, 2)
                 
-            split_info_dict["split_generate"] = calc_segment(0, g_end_local)
+            # 修改点：当 split_count == 0 时，不写入任何分割信息，强制保持为空字典 {}
             
         elif split_count == 1:
             p_abs = int(split_front_point_frame)
