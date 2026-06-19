@@ -41,7 +41,6 @@ class VideoLoaderPW:
                 "video": ("STRING", {"default": ""}),
                 "start_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "end_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
-                "duration": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "end_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1, "tooltip": "0 means to the end"}),
                 "frame_rate": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 120.0, "step": 0.1, "tooltip": "Force the video to a specific frame rate for extraction."}),
@@ -63,18 +62,18 @@ class VideoLoaderPW:
             }
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "FLOAT", "STRING", "STRING", "INT")
-    RETURN_NAMES = ("images", "audio", "duration", "frame_count", "fps", "video_info", "split_info", "repeat_last_frame_count")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "FLOAT", "STRING", "INT", "STRING")
+    RETURN_NAMES = ("images", "audio", "frame_count", "fps", "video_info", "repeat_last_frame_count", "split_info")
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_purple_point=0.0, split_purple_point_frame=0, split_green_point=0.0, split_green_point_frame=0, select_generate="blue", path=None, **kwargs):
+    def load_video(self, video, frame_rate, display_mode, start_time, end_time, start_frame, end_frame, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_purple_point=0.0, split_purple_point_frame=0, split_green_point=0.0, split_green_point_frame=0, select_generate="blue", path=None, **kwargs):
         align_8n_plus_1 = kwargs.get("align_8n+1", True)
         video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
 
         if not video_to_load:
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
-            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, None, 0.0, 0, float(frame_rate), "{}", "{}", 0)}
+            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, None, 0, float(frame_rate), "{}", 0, "{}")}
 
         video_path = video_to_load
         if not os.path.exists(video_path):
@@ -256,7 +255,6 @@ class VideoLoaderPW:
         else:
             image_tensor = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
 
-        # 核心修改：检测音频流，无音频则输出 None
         audio_dict = None
         if len(container.streams.audio) > 0:
             try:
@@ -447,7 +445,7 @@ class VideoLoaderPW:
 
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
-            "result": (image_tensor, audio_dict, final_duration_sec, frame_count, float(frame_rate), video_info, split_info_str, repeat_last_frame_count)
+            "result": (image_tensor, audio_dict, frame_count, float(frame_rate), video_info, repeat_last_frame_count, split_info_str)
         }
 
 NODE_CLASS_MAPPINGS = {"VideoLoaderPW": VideoLoaderPW}
