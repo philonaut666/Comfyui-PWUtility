@@ -52,11 +52,12 @@ class VideoLoaderPW:
                 "crop_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "align_8n+1": ("BOOLEAN", {"default": True, "tooltip": "Align generate segment to 8n+1 frames by adjusting split points or repeating end frames."}),
-                "split_count": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Front only, 2: Front & Back"}),
-                "split_front_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
-                "split_front_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
-                "split_back_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
-                "split_back_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
+                "split_count": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Purple only, 2: Purple & Green"}),
+                "split_purple_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
+                "split_purple_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
+                "split_green_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
+                "split_green_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
+                "select_generate": (["blue", "purple"], {"default": "blue", "tooltip": "Which segment to use as generate when split_count=1"}),
             },
             "optional": {
                 "path": ("STRING", {"forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
@@ -68,10 +69,8 @@ class VideoLoaderPW:
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_front_point=0.0, split_front_point_frame=0, split_back_point=0.0, split_back_point_frame=0, path=None, **kwargs):
-        # 从 kwargs 中安全获取带有 "+" 号的参数
+    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_purple_point=0.0, split_purple_point_frame=0, split_green_point=0.0, split_green_point_frame=0, select_generate="blue", path=None, **kwargs):
         align_8n_plus_1 = kwargs.get("align_8n+1", True)
-        
         video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
 
         if not video_to_load:
@@ -322,7 +321,6 @@ class VideoLoaderPW:
             "loaded_height":      loaded_h,
         }, indent=4)
 
-        # ================= 重新计算 Split Info 逻辑 (局部坐标系映射 & 8n+1 对齐) =================
         if display_mode == "frames":
             g_start_frame = int(start_frame)
             g_end_frame = int(end_frame)
@@ -366,7 +364,7 @@ class VideoLoaderPW:
         if split_count == 0:
             total_frames = g_end_local + 1
             if align_8n_plus_1 and (total_frames - 1) % 8 != 0:
-                new_total_frames = math.ceil(total_frames / 8) * 8 + 1
+                new_total_frames = math.ceil((total_frames - 1) / 8) * 8 + 1
                 repeat_end = new_total_frames - total_frames
                 
                 if image_tensor is not None and image_tensor.shape[0] > 0 and repeat_end > 0:
@@ -386,25 +384,35 @@ class VideoLoaderPW:
                 frame_count = new_total_frames
                 final_duration_sec = round(g_end_local / fr, 2)
                 
-            # 修改点：当 split_count == 0 时，不写入任何分割信息，强制保持为空字典 {}
-            
         elif split_count == 1:
-            p_abs = int(split_front_point_frame)
+            p_abs = int(split_purple_point_frame)
             p_local = p_abs - g_start_frame
             p_local = max(1, min(p_local, g_end_local + 1))
             
-            if align_8n_plus_1:
-                diff = g_end_local - p_local
-                diff_new = math.ceil(diff / 8) * 8
-                p_local_new = g_end_local - diff_new
-                p_local = max(1, p_local_new)
-                
-            split_info_dict["split_front"] = calc_segment(0, p_local - 1)
-            split_info_dict["split_generate"] = calc_segment(p_local, g_end_local)
+            select_gen = (select_generate == "purple")
             
+            if align_8n_plus_1:
+                if not select_gen:
+                    # generate is [p_local, g_end_local]
+                    N = g_end_local - p_local + 1
+                    target_N = math.ceil((N - 1) / 8) * 8 + 1
+                    p_local = max(1, g_end_local - target_N + 1)
+                else:
+                    # generate is [0, p_local - 1]
+                    N = p_local
+                    target_N = math.ceil((N - 1) / 8) * 8 + 1
+                    p_local = min(g_end_local + 1, target_N)
+                    
+            if not select_gen:
+                split_info_dict["split_front"] = calc_segment(0, p_local - 1)
+                split_info_dict["split_generate"] = calc_segment(p_local, g_end_local)
+            else:
+                split_info_dict["split_generate"] = calc_segment(0, p_local - 1)
+                split_info_dict["split_back"] = calc_segment(p_local, g_end_local)
+                
         elif split_count == 2:
-            p_abs = int(split_front_point_frame)
-            g_abs = int(split_back_point_frame)
+            p_abs = int(split_purple_point_frame)
+            g_abs = int(split_green_point_frame)
             
             p_local = p_abs - g_start_frame
             g_local = g_abs - g_start_frame
@@ -413,18 +421,16 @@ class VideoLoaderPW:
             g_local = max(p_local + 1, min(g_local, g_end_local + 1))
             
             if align_8n_plus_1:
-                diff = g_local - p_local
-                if diff < 1: diff = 1
-                diff_new = math.ceil((diff - 1) / 8) * 8 + 1
-                g_local_new = p_local + diff_new
-                g_local = min(g_end_local + 1, g_local_new)
+                N = g_local - p_local
+                if N < 1: N = 1
+                target_N = math.ceil((N - 1) / 8) * 8 + 1
+                g_local = min(g_end_local + 1, p_local + target_N)
                 
             split_info_dict["split_front"] = calc_segment(0, p_local - 1)
             split_info_dict["split_generate"] = calc_segment(p_local, g_local - 1)
             split_info_dict["split_back"] = calc_segment(g_local, g_end_local)
             
         split_info_str = json.dumps(split_info_dict)
-        # ===========================================================================
 
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
