@@ -207,7 +207,9 @@ class VideoLoaderPW:
                 if manual_crop_left > 0 or manual_crop_top > 0 or manual_crop_right > 0 or manual_crop_bottom > 0:
                     frame_rgb = frame_rgb[manual_crop_top:orig_h-manual_crop_bottom, manual_crop_left:orig_w-manual_crop_right, :]
                 
-                while expected_target_time <= frame_time + 1e-5 and expected_target_time <= actual_end_time + 1e-5:
+                # 【修复 1】：将 <= actual_end_time + 1e-5 改为 < actual_end_time - 1e-5
+                # 使 end_frame/end_time 成为 Exclusive (不包含) 边界，确保 frame_count 严格等于 duration_frames
+                while expected_target_time <= frame_time + 1e-5 and expected_target_time < actual_end_time - 1e-5:
                     if image_tensor is None and expected_frames > 0:
                         height, width = frame_rgb.shape[:2]
                         alloc_frames = expected_frames + 50
@@ -393,12 +395,10 @@ class VideoLoaderPW:
             
             if align_8n_plus_1:
                 if not select_gen:
-                    # generate 是蓝区 [p_local, g_end_local]
                     N = g_end_local - p_local + 1
                     target_N = math.ceil((N - 1) / 8) * 8 + 1
                     p_local = max(1, g_end_local - target_N + 1)
                 else:
-                    # generate 是紫区 [0, p_local - 1]
                     N = p_local
                     target_N = math.ceil((N - 1) / 8) * 8 + 1
                     p_local = min(g_end_local + 1, target_N)
