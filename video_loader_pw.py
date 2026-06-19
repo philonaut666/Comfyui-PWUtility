@@ -62,8 +62,9 @@ class VideoLoaderPW:
             }
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "FLOAT", "STRING", "INT", "STRING")
-    RETURN_NAMES = ("images", "audio", "frame_count", "fps", "video_info", "repeat_last_frame_count", "split_info")
+    # 新增 duration 端口
+    RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "FLOAT", "FLOAT", "STRING", "INT", "STRING")
+    RETURN_NAMES = ("images", "audio", "frame_count", "duration", "fps", "video_info", "repeat_last_frame_count", "split_info")
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
@@ -73,7 +74,7 @@ class VideoLoaderPW:
 
         if not video_to_load:
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
-            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, None, 0, float(frame_rate), "{}", 0, "{}")}
+            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, None, 0, 0.0, float(frame_rate), "{}", 0, "{}")}
 
         video_path = video_to_load
         if not os.path.exists(video_path):
@@ -395,12 +396,16 @@ class VideoLoaderPW:
                         
                 g_end_local = new_total_frames - 1
                 frame_count = new_total_frames
-                final_duration_sec = round(g_end_local / fr, 2)
+                final_duration_sec = round(float(frame_count / fr), 2)
                 
         elif split_count == 1:
             p_abs_0 = max(0, split_purple_point_frame)
             p_local = p_abs_0 - g_start_frame
-            p_local = max(1, min(p_local, g_end_local + 1))
+            
+            # 严格限制：必须 > 0 (即 > start) 且 < g_end_local (即 < end)
+            p_local = max(1, min(p_local, g_end_local - 1))
+            if p_local < 1: p_local = 1
+            if p_local > g_end_local - 1: p_local = g_end_local - 1
             
             select_gen = (select_generate == "purple")
             
@@ -412,7 +417,7 @@ class VideoLoaderPW:
                 else:
                     N = p_local
                     target_N = math.ceil((N - 1) / 8) * 8 + 1
-                    p_local = min(g_end_local + 1, target_N)
+                    p_local = min(g_end_local - 1, target_N)
                     
             if not select_gen:
                 split_info_dict["split_front"] = calc_segment(0, p_local - 1)
@@ -428,14 +433,19 @@ class VideoLoaderPW:
             p_local = p_abs_0 - g_start_frame
             g_local = g_abs_0 - g_start_frame
             
-            p_local = max(1, min(p_local, g_end_local))
-            g_local = max(p_local + 1, min(g_local, g_end_local + 1))
+            # 严格限制：purple < green < end
+            p_local = max(1, min(p_local, g_end_local - 2))
+            g_local = max(p_local + 1, min(g_local, g_end_local - 1))
+            
+            if p_local < 1: p_local = 1
+            if g_local < p_local + 1: g_local = p_local + 1
+            if g_local > g_end_local - 1: g_local = g_end_local - 1
             
             if align_8n_plus_1:
                 N = g_local - p_local
                 if N < 1: N = 1
                 target_N = math.ceil((N - 1) / 8) * 8 + 1
-                g_local = min(g_end_local + 1, p_local + target_N)
+                g_local = min(g_end_local - 1, p_local + target_N)
                 
             split_info_dict["split_front"] = calc_segment(0, p_local - 1)
             split_info_dict["split_generate"] = calc_segment(p_local, g_local - 1)
@@ -445,7 +455,8 @@ class VideoLoaderPW:
 
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
-            "result": (image_tensor, audio_dict, frame_count, float(frame_rate), video_info, repeat_last_frame_count, split_info_str)
+            # 新增 final_duration_sec 输出
+            "result": (image_tensor, audio_dict, frame_count, final_duration_sec, float(frame_rate), video_info, repeat_last_frame_count, split_info_str)
         }
 
 NODE_CLASS_MAPPINGS = {"VideoLoaderPW": VideoLoaderPW}
