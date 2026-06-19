@@ -42,7 +42,7 @@ class VideoLoaderPW:
                 "start_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "end_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "duration": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
-                "start_frame": ("INT", {"default": 1, "min": 1, "max": 10000000, "step": 1}),
+                "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "end_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1, "tooltip": "0 means to the end"}),
                 "duration_frames": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "frame_rate": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 120.0, "step": 0.1, "tooltip": "Force the video to a specific frame rate for extraction."}),
@@ -54,9 +54,9 @@ class VideoLoaderPW:
                 "align_8n+1": ("BOOLEAN", {"default": True, "tooltip": "Align generate segment to 8n+1 frames by adjusting split points or repeating end frames."}),
                 "split_count": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Purple only, 2: Purple & Green"}),
                 "split_purple_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
-                "split_purple_point_frame": ("INT", {"default": 1, "min": 1, "max": 10000000, "step": 1}),
+                "split_purple_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "split_green_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
-                "split_green_point_frame": ("INT", {"default": 1, "min": 1, "max": 10000000, "step": 1}),
+                "split_green_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "select_generate": (["blue", "purple"], {"default": "blue", "tooltip": "Which segment to use as generate when split_count=1"}),
             },
             "optional": {
@@ -146,12 +146,12 @@ class VideoLoaderPW:
 
         fr = float(frame_rate) if frame_rate > 0 else 25.0
         
-        s_frame_0 = max(0, start_frame - 1)
-        e_frame_1 = end_frame if end_frame > 0 else 0
+        s_frame_0 = max(0, start_frame)
+        e_frame_0 = end_frame if end_frame > 0 else 0
         
         if display_mode == "frames":
             actual_start_time = float(s_frame_0) / fr
-            actual_end_time = float(e_frame_1) / fr if e_frame_1 > 0 else video_duration
+            actual_end_time = float(e_frame_0) / fr if e_frame_0 > 0 else video_duration
         else:
             actual_start_time = start_time
             actual_end_time = end_time if (end_time > 0 and end_time > start_time) else video_duration
@@ -159,10 +159,12 @@ class VideoLoaderPW:
         if actual_end_time <= 0:
             actual_end_time = float('inf')
 
-        # 核心修复：计算精确的目标帧数，用于强制截断，杜绝浮点数误差
         target_frame_count = -1
-        if display_mode == "frames" and e_frame_1 > 0:
-            target_frame_count = e_frame_1 - s_frame_0
+        if display_mode == "frames":
+            if end_frame > 0:
+                target_frame_count = end_frame - start_frame + 1
+            elif duration_frames > 0:
+                target_frame_count = duration_frames
             if target_frame_count < 0: target_frame_count = 0
 
         frames = []
@@ -217,7 +219,6 @@ class VideoLoaderPW:
                     frame_rgb = frame_rgb[manual_crop_top:orig_h-manual_crop_bottom, manual_crop_left:orig_w-manual_crop_right, :]
                 
                 while expected_target_time <= frame_time + 1e-5 and expected_target_time <= actual_end_time + 1e-5:
-                    # 核心修复：达到目标帧数直接退出，保证帧数绝对精确
                     if target_frame_count >= 0 and frames_loaded >= target_frame_count:
                         break
                         
@@ -314,7 +315,6 @@ class VideoLoaderPW:
         container.close()
         
         frame_count = image_tensor.shape[0] if (frames_loaded > 0 or len(frames) > 0) else 0
-        # 核心修复：根据实际提取的帧数反推精确的秒数，保证 duration * fps == frame_count
         final_duration_sec = round(float(frame_count / fr), 2)
 
         loaded_h = int(image_tensor.shape[1]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
@@ -335,11 +335,14 @@ class VideoLoaderPW:
 
         if display_mode == "frames":
             g_start_frame = s_frame_0
-            g_end_frame = e_frame_1 - 1 if e_frame_1 > 0 else int(round(video_duration * fr))
+            if e_frame_0 > 0:
+                g_end_frame = e_frame_0
+            else:
+                g_end_frame = (source_frame_count - 1) if source_frame_count > 0 else int(round(video_duration * fr)) - 1
         else:
             g_start_frame = int(round(actual_start_time * fr))
             if actual_end_time == float('inf'):
-                g_end_frame = int(round(video_duration * fr))
+                g_end_frame = (source_frame_count - 1) if source_frame_count > 0 else int(round(video_duration * fr)) - 1
             else:
                 g_end_frame = int(round(actual_end_time * fr))
                 
@@ -397,7 +400,7 @@ class VideoLoaderPW:
                 final_duration_sec = round(g_end_local / fr, 2)
                 
         elif split_count == 1:
-            p_abs_0 = max(0, split_purple_point_frame - 1)
+            p_abs_0 = max(0, split_purple_point_frame)
             p_local = p_abs_0 - g_start_frame
             p_local = max(1, min(p_local, g_end_local + 1))
             
@@ -421,8 +424,8 @@ class VideoLoaderPW:
                 split_info_dict["split_back"] = calc_segment(p_local, g_end_local)
                 
         elif split_count == 2:
-            p_abs_0 = max(0, split_purple_point_frame - 1)
-            g_abs_0 = max(0, split_green_point_frame - 1)
+            p_abs_0 = max(0, split_purple_point_frame)
+            g_abs_0 = max(0, split_green_point_frame)
             
             p_local = p_abs_0 - g_start_frame
             g_local = g_abs_0 - g_start_frame
