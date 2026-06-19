@@ -44,7 +44,6 @@ class VideoLoaderPW:
                 "duration": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "end_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1, "tooltip": "0 means to the end"}),
-                "duration_frames": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "frame_rate": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 120.0, "step": 0.1, "tooltip": "Force the video to a specific frame rate for extraction."}),
                 "display_mode": (["seconds", "frames"], {"default": "seconds"}),
                 "crop_x": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
@@ -65,18 +64,17 @@ class VideoLoaderPW:
         }
 
     RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "INT", "FLOAT", "STRING", "STRING", "INT")
-    RETURN_NAMES = ("images", "audio", "duration", "frame_count", "fps", "video_info", "split_info", "repeat_end")
+    RETURN_NAMES = ("images", "audio", "duration", "frame_count", "fps", "video_info", "split_info", "repeat_last_frame_count")
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, duration_frames, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_purple_point=0.0, split_purple_point_frame=0, split_green_point=0.0, split_green_point_frame=0, select_generate="blue", path=None, **kwargs):
+    def load_video(self, video, frame_rate, display_mode, start_time, end_time, duration, start_frame, end_frame, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_purple_point=0.0, split_purple_point_frame=0, split_green_point=0.0, split_green_point_frame=0, select_generate="blue", path=None, **kwargs):
         align_8n_plus_1 = kwargs.get("align_8n+1", True)
         video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
 
         if not video_to_load:
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
-            empty_audio = {"waveform": torch.zeros((1, 1, 44100)), "sample_rate": 44100}
-            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, empty_audio, 0.0, 0, float(frame_rate), "{}", "{}", 0)}
+            return {"ui": {"video_path": [""], "video_info": ["{}"]}, "result": (empty_image, None, 0.0, 0, float(frame_rate), "{}", "{}", 0)}
 
         video_path = video_to_load
         if not os.path.exists(video_path):
@@ -163,8 +161,6 @@ class VideoLoaderPW:
         if display_mode == "frames":
             if end_frame > 0:
                 target_frame_count = end_frame - start_frame + 1
-            elif duration_frames > 0:
-                target_frame_count = duration_frames
             if target_frame_count < 0: target_frame_count = 0
 
         frames = []
@@ -200,7 +196,6 @@ class VideoLoaderPW:
                 if frame_time < actual_start_time - 1e-5:
                     continue
                     
-                # 核心修复：使用严格的右边界判断，杜绝多提取一帧
                 if actual_end_time != float('inf') and frame_time >= actual_end_time - 1e-5: 
                     break
                     
@@ -261,7 +256,8 @@ class VideoLoaderPW:
         else:
             image_tensor = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
 
-        audio_dict = {"waveform": torch.zeros((1, 1, 44100)), "sample_rate": 44100}
+        # 核心修改：检测音频流，无音频则输出 None
+        audio_dict = None
         if len(container.streams.audio) > 0:
             try:
                 audio_stream = container.streams.audio[0]
@@ -348,14 +344,13 @@ class VideoLoaderPW:
             if actual_end_time == float('inf'):
                 g_end_frame = (source_frame_count - 1) if source_frame_count > 0 else int(round(video_duration * fr)) - 1
             else:
-                # 核心修复：Seconds 模式下的 end_frame 推算也要遵循 -1 原则
                 g_end_frame = max(g_start_frame, int(round(actual_end_time * fr)) - 1)
                 
         g_start_frame = max(0, g_start_frame)
         g_end_frame = max(g_start_frame, g_end_frame)
         g_end_local = g_end_frame - g_start_frame
         
-        repeat_end = 0
+        repeat_last_frame_count = 0
 
         def calc_segment(seg_start_local, seg_end_local):
             if seg_end_local < seg_start_local:
@@ -385,16 +380,16 @@ class VideoLoaderPW:
             total_frames = g_end_local + 1
             if align_8n_plus_1 and (total_frames - 1) % 8 != 0:
                 new_total_frames = math.ceil((total_frames - 1) / 8) * 8 + 1
-                repeat_end = new_total_frames - total_frames
+                repeat_last_frame_count = new_total_frames - total_frames
                 
-                if image_tensor is not None and image_tensor.shape[0] > 0 and repeat_end > 0:
+                if image_tensor is not None and image_tensor.shape[0] > 0 and repeat_last_frame_count > 0:
                     last_frame = image_tensor[-1:]
-                    repeat_frames = last_frame.repeat(repeat_end, 1, 1, 1)
+                    repeat_frames = last_frame.repeat(repeat_last_frame_count, 1, 1, 1)
                     image_tensor = torch.cat([image_tensor, repeat_frames], dim=0)
                     
-                if audio_dict and "waveform" in audio_dict and audio_dict["waveform"].shape[-1] > 0 and repeat_end > 0:
+                if audio_dict and "waveform" in audio_dict and audio_dict["waveform"].shape[-1] > 0 and repeat_last_frame_count > 0:
                     sample_rate = audio_dict.get("sample_rate", 44100)
-                    samples_to_add = int(round(repeat_end / fr * sample_rate))
+                    samples_to_add = int(round(repeat_last_frame_count / fr * sample_rate))
                     if samples_to_add > 0:
                         waveform = audio_dict["waveform"]
                         padding = torch.zeros((*waveform.shape[:-1], samples_to_add), dtype=waveform.dtype, device=waveform.device)
@@ -452,7 +447,7 @@ class VideoLoaderPW:
 
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
-            "result": (image_tensor, audio_dict, final_duration_sec, frame_count, float(frame_rate), video_info, split_info_str, repeat_end)
+            "result": (image_tensor, audio_dict, final_duration_sec, frame_count, float(frame_rate), video_info, split_info_str, repeat_last_frame_count)
         }
 
 NODE_CLASS_MAPPINGS = {"VideoLoaderPW": VideoLoaderPW}
