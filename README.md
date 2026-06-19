@@ -58,7 +58,7 @@ Linkage Config中，通过点击右侧加号添加组并设置组的状态。组
 使用分割后，split_info节点将输出分割信息，可使用Video Splitter PW节点进行视频和音频的同步分割。Video Loader PW仅提供分割点的标记信息。
 ### align_8n+1
 开启则将视频强制延长以符合LTX 需要8N+1的效果。
-当它开启并且split_count=0时，将重复复制最后一帧到最后来补全不够的帧，并且repeat_end将输出补全的帧数，可以在生成后用其它节点将这几帧进行切除。
+当它开启并且split_count=0时，将重复复制最后一帧到最后来补全不够的帧，并且repeat_end将输出补全的帧数(差额，最后一帧复制了多少份），可以在生成后用其它节点将这几帧进行切除。
 当split_count大于0也就是开启分割时，当分为两段，则向front段来获取需要的帧数以确保split_generate符合8n+1，而分为三段时，是向back段获取需要的帧数。
 
 可以与[local media manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager)联合使用
