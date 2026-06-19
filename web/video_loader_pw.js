@@ -67,7 +67,6 @@ app.registerExtension({
                 const durationWidget = this.widgets.find((w) => w.name === "duration");
                 const startFrameWidget = this.widgets.find((w) => w.name === "start_frame");
                 const endFrameWidget = this.widgets.find((w) => w.name === "end_frame");
-                const durationFramesWidget = this.widgets.find((w) => w.name === "duration_frames");
                 const cropXWidget = this.widgets.find((w) => w.name === "crop_x");
                 const cropYWidget = this.widgets.find((w) => w.name === "crop_y");
                 const cropWWidget = this.widgets.find((w) => w.name === "crop_w");
@@ -122,7 +121,6 @@ app.registerExtension({
                     setWidgetVisibility(durationWidget, !isFramesMode, "FLOAT");
                     setWidgetVisibility(startFrameWidget, isFramesMode, "INT");
                     setWidgetVisibility(endFrameWidget, isFramesMode, "INT");
-                    setWidgetVisibility(durationFramesWidget, isFramesMode, "INT");
                     setWidgetVisibility(displayModeWidget, false, "combo");
                     setWidgetVisibility(cropXWidget, false, "FLOAT");
                     setWidgetVisibility(cropYWidget, false, "FLOAT");
@@ -163,34 +161,15 @@ app.registerExtension({
                     
                     if (endTimeWidget && endFrameWidget) {
                         if (endTimeWidget.value > 0) {
-                            // 核心修复：0-Based 系统的 end_frame 应该是 round(end_time * fr) - 1
                             let endF = Math.round(endTimeWidget.value * fr) - 1;
                             if (node.accurateFrameCount > 0 && endF >= node.accurateFrameCount) {
                                 endF = node.accurateFrameCount - 1;
+                                endTimeWidget.value = parseFloat((endF / fr).toFixed(3));
                             }
                             endFrameWidget.value = Math.max(0, endF);
                         } else {
                             endFrameWidget.value = 0;
                         }
-                    }
-                    
-                    if (durationWidget && durationFramesWidget) {
-                        let calcDurFrames = Math.round(durationWidget.value * fr);
-                        const startF = parseInt(startFrameWidget.value) || 0;
-                        const endF = parseInt(endFrameWidget.value) || 0;
-                        
-                        let maxDurFrames;
-                        if (endF > 0) {
-                            maxDurFrames = Math.max(0, endF - startF + 1);
-                        } else {
-                            maxDurFrames = Math.max(0, (node.accurateFrameCount || 0) - startF);
-                        }
-                        
-                        if (calcDurFrames > maxDurFrames) {
-                            calcDurFrames = maxDurFrames;
-                            if (durationWidget) durationWidget.value = parseFloat((calcDurFrames / fr).toFixed(3));
-                        }
-                        durationFramesWidget.value = calcDurFrames;
                     }
                     isSyncing = false;
                 };
@@ -217,24 +196,10 @@ app.registerExtension({
                                 endF = node.accurateFrameCount - 1;
                                 endFrameWidget.value = endF;
                             }
-                            // 核心修复：end_time 应该是 (end_frame + 1) / fr
                             endTimeWidget.value = parseFloat(((endF + 1) / fr).toFixed(3));
                         } else {
                             endTimeWidget.value = 0;
                         }
-                    }
-                    
-                    if (durationWidget && durationFramesWidget) {
-                        let calcDur = durationFramesWidget.value / fr;
-                        const startT = parseFloat(startTimeWidget.value) || 0;
-                        const endT = parseFloat(endTimeWidget.value) || 0;
-                        const maxDur = endT > 0 ? Math.max(0, endT - startT) : Math.max(0, (node.accurateDuration || 0) - startT);
-                        
-                        if (calcDur > maxDur) {
-                            calcDur = maxDur;
-                            if (durationFramesWidget) durationFramesWidget.value = Math.round(calcDur * fr);
-                        } 
-                        durationWidget.value = parseFloat(calcDur.toFixed(3));
                     }
                     isSyncing = false;
                 };
@@ -337,7 +302,7 @@ app.registerExtension({
                                 fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
                             
-                            if (info.source_frame_count !== undefined && endFrameWidget && durationFramesWidget) {
+                            if (info.source_frame_count !== undefined && endFrameWidget) {
                                 node.accurateFrameCount = info.source_frame_count;
                                 node.accurateDuration = info.source_duration || 0;
                                 
@@ -345,8 +310,6 @@ app.registerExtension({
                                 
                                 if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
                                     endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
-                                    const startF = parseInt(startFrameWidget.value) || 0;
-                                    durationFramesWidget.value = Math.max(0, (node.accurateFrameCount || 0) - startF);
                                     
                                     if (endTimeWidget) endTimeWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     if (durationWidget) durationWidget.value = parseFloat(info.source_duration.toFixed(3));
@@ -379,7 +342,7 @@ app.registerExtension({
                             if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
-                            if (info.source_frame_count !== undefined && endFrameWidget && durationFramesWidget) {
+                            if (info.source_frame_count !== undefined && endFrameWidget) {
                                 node.accurateFrameCount = info.source_frame_count;
                                 node.accurateDuration = info.source_duration || 0;
                                 
@@ -387,8 +350,6 @@ app.registerExtension({
                                 
                                 if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
                                     endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
-                                    const startF = parseInt(startFrameWidget.value) || 0;
-                                    durationFramesWidget.value = Math.max(0, (node.accurateFrameCount || 0) - startF);
                                     if (endTimeWidget) endTimeWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     if (durationWidget) durationWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     updateRuler();
@@ -1148,39 +1109,6 @@ app.registerExtension({
                     };
                 }
 
-                if (durationFramesWidget) {
-                    const origCallback = durationFramesWidget.callback;
-                    durationFramesWidget.callback = function (v) {
-                        if (isUpdatingDuration || !frameRateWidget) { if (origCallback) origCallback.apply(this, arguments); return; }
-                        isUpdatingDuration = true;
-                        const fr = parseFloat(frameRateWidget.value) || 25.0;
-                        
-                        let d = parseInt(v) || 0;
-                        let s = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
-                        let e = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
-                        
-                        let maxDurFrames = e > 0 ? Math.max(0, e - s + 1) : Math.max(0, (node.accurateFrameCount || 0) - s);
-                        if (d > maxDurFrames) d = maxDurFrames;
-                        if (d < 0) d = 0;
-                        
-                        let newEnd = s + d - 1;
-                        
-                        if (node.accurateFrameCount > 0 && newEnd >= node.accurateFrameCount) {
-                            newEnd = node.accurateFrameCount - 1;
-                            d = newEnd - s + 1;
-                        }
-
-                        if (endFrameWidget) endFrameWidget.value = newEnd >= 0 ? newEnd : 0;
-                        node.syncTimeFromFrames();
-                        
-                        if (duration === 0) updateRuler();
-                        updateUI(true);
-                        app.graph.setDirtyCanvas(true, false);
-                        if (origCallback) origCallback.apply(this, arguments);
-                        isUpdatingDuration = false;
-                    };
-                }
-
                 const updateRuler = () => {
                     timeRuler.innerHTML = '';
                     const activeDur = getActiveDuration();
@@ -1235,7 +1163,6 @@ app.registerExtension({
                     if (duration > 0 && !isUpdatingDuration) {
                         isUpdatingDuration = true;
                         if (durationWidget && durationWidget.value !== currentDur) durationWidget.value = currentDur;
-                        if (durationFramesWidget && durationFramesWidget.value !== Math.round(currentDur * fr)) durationFramesWidget.value = Math.round(currentDur * fr);
                         isUpdatingDuration = false;
                     }
                     if (syncPlayer && duration > 0) videoPreview.currentTime = s;
