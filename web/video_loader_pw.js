@@ -150,13 +150,6 @@ app.registerExtension({
                     if (startTimeWidget && startFrameWidget) {
                         startFrameWidget.value = Math.max(0, Math.round(startTimeWidget.value * fr));
                     }
-                    if (splitPurpleWidget && splitPurpleFrameWidget) {
-                        splitPurpleFrameWidget.value = Math.max(0, Math.round(splitPurpleWidget.value * fr));
-                    }
-                    if (splitGreenWidget && splitGreenFrameWidget) {
-                        splitGreenFrameWidget.value = Math.max(0, Math.round(splitGreenWidget.value * fr));
-                    }
-                    
                     if (endTimeWidget && endFrameWidget) {
                         if (endTimeWidget.value > 0) {
                             let endF = Math.round(endTimeWidget.value * fr) - 1;
@@ -180,13 +173,6 @@ app.registerExtension({
                     if (startTimeWidget && startFrameWidget) {
                         startTimeWidget.value = parseFloat(Math.max(0, startFrameWidget.value / fr).toFixed(3));
                     }
-                    if (splitPurpleWidget && splitPurpleFrameWidget) {
-                        splitPurpleWidget.value = parseFloat(Math.max(0, splitPurpleFrameWidget.value / fr).toFixed(3));
-                    }
-                    if (splitGreenWidget && splitGreenFrameWidget) {
-                        splitGreenWidget.value = parseFloat(Math.max(0, splitGreenFrameWidget.value / fr).toFixed(3));
-                    }
-                    
                     if (endTimeWidget && endFrameWidget) {
                         if (endFrameWidget.value > 0) {
                             let endF = parseInt(endFrameWidget.value);
@@ -230,16 +216,18 @@ app.registerExtension({
                     splitCountWidget.callback = function () {
                         if (orig) orig.apply(this, arguments);
                         const mode = splitCountWidget.value;
-                        if (mode >= 1 && splitPurpleWidget && splitPurpleWidget.value === 0) {
-                            let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
-                            splitPurpleWidget.value = s;
-                            node.syncFramesFromTime();
+                        const fr = parseFloat(frameRateWidget.value) || 25.0;
+                        
+                        if (mode >= 1 && splitPurpleFrameWidget) {
+                            let s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
+                            splitPurpleFrameWidget.value = s_f + 1;
+                            node.syncTimeFromFrames();
                         }
-                        if (mode === 2 && splitGreenWidget && splitGreenWidget.value === 0) {
-                            let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
-                            if (e === 0) e = getActiveDuration();
-                            splitGreenWidget.value = e;
-                            node.syncFramesFromTime();
+                        if (mode === 2 && splitGreenFrameWidget) {
+                            let e_f = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
+                            if (e_f === 0) e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * fr) - 1;
+                            splitGreenFrameWidget.value = e_f - 1;
+                            node.syncTimeFromFrames();
                         }
                         node.toggleWidgetVisibility();
                         updateUI(true);
@@ -783,17 +771,6 @@ app.registerExtension({
                     } else {
                         splitPurpleHandle.style.display = "block";
                         let val = isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value);
-                        let maxVal = sc === 2 ? ((isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value))) : e;
-                        
-                        val = Math.max(s, Math.min(val, maxVal));
-                        
-                        if (isFramesMode) {
-                            let new_f = Math.round(val * fr);
-                            if (splitPurpleFrameWidget.value !== new_f) splitPurpleFrameWidget.value = new_f;
-                        } else {
-                            if (splitPurpleWidget.value !== parseFloat(val.toFixed(3))) splitPurpleWidget.value = parseFloat(val.toFixed(3));
-                        }
-                        
                         const pct = activeDur > 0 ? (val / activeDur) * 100 : 0;
                         splitPurpleHandle.style.left = `${pct}%`;
                     }
@@ -803,17 +780,6 @@ app.registerExtension({
                     } else {
                         splitGreenHandle.style.display = "block";
                         let val = isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value);
-                        let minVal = sc >= 1 ? ((isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value))) : s;
-                        
-                        val = Math.max(minVal, Math.min(val, e));
-                        
-                        if (isFramesMode) {
-                            let new_f = Math.round(val * fr);
-                            if (splitGreenFrameWidget.value !== new_f) splitGreenFrameWidget.value = new_f;
-                        } else {
-                            if (splitGreenWidget.value !== parseFloat(val.toFixed(3))) splitGreenWidget.value = parseFloat(val.toFixed(3));
-                        }
-                        
                         const pct = activeDur > 0 ? (val / activeDur) * 100 : 0;
                         splitGreenHandle.style.left = `${pct}%`;
                     }
@@ -999,23 +965,61 @@ app.registerExtension({
                     if (oldOnRemoved) oldOnRemoved.apply(this, arguments);
                 }
                 
-                const setPurpleVal = (val) => {
+                // 核心修复：使用帧数进行严格的边界 Clamp
+                const setPurpleVal = (val_sec) => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    let p_f = Math.round(val_sec * fr);
+                    
+                    const s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
+                    let e_f = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
+                    if (e_f === 0) e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * fr) - 1;
+                    if (e_f <= s_f) e_f = s_f + 2; // 兜底
+                    
+                    let min_p_f = s_f + 1;
+                    let max_p_f = e_f - 1;
+                    const sc = splitCountWidget ? splitCountWidget.value : 0;
+                    if (sc === 2 && splitGreenFrameWidget) {
+                        const g_f = parseInt(splitGreenFrameWidget.value) || 0;
+                        max_p_f = Math.min(max_p_f, g_f - 1);
+                    }
+                    if (min_p_f > max_p_f) min_p_f = max_p_f;
+                    
+                    p_f = Math.max(min_p_f, Math.min(p_f, max_p_f));
+                    
                     if (isFramesMode) {
-                        splitPurpleFrameWidget.value = Math.round(val * fr);
+                        splitPurpleFrameWidget.value = p_f;
                         node.syncTimeFromFrames();
                     } else {
-                        splitPurpleWidget.value = parseFloat(val.toFixed(3));
+                        splitPurpleWidget.value = parseFloat((p_f / fr).toFixed(3));
                         node.syncFramesFromTime();
                     }
                 };
-                const setGreenVal = (val) => {
+
+                const setGreenVal = (val_sec) => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    let g_f = Math.round(val_sec * fr);
+                    
+                    const s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
+                    let e_f = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
+                    if (e_f === 0) e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * fr) - 1;
+                    if (e_f <= s_f) e_f = s_f + 2;
+                    
+                    let min_g_f = s_f + 1;
+                    let max_g_f = e_f - 1;
+                    const sc = splitCountWidget ? splitCountWidget.value : 0;
+                    if (sc >= 1 && splitPurpleFrameWidget) {
+                        const p_f = parseInt(splitPurpleFrameWidget.value) || 0;
+                        min_g_f = Math.max(min_g_f, p_f + 1);
+                    }
+                    if (min_g_f > max_g_f) min_g_f = max_g_f;
+                    
+                    g_f = Math.max(min_g_f, Math.min(g_f, max_g_f));
+                    
                     if (isFramesMode) {
-                        splitGreenFrameWidget.value = Math.round(val * fr);
+                        splitGreenFrameWidget.value = g_f;
                         node.syncTimeFromFrames();
                     } else {
-                        splitGreenWidget.value = parseFloat(val.toFixed(3));
+                        splitGreenWidget.value = parseFloat((g_f / fr).toFixed(3));
                         node.syncFramesFromTime();
                     }
                 };
@@ -1034,16 +1038,6 @@ app.registerExtension({
                         const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
                         let val = (x / rect.width) * activeDur;
                         
-                        let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
-                        let e_val = endTimeWidget ? parseFloat(endTimeWidget.value) || activeDur : activeDur;
-                        if (e_val === 0) e_val = activeDur;
-                        const sc = splitCountWidget ? splitCountWidget.value : 0;
-                        let maxVal = e_val;
-                        if (sc === 2 && splitGreenWidget) {
-                            maxVal = isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value);
-                        }
-                        val = Math.max(s, Math.min(val, maxVal));
-                        
                         setPurpleVal(val);
                         if (duration > 0) videoPreview.currentTime = val;
                         node.updateSplitHandles();
@@ -1058,17 +1052,6 @@ app.registerExtension({
                         const rect = sliderBox.getBoundingClientRect();
                         const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
                         let val = (x / rect.width) * activeDur;
-                        
-                        let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
-                        let e_val = endTimeWidget ? parseFloat(endTimeWidget.value) || activeDur : activeDur;
-                        if (e_val === 0) e_val = activeDur;
-                        const sc = splitCountWidget ? splitCountWidget.value : 0;
-                        const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
-                        let maxVal = e_val;
-                        if (sc === 2 && splitGreenWidget) {
-                            maxVal = isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value);
-                        }
-                        val = Math.max(s, Math.min(val, maxVal));
                         
                         setPurpleVal(val);
                         if (duration > 0) videoPreview.currentTime = val;
@@ -1097,17 +1080,6 @@ app.registerExtension({
                         const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
                         let val = (x / rect.width) * activeDur;
                         
-                        let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
-                        let e_val = endTimeWidget ? parseFloat(endTimeWidget.value) || activeDur : activeDur;
-                        if (e_val === 0) e_val = activeDur;
-                        const sc = splitCountWidget ? splitCountWidget.value : 0;
-                        const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
-                        let minVal = s;
-                        if (sc >= 1 && splitPurpleWidget) {
-                            minVal = isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value);
-                        }
-                        val = Math.max(minVal, Math.min(val, e_val));
-                        
                         setGreenVal(val);
                         if (duration > 0) videoPreview.currentTime = val;
                         node.updateSplitHandles();
@@ -1122,17 +1094,6 @@ app.registerExtension({
                         const rect = sliderBox.getBoundingClientRect();
                         const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
                         let val = (x / rect.width) * activeDur;
-                        
-                        let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
-                        let e_val = endTimeWidget ? parseFloat(endTimeWidget.value) || activeDur : activeDur;
-                        if (e_val === 0) e_val = activeDur;
-                        const sc = splitCountWidget ? splitCountWidget.value : 0;
-                        const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
-                        let minVal = s;
-                        if (sc >= 1 && splitPurpleWidget) {
-                            minVal = isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value);
-                        }
-                        val = Math.max(minVal, Math.min(val, e_val));
                         
                         setGreenVal(val);
                         if (duration > 0) videoPreview.currentTime = val;
