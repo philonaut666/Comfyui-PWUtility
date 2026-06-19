@@ -58,7 +58,6 @@ app.registerExtension({
                 
                 node.accurateFrameCount = 0;
                 node.accurateDuration = 0;
-                node._lastLoadedVideoPath = ""; // 状态锁：防止重复加载视频
 
                 const videoWidget = this.widgets.find((w) => w.name === "video");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
@@ -152,24 +151,40 @@ app.registerExtension({
                     isSyncing = true;
                     const fr = parseFloat(frameRateWidget.value) || 25.0;
                     
-                    if (startTimeWidget && startFrameWidget) startFrameWidget.value = Math.max(0, Math.round(startTimeWidget.value * fr));
-                    if (splitPurpleWidget && splitPurpleFrameWidget) splitPurpleFrameWidget.value = Math.max(0, Math.round(splitPurpleWidget.value * fr));
-                    if (splitGreenWidget && splitGreenFrameWidget) splitGreenFrameWidget.value = Math.max(0, Math.round(splitGreenWidget.value * fr));
-                    
-                    let calcEndFrame = Math.round(endTimeWidget.value * fr);
-                    if (node.accurateFrameCount > 0 && calcEndFrame > node.accurateFrameCount) {
-                        calcEndFrame = node.accurateFrameCount;
-                        if (endTimeWidget) endTimeWidget.value = parseFloat((calcEndFrame / fr).toFixed(3));
+                    // 1-Based 转换
+                    if (startTimeWidget && startFrameWidget) {
+                        let f = Math.round(startTimeWidget.value * fr) + 1;
+                        startFrameWidget.value = Math.max(1, f);
                     }
-                    if (endTimeWidget && endFrameWidget) endFrameWidget.value = Math.max(0, calcEndFrame);
+                    if (splitPurpleWidget && splitPurpleFrameWidget) {
+                        let f = Math.round(splitPurpleWidget.value * fr) + 1;
+                        splitPurpleFrameWidget.value = Math.max(1, f);
+                    }
+                    if (splitGreenWidget && splitGreenFrameWidget) {
+                        let f = Math.round(splitGreenWidget.value * fr) + 1;
+                        splitGreenFrameWidget.value = Math.max(1, f);
+                    }
+                    
+                    let calcEndFrame_0 = Math.round(endTimeWidget.value * fr);
+                    if (node.accurateFrameCount > 0 && calcEndFrame_0 >= node.accurateFrameCount) {
+                        calcEndFrame_0 = node.accurateFrameCount - 1;
+                        if (endTimeWidget) endTimeWidget.value = parseFloat((calcEndFrame_0 / fr).toFixed(3));
+                    }
+                    if (endTimeWidget && endFrameWidget) {
+                        endFrameWidget.value = endTimeWidget.value > 0 ? calcEndFrame_0 + 1 : 0;
+                    }
                     
                     if (durationWidget && durationFramesWidget) {
-                        const startF = parseInt(startFrameWidget.value) || 0;
+                        let calcDurFrames = Math.round(durationWidget.value * fr);
+                        const startF = parseInt(startFrameWidget.value) || 1;
                         const endF = parseInt(endFrameWidget.value) || 0;
-                        // 【修正1】：帧数 = 结束帧 - 开始帧 + 1
-                        let calcDurFrames = Math.max(0, endF - startF + 1); 
+                        const maxDurFrames = endF > 0 ? Math.max(0, endF - startF + 1) : Math.max(0, Math.round(node.accurateDuration * fr) - startF + 1);
+                        
+                        if (calcDurFrames > maxDurFrames) {
+                            calcDurFrames = maxDurFrames;
+                            if (durationWidget) durationWidget.value = parseFloat((calcDurFrames / fr).toFixed(3));
+                        }
                         durationFramesWidget.value = calcDurFrames;
-                        if (durationWidget) durationWidget.value = parseFloat((calcDurFrames / fr).toFixed(3));
                     }
                     isSyncing = false;
                 };
@@ -179,24 +194,41 @@ app.registerExtension({
                     isSyncing = true;
                     const fr = parseFloat(frameRateWidget.value) || 25.0;
                      
-                    if (startTimeWidget && startFrameWidget) startTimeWidget.value = parseFloat(Math.max(0, startFrameWidget.value / fr).toFixed(3));
-                    if (splitPurpleWidget && splitPurpleFrameWidget) splitPurpleWidget.value = parseFloat(Math.max(0, splitPurpleFrameWidget.value / fr).toFixed(3));
-                    if (splitGreenWidget && splitGreenFrameWidget) splitGreenWidget.value = parseFloat(Math.max(0, splitGreenFrameWidget.value / fr).toFixed(3));
-                    
-                    let calcEndTime = endFrameWidget.value / fr;
-                    if (node.accurateDuration > 0 && calcEndTime > node.accurateDuration) {
-                        calcEndTime = node.accurateDuration;
-                        if (endFrameWidget) endFrameWidget.value = Math.round(calcEndTime * fr);
+                    // 1-Based 转换
+                    if (startTimeWidget && startFrameWidget) {
+                        startTimeWidget.value = parseFloat(Math.max(0, (startFrameWidget.value - 1) / fr).toFixed(3));
                     }
-                    if (endTimeWidget && endFrameWidget) endTimeWidget.value = parseFloat(Math.max(0, calcEndTime).toFixed(3));
+                    if (splitPurpleWidget && splitPurpleFrameWidget) {
+                        splitPurpleWidget.value = parseFloat(Math.max(0, (splitPurpleFrameWidget.value - 1) / fr).toFixed(3));
+                    }
+                    if (splitGreenWidget && splitGreenFrameWidget) {
+                        splitGreenWidget.value = parseFloat(Math.max(0, (splitGreenFrameWidget.value - 1) / fr).toFixed(3));
+                    }
+                    
+                    if (endTimeWidget && endFrameWidget) {
+                        if (endFrameWidget.value > 0) {
+                            let calcEndTime_0 = endFrameWidget.value - 1;
+                            if (node.accurateDuration > 0 && calcEndTime_0 / fr > node.accurateDuration) {
+                                calcEndTime_0 = Math.round(node.accurateDuration * fr) - 1;
+                                endFrameWidget.value = calcEndTime_0 + 1;
+                            }
+                            endTimeWidget.value = parseFloat(Math.max(0, calcEndTime_0 / fr).toFixed(3));
+                        } else {
+                            endTimeWidget.value = 0;
+                        }
+                    }
                     
                     if (durationWidget && durationFramesWidget) {
-                        const startF = parseInt(startFrameWidget.value) || 0;
-                        const endF = parseInt(endFrameWidget.value) || 0;
-                        // 【修正1】：帧数 = 结束帧 - 开始帧 + 1
-                        let calcDurFrames = Math.max(0, endF - startF + 1);
-                        durationFramesWidget.value = calcDurFrames;
-                        durationWidget.value = parseFloat((calcDurFrames / fr).toFixed(3));
+                        let calcDur = durationFramesWidget.value / fr;
+                        const startT = parseFloat(startTimeWidget.value) || 0;
+                        const endT = parseFloat(endTimeWidget.value) || 0;
+                        const maxDur = Math.max(0, endT - startT);
+                        
+                        if (calcDur > maxDur) {
+                            calcDur = maxDur;
+                            if (durationFramesWidget) durationFramesWidget.value = Math.round(calcDur * fr);
+                        } 
+                        durationWidget.value = parseFloat(calcDur.toFixed(3));
                     }
                     isSyncing = false;
                 };
@@ -247,44 +279,40 @@ app.registerExtension({
                     };
                 }
 
+                // 核心修复：加入 URL 查重机制，彻底杜绝参数修改导致的视频重复加载
                 node.updatePreview = function (filename) {
                     if (!filename) return;
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
                     if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
                     else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
-                    if (videoPreview && videoPreview.src !== url) videoPreview.src = url;
+                    
+                    if (videoPreview && videoPreview.src !== url) {
+                        videoPreview.src = url;
+                    }
                 };
 
-                // 【修正2】：增加状态锁，仅在文件路径真正改变时才重新加载视频
                 if (videoWidget) {
                     const originalCallback = videoWidget.callback;
                     videoWidget.callback = function () {
                         if (originalCallback) originalCallback.apply(this, arguments);
-                        const p = this.value;
-                        if (p && p !== node._lastLoadedVideoPath) {
-                            node._lastLoadedVideoPath = p;
-                            if (node.updatePreview) node.updatePreview(p);
-                            if (startTimeWidget) startTimeWidget.value = 0;
-                            if (endTimeWidget) endTimeWidget.value = 0;
-                            if (node.syncFramesFromTime) node.syncFramesFromTime();
-                        }
+                        if (node.updatePreview) node.updatePreview(this.value);
                     };
                 }
 
-                // 【修正2】：增加状态锁，防止外部传入 path 时重复刷新
                 const applyVideoPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
-                    if (p !== node._lastLoadedVideoPath) {
-                        node._lastLoadedVideoPath = p;
-                        if (videoWidget && videoWidget.value !== p) videoWidget.value = p;
+                    const isNewFile = (p !== node._lastLoadedVideoPath);
+                    node._lastLoadedVideoPath = p;
+                    if (videoWidget) videoWidget.value = p;
+                    if (isNewFile) {
                         if (node.updatePreview) node.updatePreview(p);
                         if (startTimeWidget) startTimeWidget.value = 0;
                         if (endTimeWidget) endTimeWidget.value = 0;
+                        if (startFrameWidget) startFrameWidget.value = 1;
+                        if (endFrameWidget) endFrameWidget.value = 0;
                         if (node.syncFramesFromTime) node.syncFramesFromTime();
-                    } else {
-                        if (videoWidget && videoWidget.value !== p) videoWidget.value = p;
                     }
                 };
 
@@ -312,10 +340,10 @@ app.registerExtension({
                                 const currentEndFrame = parseInt(endFrameWidget.value) || 0;
                                 const autoCalcEndFrame = Math.round((info.source_duration || 0) * fr);
                                 
-                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - autoCalcEndFrame) <= 2 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
+                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (autoCalcEndFrame + 1)) <= 2 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
                                     endFrameWidget.value = node.accurateFrameCount;
-                                    const startF = parseInt(startFrameWidget.value) || 0;
-                                    durationFramesWidget.value = Math.max(0, node.accurateFrameCount - startF);
+                                    const startF = parseInt(startFrameWidget.value) || 1;
+                                    durationFramesWidget.value = Math.max(0, node.accurateFrameCount - startF + 1);
                                     
                                     if (endTimeWidget) endTimeWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     if (durationWidget) durationWidget.value = parseFloat(info.source_duration.toFixed(3));
@@ -356,10 +384,10 @@ app.registerExtension({
                                 const fr = info.loaded_fps || parseFloat(frameRateWidget.value) || 25.0;
                                 const autoCalcEndFrame = Math.round((info.source_duration || 0) * fr);
                                 
-                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - autoCalcEndFrame) <= 2 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
+                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (autoCalcEndFrame + 1)) <= 2 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
                                     endFrameWidget.value = node.accurateFrameCount;
-                                    const startF = parseInt(startFrameWidget.value) || 0;
-                                    durationFramesWidget.value = Math.max(0, node.accurateFrameCount - startF);
+                                    const startF = parseInt(startFrameWidget.value) || 1;
+                                    durationFramesWidget.value = Math.max(0, node.accurateFrameCount - startF + 1);
                                     if (endTimeWidget) endTimeWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     if (durationWidget) durationWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     updateRuler();
@@ -385,11 +413,12 @@ app.registerExtension({
                     try {
                         if (errorMsg) errorMsg.style.display = "none";
                         if (file.path) {
-                            node._lastLoadedVideoPath = file.path;
                             videoWidget.value = file.path;
                             node.updatePreview(file.path);
                             if (startTimeWidget) startTimeWidget.value = 0;
                             if (endTimeWidget) endTimeWidget.value = 0;
+                            if (startFrameWidget) startFrameWidget.value = 1;
+                            if (endFrameWidget) endFrameWidget.value = 0;
                             node.syncFramesFromTime();
                             return;
                         }
@@ -414,11 +443,12 @@ app.registerExtension({
                                 if (resp.status !== 200) throw new Error("Chunk upload failed");
                                 if (i === totalChunks - 1) {
                                     const data = await resp.json();
-                                    node._lastLoadedVideoPath = data.name;
                                     videoWidget.value = data.name;
                                     node.updatePreview(data.name);
                                     if (startTimeWidget) startTimeWidget.value = 0;
                                     if (endTimeWidget) endTimeWidget.value = 0;
+                                    if (startFrameWidget) startFrameWidget.value = 1;
+                                    if (endFrameWidget) endFrameWidget.value = 0;
                                     node.syncFramesFromTime();
                                 }
                             }
@@ -429,11 +459,12 @@ app.registerExtension({
                             if (resp.status === 413) throw new Error("File too large.");
                             if (resp.status === 200) {
                                 const data = await resp.json();
-                                node._lastLoadedVideoPath = data.name;
                                 videoWidget.value = data.name;
                                 node.updatePreview(data.name);
                                 if (startTimeWidget) startTimeWidget.value = 0;
                                 if (endTimeWidget) endTimeWidget.value = 0;
+                                if (startFrameWidget) startFrameWidget.value = 1;
+                                if (endFrameWidget) endFrameWidget.value = 0;
                                 node.syncFramesFromTime();
                             } else {
                                 throw new Error(`Upload failed: ${resp.statusText}`);
@@ -803,13 +834,14 @@ app.registerExtension({
                         splitPurpleHandle.style.display = "none";
                     } else {
                         splitPurpleHandle.style.display = "block";
-                        let val = isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value);
-                        let maxVal = sc === 2 ? ((isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value)) - frame_interval) : max_back;
+                        let val = isFramesMode ? ((splitPurpleFrameWidget.value - 1) / fr) : parseFloat(splitPurpleWidget.value);
+                        let maxVal = sc === 2 ? ((isFramesMode ? ((splitGreenFrameWidget.value - 1) / fr) : parseFloat(splitGreenWidget.value)) - frame_interval) : max_back;
                         
                         val = Math.max(min_front, Math.min(val, maxVal));
                         
                         if (isFramesMode) {
-                            if (splitPurpleFrameWidget.value !== Math.round(val * fr)) splitPurpleFrameWidget.value = Math.round(val * fr);
+                            let new_f = Math.round(val * fr) + 1;
+                            if (splitPurpleFrameWidget.value !== new_f) splitPurpleFrameWidget.value = new_f;
                         } else {
                             if (splitPurpleWidget.value !== parseFloat(val.toFixed(3))) splitPurpleWidget.value = parseFloat(val.toFixed(3));
                         }
@@ -822,13 +854,14 @@ app.registerExtension({
                         splitGreenHandle.style.display = "none";
                     } else {
                         splitGreenHandle.style.display = "block";
-                        let val = isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value);
-                        let minVal = sc >= 1 ? ((isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value)) + frame_interval) : min_front;
+                        let val = isFramesMode ? ((splitGreenFrameWidget.value - 1) / fr) : parseFloat(splitGreenWidget.value);
+                        let minVal = sc >= 1 ? ((isFramesMode ? ((splitPurpleFrameWidget.value - 1) / fr) : parseFloat(splitPurpleWidget.value)) + frame_interval) : min_front;
                         
                         val = Math.max(minVal, Math.min(val, max_back));
                         
                         if (isFramesMode) {
-                            if (splitGreenFrameWidget.value !== Math.round(val * fr)) splitGreenFrameWidget.value = Math.round(val * fr);
+                            let new_f = Math.round(val * fr) + 1;
+                            if (splitGreenFrameWidget.value !== new_f) splitGreenFrameWidget.value = new_f;
                         } else {
                             if (splitGreenWidget.value !== parseFloat(val.toFixed(3))) splitGreenWidget.value = parseFloat(val.toFixed(3));
                         }
@@ -1061,7 +1094,7 @@ app.registerExtension({
                 const setPurpleVal = (val) => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     if (isFramesMode) {
-                        splitPurpleFrameWidget.value = Math.round(val * fr);
+                        splitPurpleFrameWidget.value = Math.round(val * fr) + 1;
                         node.syncTimeFromFrames();
                     } else {
                         splitPurpleWidget.value = parseFloat(val.toFixed(3));
@@ -1071,7 +1104,7 @@ app.registerExtension({
                 const setGreenVal = (val) => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     if (isFramesMode) {
-                        splitGreenFrameWidget.value = Math.round(val * fr);
+                        splitGreenFrameWidget.value = Math.round(val * fr) + 1;
                         node.syncTimeFromFrames();
                     } else {
                         splitGreenWidget.value = parseFloat(val.toFixed(3));
@@ -1090,22 +1123,23 @@ app.registerExtension({
                         
                         let d = parseFloat(v) || 0;
                         let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
-                        const fr = parseFloat(frameRateWidget.value) || 25.0;
+                        let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
                         
+                        let maxDur = Math.max(0, e - s);
+                        if (d > maxDur) d = maxDur;
+                        if (d < 0) d = 0;
+                        
+                        let newStart = s;
                         let newEnd = s + d;
+                        
                         if (node.accurateDuration > 0 && newEnd > node.accurateDuration) {
                             newEnd = node.accurateDuration;
+                            newStart = Math.max(0, newEnd - d);
                         }
-                        
-                        if (endTimeWidget) endTimeWidget.value = parseFloat(newEnd.toFixed(3));
-                        
-                        const startF = parseInt(startFrameWidget.value) || 0;
-                        const endF = Math.round(newEnd * fr);
-                        if (endFrameWidget) endFrameWidget.value = endF;
-                        
-                        // 【修正1】：帧数 = 结束帧 - 开始帧 + 1
-                        const calcDurFrames = Math.max(0, endF - startF + 1);
-                        if (durationFramesWidget) durationFramesWidget.value = calcDurFrames;
+
+                        if (startTimeWidget) startTimeWidget.value = parseFloat(newStart.toFixed(2));
+                        if (endTimeWidget) endTimeWidget.value = parseFloat(newEnd.toFixed(2));
+                        node.syncFramesFromTime();
                         
                         if (duration === 0) updateRuler();
                         updateUI(true);
@@ -1122,24 +1156,25 @@ app.registerExtension({
                         isUpdatingDuration = true;
                         const fr = parseFloat(frameRateWidget.value) || 25.0;
                         
-                        let d_frames = parseInt(v) || 0;
-                        if (d_frames < 0) d_frames = 0;
+                        let d = parseInt(v) || 0;
+                        let s = startFrameWidget ? parseInt(startFrameWidget.value) || 1 : 1;
+                        let e = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
                         
-                        let startF = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
-                        // 【修正1】：end_frame = start_frame + duration_frames - 1
-                        let newEndF = startF + d_frames - 1; 
+                        let maxDurFrames = e > 0 ? Math.max(0, e - s + 1) : Math.max(0, Math.round(node.accurateDuration * fr) - s + 1);
+                        if (d > maxDurFrames) d = maxDurFrames;
+                        if (d < 0) d = 0;
                         
-                        if (node.accurateFrameCount > 0 && newEndF >= node.accurateFrameCount) {
-                            newEndF = node.accurateFrameCount - 1;
+                        let newStart = s;
+                        let newEnd = s + d - 1;
+                        
+                        if (node.accurateFrameCount > 0 && newEnd > node.accurateFrameCount) {
+                            newEnd = node.accurateFrameCount;
+                            newStart = Math.max(1, newEnd - d + 1);
                         }
-                        if (newEndF < startF) newEndF = startF;
-                        
-                        if (endFrameWidget) endFrameWidget.value = newEndF;
-                        if (endTimeWidget) endTimeWidget.value = parseFloat((newEndF / fr).toFixed(3));
-                        
-                        const actualDurFrames = Math.max(0, newEndF - startF + 1);
-                        if (durationWidget) durationWidget.value = parseFloat((actualDurFrames / fr).toFixed(3));
-                        if (durationFramesWidget.value !== actualDurFrames) durationFramesWidget.value = actualDurFrames;
+
+                        if (startFrameWidget) startFrameWidget.value = newStart;
+                        if (endFrameWidget) endFrameWidget.value = newEnd > 0 ? newEnd : 0;
+                        node.syncTimeFromFrames();
                         
                         if (duration === 0) updateRuler();
                         updateUI(true);
@@ -1171,7 +1206,8 @@ app.registerExtension({
                         tickWrapper.appendChild(line);
                         if (isMajor) {
                             const label = document.createElement("div");
-                            label.textContent = isFrames ? Math.round(t * fr) : formatTime(t);
+                            // 标尺也采用 1-Based 显示
+                            label.textContent = isFrames ? Math.round(t * fr) + 1 : formatTime(t);
                             tickWrapper.appendChild(label);
                         }
                         timeRuler.appendChild(tickWrapper);
@@ -1202,17 +1238,8 @@ app.registerExtension({
 
                     if (duration > 0 && !isUpdatingDuration) {
                         isUpdatingDuration = true;
-                        const startF = parseInt(startFrameWidget.value) || 0;
-                        const endF = parseInt(endFrameWidget.value) || 0;
-                        // 【修正1】：帧数 = 结束帧 - 开始帧 + 1
-                        const calcDurFrames = Math.max(0, endF - startF + 1);
-                        
-                        if (durationWidget && durationWidget.value !== parseFloat((calcDurFrames / fr).toFixed(3))) {
-                            durationWidget.value = parseFloat((calcDurFrames / fr).toFixed(3));
-                        }
-                        if (durationFramesWidget && durationFramesWidget.value !== calcDurFrames) {
-                            durationFramesWidget.value = calcDurFrames;
-                        }
+                        if (durationWidget && durationWidget.value !== currentDur) durationWidget.value = currentDur;
+                        if (durationFramesWidget && durationFramesWidget.value !== Math.round(currentDur * fr)) durationFramesWidget.value = Math.round(currentDur * fr);
                         isUpdatingDuration = false;
                     }
                     if (syncPlayer && duration > 0) videoPreview.currentTime = s;
@@ -1362,10 +1389,7 @@ app.registerExtension({
                     }
                 });
 
-                if (videoWidget && videoWidget.value) {
-                    node._lastLoadedVideoPath = videoWidget.value;
-                    node.updatePreview(videoWidget.value);
-                }
+                if (videoWidget && videoWidget.value) node.updatePreview(videoWidget.value);
                 return r;
             };
         }
