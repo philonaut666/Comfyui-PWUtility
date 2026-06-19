@@ -163,12 +163,12 @@ app.registerExtension({
                     
                     if (endTimeWidget && endFrameWidget) {
                         if (endTimeWidget.value > 0) {
-                            let endF = Math.round(endTimeWidget.value * fr);
+                            // 核心修复：0-Based 系统的 end_frame 应该是 round(end_time * fr) - 1
+                            let endF = Math.round(endTimeWidget.value * fr) - 1;
                             if (node.accurateFrameCount > 0 && endF >= node.accurateFrameCount) {
                                 endF = node.accurateFrameCount - 1;
-                                endTimeWidget.value = parseFloat((endF / fr).toFixed(3));
                             }
-                            endFrameWidget.value = endF;
+                            endFrameWidget.value = Math.max(0, endF);
                         } else {
                             endFrameWidget.value = 0;
                         }
@@ -217,7 +217,8 @@ app.registerExtension({
                                 endF = node.accurateFrameCount - 1;
                                 endFrameWidget.value = endF;
                             }
-                            endTimeWidget.value = parseFloat((endF / fr).toFixed(3));
+                            // 核心修复：end_time 应该是 (end_frame + 1) / fr
+                            endTimeWidget.value = parseFloat(((endF + 1) / fr).toFixed(3));
                         } else {
                             endTimeWidget.value = 0;
                         }
