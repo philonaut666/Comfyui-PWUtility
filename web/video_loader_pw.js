@@ -151,7 +151,6 @@ app.registerExtension({
                     isSyncing = true;
                     const fr = parseFloat(frameRateWidget.value) || 25.0;
                     
-                    // 1-Based 转换
                     if (startTimeWidget && startFrameWidget) {
                         let f = Math.round(startTimeWidget.value * fr) + 1;
                         startFrameWidget.value = Math.max(1, f);
@@ -165,20 +164,30 @@ app.registerExtension({
                         splitGreenFrameWidget.value = Math.max(1, f);
                     }
                     
-                    let calcEndFrame_0 = Math.round(endTimeWidget.value * fr);
-                    if (node.accurateFrameCount > 0 && calcEndFrame_0 >= node.accurateFrameCount) {
-                        calcEndFrame_0 = node.accurateFrameCount - 1;
-                        if (endTimeWidget) endTimeWidget.value = parseFloat((calcEndFrame_0 / fr).toFixed(3));
-                    }
                     if (endTimeWidget && endFrameWidget) {
-                        endFrameWidget.value = endTimeWidget.value > 0 ? calcEndFrame_0 + 1 : 0;
+                        if (endTimeWidget.value > 0) {
+                            let endF = Math.round(endTimeWidget.value * fr);
+                            if (node.accurateFrameCount > 0 && endF > node.accurateFrameCount) {
+                                endF = node.accurateFrameCount;
+                                endTimeWidget.value = parseFloat((endF / fr).toFixed(3));
+                            }
+                            endFrameWidget.value = endF;
+                        } else {
+                            endFrameWidget.value = 0;
+                        }
                     }
                     
                     if (durationWidget && durationFramesWidget) {
                         let calcDurFrames = Math.round(durationWidget.value * fr);
                         const startF = parseInt(startFrameWidget.value) || 1;
                         const endF = parseInt(endFrameWidget.value) || 0;
-                        const maxDurFrames = endF > 0 ? Math.max(0, endF - startF + 1) : Math.max(0, Math.round(node.accurateDuration * fr) - startF + 1);
+                        
+                        let maxDurFrames;
+                        if (endF > 0) {
+                            maxDurFrames = Math.max(0, endF - startF + 1);
+                        } else {
+                            maxDurFrames = Math.max(0, (node.accurateFrameCount || 0) - startF + 1);
+                        }
                         
                         if (calcDurFrames > maxDurFrames) {
                             calcDurFrames = maxDurFrames;
@@ -194,7 +203,6 @@ app.registerExtension({
                     isSyncing = true;
                     const fr = parseFloat(frameRateWidget.value) || 25.0;
                      
-                    // 1-Based 转换
                     if (startTimeWidget && startFrameWidget) {
                         startTimeWidget.value = parseFloat(Math.max(0, (startFrameWidget.value - 1) / fr).toFixed(3));
                     }
@@ -207,12 +215,12 @@ app.registerExtension({
                     
                     if (endTimeWidget && endFrameWidget) {
                         if (endFrameWidget.value > 0) {
-                            let calcEndTime_0 = endFrameWidget.value - 1;
-                            if (node.accurateDuration > 0 && calcEndTime_0 / fr > node.accurateDuration) {
-                                calcEndTime_0 = Math.round(node.accurateDuration * fr) - 1;
-                                endFrameWidget.value = calcEndTime_0 + 1;
+                            let endF = parseInt(endFrameWidget.value);
+                            if (node.accurateFrameCount > 0 && endF > node.accurateFrameCount) {
+                                endF = node.accurateFrameCount;
+                                endFrameWidget.value = endF;
                             }
-                            endTimeWidget.value = parseFloat(Math.max(0, calcEndTime_0 / fr).toFixed(3));
+                            endTimeWidget.value = parseFloat((endF / fr).toFixed(3));
                         } else {
                             endTimeWidget.value = 0;
                         }
@@ -222,7 +230,7 @@ app.registerExtension({
                         let calcDur = durationFramesWidget.value / fr;
                         const startT = parseFloat(startTimeWidget.value) || 0;
                         const endT = parseFloat(endTimeWidget.value) || 0;
-                        const maxDur = Math.max(0, endT - startT);
+                        const maxDur = endT > 0 ? Math.max(0, endT - startT) : Math.max(0, (node.accurateDuration || 0) - startT);
                         
                         if (calcDur > maxDur) {
                             calcDur = maxDur;
@@ -279,7 +287,6 @@ app.registerExtension({
                     };
                 }
 
-                // 核心修复：加入 URL 查重机制，彻底杜绝参数修改导致的视频重复加载
                 node.updatePreview = function (filename) {
                     if (!filename) return;
                     let url;
@@ -336,11 +343,9 @@ app.registerExtension({
                                 node.accurateFrameCount = info.source_frame_count;
                                 node.accurateDuration = info.source_duration || 0;
                                 
-                                const fr = info.loaded_fps || parseFloat(frameRateWidget.value) || 25.0;
                                 const currentEndFrame = parseInt(endFrameWidget.value) || 0;
-                                const autoCalcEndFrame = Math.round((info.source_duration || 0) * fr);
                                 
-                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (autoCalcEndFrame + 1)) <= 2 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
+                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
                                     endFrameWidget.value = node.accurateFrameCount;
                                     const startF = parseInt(startFrameWidget.value) || 1;
                                     durationFramesWidget.value = Math.max(0, node.accurateFrameCount - startF + 1);
@@ -381,10 +386,8 @@ app.registerExtension({
                                 node.accurateDuration = info.source_duration || 0;
                                 
                                 const currentEndFrame = parseInt(endFrameWidget.value) || 0;
-                                const fr = info.loaded_fps || parseFloat(frameRateWidget.value) || 25.0;
-                                const autoCalcEndFrame = Math.round((info.source_duration || 0) * fr);
                                 
-                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (autoCalcEndFrame + 1)) <= 2 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
+                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
                                     endFrameWidget.value = node.accurateFrameCount;
                                     const startF = parseInt(startFrameWidget.value) || 1;
                                     durationFramesWidget.value = Math.max(0, node.accurateFrameCount - startF + 1);
@@ -1125,20 +1128,18 @@ app.registerExtension({
                         let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
                         let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
                         
-                        let maxDur = Math.max(0, e - s);
+                        let maxDur = e > 0 ? Math.max(0, e - s) : Math.max(0, (node.accurateDuration || 0) - s);
                         if (d > maxDur) d = maxDur;
                         if (d < 0) d = 0;
                         
-                        let newStart = s;
                         let newEnd = s + d;
                         
                         if (node.accurateDuration > 0 && newEnd > node.accurateDuration) {
                             newEnd = node.accurateDuration;
-                            newStart = Math.max(0, newEnd - d);
+                            d = newEnd - s;
                         }
 
-                        if (startTimeWidget) startTimeWidget.value = parseFloat(newStart.toFixed(2));
-                        if (endTimeWidget) endTimeWidget.value = parseFloat(newEnd.toFixed(2));
+                        if (endTimeWidget) endTimeWidget.value = parseFloat(newEnd.toFixed(3));
                         node.syncFramesFromTime();
                         
                         if (duration === 0) updateRuler();
@@ -1160,19 +1161,17 @@ app.registerExtension({
                         let s = startFrameWidget ? parseInt(startFrameWidget.value) || 1 : 1;
                         let e = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
                         
-                        let maxDurFrames = e > 0 ? Math.max(0, e - s + 1) : Math.max(0, Math.round(node.accurateDuration * fr) - s + 1);
+                        let maxDurFrames = e > 0 ? Math.max(0, e - s + 1) : Math.max(0, (node.accurateFrameCount || 0) - s + 1);
                         if (d > maxDurFrames) d = maxDurFrames;
                         if (d < 0) d = 0;
                         
-                        let newStart = s;
                         let newEnd = s + d - 1;
                         
                         if (node.accurateFrameCount > 0 && newEnd > node.accurateFrameCount) {
                             newEnd = node.accurateFrameCount;
-                            newStart = Math.max(1, newEnd - d + 1);
+                            d = newEnd - s + 1;
                         }
 
-                        if (startFrameWidget) startFrameWidget.value = newStart;
                         if (endFrameWidget) endFrameWidget.value = newEnd > 0 ? newEnd : 0;
                         node.syncTimeFromFrames();
                         
@@ -1206,7 +1205,6 @@ app.registerExtension({
                         tickWrapper.appendChild(line);
                         if (isMajor) {
                             const label = document.createElement("div");
-                            // 标尺也采用 1-Based 显示
                             label.textContent = isFrames ? Math.round(t * fr) + 1 : formatTime(t);
                             tickWrapper.appendChild(label);
                         }
