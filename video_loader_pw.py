@@ -151,7 +151,7 @@ class VideoLoaderPW:
         
         if display_mode == "frames":
             actual_start_time = float(s_frame_0) / fr
-            actual_end_time = float(e_frame_0) / fr if e_frame_0 > 0 else video_duration
+            actual_end_time = float(e_frame_0 + 1) / fr if e_frame_0 > 0 else video_duration
         else:
             actual_start_time = start_time
             actual_end_time = end_time if (end_time > 0 and end_time > start_time) else video_duration
@@ -197,10 +197,11 @@ class VideoLoaderPW:
                 if frame_time is None:
                     frame_time = float(frame.pts * float(video_stream.time_base)) if frame.pts and video_stream.time_base else 0.0
 
-                if frame_time < actual_start_time:
+                if frame_time < actual_start_time - 1e-5:
                     continue
                     
-                if frame_time > actual_end_time + frame_interval: 
+                # 核心修复：使用严格的右边界判断，杜绝多提取一帧
+                if actual_end_time != float('inf') and frame_time >= actual_end_time - 1e-5: 
                     break
                     
                 try:
@@ -218,7 +219,10 @@ class VideoLoaderPW:
                 if manual_crop_left > 0 or manual_crop_top > 0 or manual_crop_right > 0 or manual_crop_bottom > 0:
                     frame_rgb = frame_rgb[manual_crop_top:orig_h-manual_crop_bottom, manual_crop_left:orig_w-manual_crop_right, :]
                 
-                while expected_target_time <= frame_time + 1e-5 and expected_target_time <= actual_end_time + 1e-5:
+                while expected_target_time <= frame_time + 1e-5:
+                    if actual_end_time != float('inf') and expected_target_time >= actual_end_time - 1e-5:
+                        break
+                        
                     if target_frame_count >= 0 and frames_loaded >= target_frame_count:
                         break
                         
@@ -344,7 +348,8 @@ class VideoLoaderPW:
             if actual_end_time == float('inf'):
                 g_end_frame = (source_frame_count - 1) if source_frame_count > 0 else int(round(video_duration * fr)) - 1
             else:
-                g_end_frame = int(round(actual_end_time * fr))
+                # 核心修复：Seconds 模式下的 end_frame 推算也要遵循 -1 原则
+                g_end_frame = max(g_start_frame, int(round(actual_end_time * fr)) - 1)
                 
         g_start_frame = max(0, g_start_frame)
         g_end_frame = max(g_start_frame, g_end_frame)
