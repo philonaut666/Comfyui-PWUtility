@@ -44,6 +44,23 @@ Linkage Config中，通过点击右侧加号添加组并设置组的状态。组
 - crop：先按照比例进行缩放到外圈覆盖目标尺寸，然后根据crop_position计算裁剪起始坐标 x 和 y，从而精准切出目标画面。left和right只适用于横向图片，用于纵向图片和center效果一样。top和bottom只针对纵向图片。
 
 ## Video Loader PW
+用于加载视频，并包含视频长度调整，视频分割标记等功能。
+### 预览窗口
+预览窗口中，可以用蓝色滑块切掉视频前段和后端，显示time,frames, 源视频的fps以及crop。
+- crop可以对视频进行画面裁切，点击开始显示蓝色，并进行crop操作，再次点击恢复白色，crop无效。
+### Split_count
+对视频(包括音频）进行分割。
+- 0不开启。
+- 1为添加一个分割点也就是视频分割为两段。此时会在预览窗口的时间轴上添加紫色滑块，用于设定精确的分割点。
+- 2为添加两个分割点，就是视频分割为三段，此时会在预览窗口的时间轴上多添加一个绿色滑块。
+紫色左侧的视频段会被标记为split_front，紫色和绿色中间的视频段会被标记为split_generate, 绿色滑块右边的视频段会被标记为split_back。
+分割点的这一帧属于其右侧这段视频，是作为首帧的。
+使用分割后，split_info节点将输出分割信息，可使用Video Splitter PW节点进行视频和音频的同步分割。Video Loader PW仅提供分割点的标记信息。
+### align_8n+1
+开启则将视频强制延长以符合LTX 需要8N+1的效果。
+当它开启并且split_count=0时，将重复复制最后一帧到最后来补全不够的帧，并且repeat_end将输出补全的帧数，可以在生成后用其它节点将这几帧进行切除。
+当split_count大于0也就是开启分割时，当分为两段，则向front段来获取需要的帧数以确保split_generate符合8n+1，而分为三段时，是向back段获取需要的帧数。
+
 可以与[local media manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager)联合使用
 
 ## Audio Loader PW
