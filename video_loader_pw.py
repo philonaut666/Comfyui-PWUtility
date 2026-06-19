@@ -148,7 +148,7 @@ class VideoLoaderPW:
         
         if display_mode == "frames":
             actual_start_time = float(start_frame) / fr
-            actual_end_time = float(end_frame) / fr if (end_frame > 0 and end_frame > start_frame) else video_duration
+            actual_end_time = float(end_frame) / fr if (end_frame >= 0 and end_frame >= start_frame) else video_duration
         else:
             actual_start_time = start_time
             actual_end_time = end_time if (end_time > 0 and end_time > start_time) else video_duration
@@ -207,9 +207,7 @@ class VideoLoaderPW:
                 if manual_crop_left > 0 or manual_crop_top > 0 or manual_crop_right > 0 or manual_crop_bottom > 0:
                     frame_rgb = frame_rgb[manual_crop_top:orig_h-manual_crop_bottom, manual_crop_left:orig_w-manual_crop_right, :]
                 
-                # 【修复 1】：将 <= actual_end_time + 1e-5 改为 < actual_end_time - 1e-5
-                # 使 end_frame/end_time 成为 Exclusive (不包含) 边界，确保 frame_count 严格等于 duration_frames
-                while expected_target_time <= frame_time + 1e-5 and expected_target_time < actual_end_time - 1e-5:
+                while expected_target_time <= frame_time + 1e-5 and expected_target_time <= actual_end_time + 1e-5:
                     if image_tensor is None and expected_frames > 0:
                         height, width = frame_rgb.shape[:2]
                         alloc_frames = expected_frames + 50
@@ -302,10 +300,12 @@ class VideoLoaderPW:
 
         container.close()
         
-        final_duration_sec = round(float(max(0.0, actual_end_time - actual_start_time)), 2)
+        # 【修正1】：严格基于实际提取的帧数计算时长，确保 duration_frames = end - start + 1 的逻辑闭环
         frame_count = image_tensor.shape[0] if (frames_loaded > 0 or len(frames) > 0) else 0
-        if frame_count == 0 and final_duration_sec > 0:
-            frame_count = int(np.floor(final_duration_sec * fr))
+        if frame_count > 0:
+            final_duration_sec = round(frame_count / fr, 2)
+        else:
+            final_duration_sec = round(float(max(0.0, actual_end_time - actual_start_time)), 2)
 
         loaded_h = int(image_tensor.shape[1]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
         loaded_w = int(image_tensor.shape[2]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
