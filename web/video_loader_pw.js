@@ -152,23 +152,20 @@ app.registerExtension({
                     const fr = parseFloat(frameRateWidget.value) || 25.0;
                     
                     if (startTimeWidget && startFrameWidget) {
-                        let f = Math.round(startTimeWidget.value * fr) + 1;
-                        startFrameWidget.value = Math.max(1, f);
+                        startFrameWidget.value = Math.max(0, Math.round(startTimeWidget.value * fr));
                     }
                     if (splitPurpleWidget && splitPurpleFrameWidget) {
-                        let f = Math.round(splitPurpleWidget.value * fr) + 1;
-                        splitPurpleFrameWidget.value = Math.max(1, f);
+                        splitPurpleFrameWidget.value = Math.max(0, Math.round(splitPurpleWidget.value * fr));
                     }
                     if (splitGreenWidget && splitGreenFrameWidget) {
-                        let f = Math.round(splitGreenWidget.value * fr) + 1;
-                        splitGreenFrameWidget.value = Math.max(1, f);
+                        splitGreenFrameWidget.value = Math.max(0, Math.round(splitGreenWidget.value * fr));
                     }
                     
                     if (endTimeWidget && endFrameWidget) {
                         if (endTimeWidget.value > 0) {
                             let endF = Math.round(endTimeWidget.value * fr);
-                            if (node.accurateFrameCount > 0 && endF > node.accurateFrameCount) {
-                                endF = node.accurateFrameCount;
+                            if (node.accurateFrameCount > 0 && endF >= node.accurateFrameCount) {
+                                endF = node.accurateFrameCount - 1;
                                 endTimeWidget.value = parseFloat((endF / fr).toFixed(3));
                             }
                             endFrameWidget.value = endF;
@@ -179,14 +176,14 @@ app.registerExtension({
                     
                     if (durationWidget && durationFramesWidget) {
                         let calcDurFrames = Math.round(durationWidget.value * fr);
-                        const startF = parseInt(startFrameWidget.value) || 1;
+                        const startF = parseInt(startFrameWidget.value) || 0;
                         const endF = parseInt(endFrameWidget.value) || 0;
                         
                         let maxDurFrames;
                         if (endF > 0) {
                             maxDurFrames = Math.max(0, endF - startF + 1);
                         } else {
-                            maxDurFrames = Math.max(0, (node.accurateFrameCount || 0) - startF + 1);
+                            maxDurFrames = Math.max(0, (node.accurateFrameCount || 0) - startF);
                         }
                         
                         if (calcDurFrames > maxDurFrames) {
@@ -204,20 +201,20 @@ app.registerExtension({
                     const fr = parseFloat(frameRateWidget.value) || 25.0;
                      
                     if (startTimeWidget && startFrameWidget) {
-                        startTimeWidget.value = parseFloat(Math.max(0, (startFrameWidget.value - 1) / fr).toFixed(3));
+                        startTimeWidget.value = parseFloat(Math.max(0, startFrameWidget.value / fr).toFixed(3));
                     }
                     if (splitPurpleWidget && splitPurpleFrameWidget) {
-                        splitPurpleWidget.value = parseFloat(Math.max(0, (splitPurpleFrameWidget.value - 1) / fr).toFixed(3));
+                        splitPurpleWidget.value = parseFloat(Math.max(0, splitPurpleFrameWidget.value / fr).toFixed(3));
                     }
                     if (splitGreenWidget && splitGreenFrameWidget) {
-                        splitGreenWidget.value = parseFloat(Math.max(0, (splitGreenFrameWidget.value - 1) / fr).toFixed(3));
+                        splitGreenWidget.value = parseFloat(Math.max(0, splitGreenFrameWidget.value / fr).toFixed(3));
                     }
                     
                     if (endTimeWidget && endFrameWidget) {
                         if (endFrameWidget.value > 0) {
                             let endF = parseInt(endFrameWidget.value);
-                            if (node.accurateFrameCount > 0 && endF > node.accurateFrameCount) {
-                                endF = node.accurateFrameCount;
+                            if (node.accurateFrameCount > 0 && endF >= node.accurateFrameCount) {
+                                endF = node.accurateFrameCount - 1;
                                 endFrameWidget.value = endF;
                             }
                             endTimeWidget.value = parseFloat((endF / fr).toFixed(3));
@@ -317,7 +314,7 @@ app.registerExtension({
                         if (node.updatePreview) node.updatePreview(p);
                         if (startTimeWidget) startTimeWidget.value = 0;
                         if (endTimeWidget) endTimeWidget.value = 0;
-                        if (startFrameWidget) startFrameWidget.value = 1;
+                        if (startFrameWidget) startFrameWidget.value = 0;
                         if (endFrameWidget) endFrameWidget.value = 0;
                         if (node.syncFramesFromTime) node.syncFramesFromTime();
                     }
@@ -345,10 +342,10 @@ app.registerExtension({
                                 
                                 const currentEndFrame = parseInt(endFrameWidget.value) || 0;
                                 
-                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
-                                    endFrameWidget.value = node.accurateFrameCount;
-                                    const startF = parseInt(startFrameWidget.value) || 1;
-                                    durationFramesWidget.value = Math.max(0, node.accurateFrameCount - startF + 1);
+                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
+                                    endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                                    const startF = parseInt(startFrameWidget.value) || 0;
+                                    durationFramesWidget.value = Math.max(0, (node.accurateFrameCount || 0) - startF);
                                     
                                     if (endTimeWidget) endTimeWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     if (durationWidget) durationWidget.value = parseFloat(info.source_duration.toFixed(3));
@@ -387,10 +384,10 @@ app.registerExtension({
                                 
                                 const currentEndFrame = parseInt(endFrameWidget.value) || 0;
                                 
-                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - node.accurateFrameCount) <= 1) {
-                                    endFrameWidget.value = node.accurateFrameCount;
-                                    const startF = parseInt(startFrameWidget.value) || 1;
-                                    durationFramesWidget.value = Math.max(0, node.accurateFrameCount - startF + 1);
+                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
+                                    endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                                    const startF = parseInt(startFrameWidget.value) || 0;
+                                    durationFramesWidget.value = Math.max(0, (node.accurateFrameCount || 0) - startF);
                                     if (endTimeWidget) endTimeWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     if (durationWidget) durationWidget.value = parseFloat(info.source_duration.toFixed(3));
                                     updateRuler();
@@ -420,7 +417,7 @@ app.registerExtension({
                             node.updatePreview(file.path);
                             if (startTimeWidget) startTimeWidget.value = 0;
                             if (endTimeWidget) endTimeWidget.value = 0;
-                            if (startFrameWidget) startFrameWidget.value = 1;
+                            if (startFrameWidget) startFrameWidget.value = 0;
                             if (endFrameWidget) endFrameWidget.value = 0;
                             node.syncFramesFromTime();
                             return;
@@ -450,7 +447,7 @@ app.registerExtension({
                                     node.updatePreview(data.name);
                                     if (startTimeWidget) startTimeWidget.value = 0;
                                     if (endTimeWidget) endTimeWidget.value = 0;
-                                    if (startFrameWidget) startFrameWidget.value = 1;
+                                    if (startFrameWidget) startFrameWidget.value = 0;
                                     if (endFrameWidget) endFrameWidget.value = 0;
                                     node.syncFramesFromTime();
                                 }
@@ -466,7 +463,7 @@ app.registerExtension({
                                 node.updatePreview(data.name);
                                 if (startTimeWidget) startTimeWidget.value = 0;
                                 if (endTimeWidget) endTimeWidget.value = 0;
-                                if (startFrameWidget) startFrameWidget.value = 1;
+                                if (startFrameWidget) startFrameWidget.value = 0;
                                 if (endFrameWidget) endFrameWidget.value = 0;
                                 node.syncFramesFromTime();
                             } else {
@@ -837,13 +834,13 @@ app.registerExtension({
                         splitPurpleHandle.style.display = "none";
                     } else {
                         splitPurpleHandle.style.display = "block";
-                        let val = isFramesMode ? ((splitPurpleFrameWidget.value - 1) / fr) : parseFloat(splitPurpleWidget.value);
-                        let maxVal = sc === 2 ? ((isFramesMode ? ((splitGreenFrameWidget.value - 1) / fr) : parseFloat(splitGreenWidget.value)) - frame_interval) : max_back;
+                        let val = isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value);
+                        let maxVal = sc === 2 ? ((isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value)) - frame_interval) : max_back;
                         
                         val = Math.max(min_front, Math.min(val, maxVal));
                         
                         if (isFramesMode) {
-                            let new_f = Math.round(val * fr) + 1;
+                            let new_f = Math.round(val * fr);
                             if (splitPurpleFrameWidget.value !== new_f) splitPurpleFrameWidget.value = new_f;
                         } else {
                             if (splitPurpleWidget.value !== parseFloat(val.toFixed(3))) splitPurpleWidget.value = parseFloat(val.toFixed(3));
@@ -857,13 +854,13 @@ app.registerExtension({
                         splitGreenHandle.style.display = "none";
                     } else {
                         splitGreenHandle.style.display = "block";
-                        let val = isFramesMode ? ((splitGreenFrameWidget.value - 1) / fr) : parseFloat(splitGreenWidget.value);
-                        let minVal = sc >= 1 ? ((isFramesMode ? ((splitPurpleFrameWidget.value - 1) / fr) : parseFloat(splitPurpleWidget.value)) + frame_interval) : min_front;
+                        let val = isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value);
+                        let minVal = sc >= 1 ? ((isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value)) + frame_interval) : min_front;
                         
                         val = Math.max(minVal, Math.min(val, max_back));
                         
                         if (isFramesMode) {
-                            let new_f = Math.round(val * fr) + 1;
+                            let new_f = Math.round(val * fr);
                             if (splitGreenFrameWidget.value !== new_f) splitGreenFrameWidget.value = new_f;
                         } else {
                             if (splitGreenWidget.value !== parseFloat(val.toFixed(3))) splitGreenWidget.value = parseFloat(val.toFixed(3));
@@ -1097,7 +1094,7 @@ app.registerExtension({
                 const setPurpleVal = (val) => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     if (isFramesMode) {
-                        splitPurpleFrameWidget.value = Math.round(val * fr) + 1;
+                        splitPurpleFrameWidget.value = Math.round(val * fr);
                         node.syncTimeFromFrames();
                     } else {
                         splitPurpleWidget.value = parseFloat(val.toFixed(3));
@@ -1107,7 +1104,7 @@ app.registerExtension({
                 const setGreenVal = (val) => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     if (isFramesMode) {
-                        splitGreenFrameWidget.value = Math.round(val * fr) + 1;
+                        splitGreenFrameWidget.value = Math.round(val * fr);
                         node.syncTimeFromFrames();
                     } else {
                         splitGreenWidget.value = parseFloat(val.toFixed(3));
@@ -1158,21 +1155,21 @@ app.registerExtension({
                         const fr = parseFloat(frameRateWidget.value) || 25.0;
                         
                         let d = parseInt(v) || 0;
-                        let s = startFrameWidget ? parseInt(startFrameWidget.value) || 1 : 1;
+                        let s = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
                         let e = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
                         
-                        let maxDurFrames = e > 0 ? Math.max(0, e - s + 1) : Math.max(0, (node.accurateFrameCount || 0) - s + 1);
+                        let maxDurFrames = e > 0 ? Math.max(0, e - s + 1) : Math.max(0, (node.accurateFrameCount || 0) - s);
                         if (d > maxDurFrames) d = maxDurFrames;
                         if (d < 0) d = 0;
                         
                         let newEnd = s + d - 1;
                         
-                        if (node.accurateFrameCount > 0 && newEnd > node.accurateFrameCount) {
-                            newEnd = node.accurateFrameCount;
+                        if (node.accurateFrameCount > 0 && newEnd >= node.accurateFrameCount) {
+                            newEnd = node.accurateFrameCount - 1;
                             d = newEnd - s + 1;
                         }
 
-                        if (endFrameWidget) endFrameWidget.value = newEnd > 0 ? newEnd : 0;
+                        if (endFrameWidget) endFrameWidget.value = newEnd >= 0 ? newEnd : 0;
                         node.syncTimeFromFrames();
                         
                         if (duration === 0) updateRuler();
@@ -1205,7 +1202,7 @@ app.registerExtension({
                         tickWrapper.appendChild(line);
                         if (isMajor) {
                             const label = document.createElement("div");
-                            label.textContent = isFrames ? Math.round(t * fr) + 1 : formatTime(t);
+                            label.textContent = isFrames ? Math.round(t * fr) : formatTime(t);
                             tickWrapper.appendChild(label);
                         }
                         timeRuler.appendChild(tickWrapper);
