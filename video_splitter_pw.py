@@ -10,8 +10,8 @@ class VideoSplitterPW:
                 "audio": ("AUDIO",),
                 "fps": ("FLOAT", {"default": 25.000, "min": 0.001, "max": 1000.0, "step": 0.001, "tooltip": "FPS used for frame-to-time conversion to align audio."}),
                 "split_count": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Front only, 2: Front & Back"}),
-                "split_front_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
-                "split_back_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
+                "split_front_point_frame": ("INT", {"default": 1, "min": 1, "max": 10000000, "step": 1, "tooltip": "First frame of the Generate/Back segment."}),
+                "split_back_point_frame": ("INT", {"default": 1, "min": 1, "max": 10000000, "step": 1, "tooltip": "First frame of the Back segment."}),
             },
             "optional": {
                 "split_info": ("STRING", {"forceInput": True, "tooltip": "Connect from Video Loader PW to auto split."}),
@@ -28,11 +28,12 @@ class VideoSplitterPW:
         total_frames = images.shape[0]
         waveform = audio.get("waveform") if audio else None
         sample_rate = audio.get("sample_rate", 44100) if audio else 44100
+        end_frame_idx = max(0, total_frames - 1)
         
         # 1. 定义空段占位符生成器 (防止下游节点因 0 帧报错)
         def get_empty_segment():
             empty_img = torch.zeros((1, images.shape[1], images.shape[2], images.shape[3]), dtype=images.dtype)
-            samples_1f = max(1, int(round((1.0 / fps) * sample_rate)))
+            samples_1f = max(1, int(round((1.0 / fps) * sample_rate))) if fps > 0 else 1
             empty_aud = {"waveform": torch.zeros((1, 1, samples_1f)), "sample_rate": sample_rate}
             return empty_img, empty_aud, 0
 
@@ -60,9 +61,9 @@ class VideoSplitterPW:
 
             if "split_generate" in info:
                 gen_start = info["split_generate"].get("start_frame", 0)
-                gen_end = info["split_generate"].get("end_frame", total_frames - 1)
+                gen_end = info["split_generate"].get("end_frame", end_frame_idx)
             else:
-                gen_start, gen_end = 0, total_frames - 1
+                gen_start, gen_end = 0, end_frame_idx
 
             if "split_back" in info:
                 back_start = info["split_back"].get("start_frame", 0)
@@ -77,17 +78,30 @@ class VideoSplitterPW:
                 img_f, aud_f, cnt_f = get_empty_segment()
                 img_b, aud_b, cnt_b = get_empty_segment()
                 return (images, audio, total_frames, img_f, aud_f, cnt_f, img_b, aud_b, cnt_b)
+                
             elif split_count == 1:
                 p = split_front_point_frame
+                # 边界限制：不可小于1，不可大于视频的结束帧
+                p = max(1, min(p, end_frame_idx))
+                
+                # 分割点 p 属于 split_generate 的首帧
                 front_start, front_end = 0, p - 1
-                gen_start, gen_end = p, total_frames - 1
+                gen_start, gen_end = p, end_frame_idx
                 back_start, back_end = 0, -1
+                
             elif split_count == 2:
                 p = split_front_point_frame
                 g = split_back_point_frame
+                
+                # 边界限制：p 不可小于1，不可大于结束帧
+                p = max(1, min(p, end_frame_idx))
+                # 边界限制：g 不可小于 p，不可大于结束帧
+                g = max(p, min(g, end_frame_idx))
+                
+                # 分割点 p 是 generate 首帧，g 是 back 首帧
                 front_start, front_end = 0, p - 1
                 gen_start, gen_end = p, g - 1
-                back_start, back_end = g, total_frames - 1
+                back_start, back_end = g, end_frame_idx
 
         # 5. 核心切分函数 (音画严格对齐，保持两位小数精度)
         def slice_segment(start_f, end_f):
@@ -95,7 +109,7 @@ class VideoSplitterPW:
                 return get_empty_segment()
                 
             s = max(0, start_f)
-            e = min(end_f, total_frames - 1)
+            e = min(end_f, end_frame_idx)
             
             seg_imgs = images[s : e + 1]
             frames = seg_imgs.shape[0]
