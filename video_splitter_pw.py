@@ -10,8 +10,8 @@ class VideoSplitterPW:
                 "audio": ("AUDIO",),
                 "fps": ("FLOAT", {"default": 25.000, "min": 0.001, "max": 1000.0, "step": 0.001, "tooltip": "FPS used for frame-to-time conversion to align audio."}),
                 "split_count": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Front only, 2: Front & Back"}),
-                "split_front_point_frame": ("INT", {"default": 1, "min": 1, "max": 10000000, "step": 1, "tooltip": "First frame of the Generate segment."}),
-                "split_back_point_frame": ("INT", {"default": 2, "min": 2, "max": 10000000, "step": 1, "tooltip": "First frame of the Back segment. If equal to last frame, splits into 2 segments only."}),
+                "split_front_point_frame": ("INT", {"default": 1, "min": 0, "max": 10000000, "step": 1, "tooltip": "First frame of the Generate segment."}),
+                "split_back_point_frame": ("INT", {"default": 2, "min": 0, "max": 10000000, "step": 1, "tooltip": "First frame of the Back segment."}),
             },
             "optional": {
                 "split_info": ("STRING", {"forceInput": True, "tooltip": "Connect from Video Loader PW to auto split."}),
@@ -81,8 +81,12 @@ class VideoSplitterPW:
                 
             elif split_count == 1:
                 p = split_front_point_frame
-                # 边界限制：不可小于1，不可大于视频的结束帧
-                p = max(1, min(p, end_frame_idx))
+                
+                # 【严格边界约束检查】
+                if p < 1:
+                    raise ValueError(f"边界约束违反: split_front_point_frame ({p}) 不可小于 1。")
+                if p > end_frame_idx:
+                    raise ValueError(f"边界约束违反: split_front_point_frame ({p}) 不可大于视频最后一帧的索引 ({end_frame_idx})。")
                 
                 # 分割点 p 属于 split_generate 的首帧
                 front_start, front_end = 0, p - 1
@@ -93,37 +97,24 @@ class VideoSplitterPW:
                 p = split_front_point_frame
                 g = split_back_point_frame
                 
-                # 【边界限制】：g 最大允许等于视频的最后一帧 index
-                g = min(g, end_frame_idx)
+                # 【严格边界约束检查】
+                if p < 1:
+                    raise ValueError(f"边界约束违反: split_front_point_frame ({p}) 不可小于 1。")
+                if g <= p:
+                    raise ValueError(f"边界约束违反: split_back_point_frame ({g}) 必须严格大于 split_front_point_frame ({p})。")
+                if g > end_frame_idx:
+                    raise ValueError(f"边界约束违反: split_back_point_frame ({g}) 不可大于视频最后一帧的索引 ({end_frame_idx})。")
                 
                 if g == end_frame_idx:
-                    # 【情况 A】：当 g 等于最后一帧时，忽略 g 的计算，退化为只被 p 分为两段
-                    p = max(1, min(p, end_frame_idx))
+                    # 当 g 等于最后一帧时，忽略 g 的计算，退化为只被 p 分为两段
                     front_start, front_end = 0, p - 1
                     gen_start, gen_end = p, end_frame_idx
-                    back_start, back_end = 0, -1 # back 段为空
+                    back_start, back_end = 0, -1 
                 else:
-                    # 【情况 B】：g < end_frame_idx，正常分为三段
-                    # 限制 p 必须小于 g，且 p >= 1
-                    p = max(1, min(p, g - 1))
-                    
-                    # 极端情况兜底：如果视频太短，导致数学上无法保证 p < g
-                    if g <= p:
-                        g = p + 1
-                        # 如果强制后 g 又等于或超过了 end_frame_idx，则再次退化为两段
-                        if g >= end_frame_idx:
-                            g = end_frame_idx
-                            front_start, front_end = 0, p - 1
-                            gen_start, gen_end = p, end_frame_idx
-                            back_start, back_end = 0, -1
-                        else:
-                            front_start, front_end = 0, p - 1
-                            gen_start, gen_end = p, g - 1
-                            back_start, back_end = g, end_frame_idx
-                    else:
-                        front_start, front_end = 0, p - 1
-                        gen_start, gen_end = p, g - 1
-                        back_start, back_end = g, end_frame_idx
+                    # 正常分为三段
+                    front_start, front_end = 0, p - 1
+                    gen_start, gen_end = p, g - 1
+                    back_start, back_end = g, end_frame_idx
 
         # 5. 核心切分函数 (音画严格对齐，保持两位小数精度)
         def slice_segment(start_f, end_f):
