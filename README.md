@@ -4,7 +4,7 @@ Contain a some useful nodes, like bool to set group state, group switch state ad
 ## Bool Group Switch节点
 预先设置多个节点组们在true和false下的状态，通过bool值来统一进行切换，以达到通过bool来控制工作流的效果。
 
-<img width="828" height="1000" alt="BoolGroupSwitch" src="https://github.com/user-attachments/assets/f0931173-31bc-4110-9ae0-ae18fda6d89b" />
+<img width="414" height="500" alt="BoolGroupSwitch" src="https://github.com/user-attachments/assets/f0931173-31bc-4110-9ae0-ae18fda6d89b" />
 
 该节点要位于设置组们的前方。这样可以让流程先通过这个节点来设置组的状态。在trigger中输入的数据从data_out输出(不会改变数据)。再流入最近的要设置的组，就控制了生成的顺序，防止先跑这些组再跑这个节点。Trigger并不是必须的，但是要控制具体的生成顺序最好是使用trigger。
 
