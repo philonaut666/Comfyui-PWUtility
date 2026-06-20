@@ -44,24 +44,32 @@ Linkage Config中，通过点击右侧加号添加组并设置组的状态。组
 - crop：先按照比例进行缩放到外圈覆盖目标尺寸，然后根据crop_position计算裁剪起始坐标 x 和 y，从而精准切出目标画面。left和right只适用于横向图片，用于纵向图片和center效果一样。top和bottom只针对纵向图片。
 
 ## Video Loader PW
-用于加载视频，并包含视频长度调整，视频分割标记等功能。
+用于加载视频，并包含视频长度调整，视频分割标记等功能。可以与[local media manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager)联合使用
+
 ### 预览窗口
 预览窗口中，可以用蓝色滑块切掉视频前段和后端，显示time,frames, 源视频的fps以及crop。
 - crop可以对视频进行画面裁切，点击开始显示蓝色，并进行crop操作，再次点击恢复白色，crop无效。
-- 面板上的start/end以及duration，都是基于原始视频进行计算的，仅用于方便操作，并不一定等于最终值。最终值以输出端口的值为准。
+- 面板上的start/end，都是基于原始视频进行计算的，仅用于方便操作，并不一定等于最终值(主要是因为有align_8n+1和视频前后端裁切，会自动计算）。最终值以输出端口的值为准。
+
 ### Split_count
 对视频(包括音频）进行分割。
 - 0不开启。
-- 1为添加一个分割点也就是视频分割为两段。此时会在预览窗口的时间轴上添加紫色滑块，用于设定精确的分割点。
+- 1为添加一个分割点也就是视频分割为两段。此时会在预览窗口的时间轴上添加紫色滑块，用于设定精确的分割点。此时可以选择是紫色段还是蓝色段作为generate进行生成，如果选择紫色，则该段为generate，蓝色段为back，反之紫色为front, 蓝色段为generate（跟8n+1计算有关)。
 - 2为添加两个分割点，就是视频分割为三段，此时会在预览窗口的时间轴上多添加一个绿色滑块。
-分割点的这一帧属于其右侧这段视频，是作为首帧的。
-使用分割后，split_info节点将输出分割信息，可使用Video Splitter PW节点进行视频和音频的同步分割。Video Loader PW仅提供分割点的标记信息。
+分割点的这一帧属于其右侧这段视频，是作为该段视频的首帧。
+使用分割后，split_info节点将输出分割信息，可使用Video Splitter PW节点进行视频和音频的同步分割。Video Loader PW仅提供分割点的标记信息不提供分割。
+
 ### align_8n+1
 开启则将视频强制延长以符合LTX 需要8N+1的效果。
-当它开启并且split_count=0时，将重复复制最后一帧到最后来补全不够的帧，并且repeat_end将输出补全的帧数(差额，最后一帧复制了多少份），可以在生成后用其它节点将这几帧进行切除。
-当split_count大于0也就是开启分割时，当分为两段，则向front段来获取需要的帧数以确保split_generate符合8n+1，而分为三段时，是向back段获取需要的帧数。
+当它开启并且split_count=0时，将重复复制最后一帧到最后来补全不够的帧，并且repeat_last_frame_count将输出补全的帧数(差额，最后一帧复制了多少份），可以在生成后用其它节点将这几帧进行切除。
+分为两段，则向front段或者back段获取需要的帧数以确保split_generate符合8n+1，而分为三段时，是向back段获取需要的帧数。
 
-可以与[local media manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager)联合使用
+## video_splitter_pw
+执行视频分割的节点。
+split_info拥有最高优先级，当有分割信息输入时，会忽略该节点本身的分割设置。当split_info不含有分割信息(数据为{}),才会读取该节点本身的分割设置。如果本身没有分割，则直接将输入的视频输出。
+本身的分割同样是设置分割点。分割点属于下一段视频，为下段视频的首帧。
+分割为两段时，固定前一段为front, 后段为generate。
+分割为三段时，固定第一段为front, 第二段为generate, 第三段为back。split_back_point_idx输入后端的分割点，支持输入负数作为倒数多少帧，切割起来更方便些。
 
 ## Audio Loader PW
 可以与[local media manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager)联合使用
