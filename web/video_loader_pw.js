@@ -364,22 +364,26 @@ app.registerExtension({
                             if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
+                            const loadedFrameCount = info.loaded_frame_count !== undefined ? info.loaded_frame_count : info.source_frame_count;
+                            const loadedDuration = info.loaded_duration !== undefined ? info.loaded_duration : info.source_duration;
                             
-                            if (info.source_frame_count !== undefined && endFrameWidget) {
-                                node.accurateFrameCount = info.source_frame_count;
-                                node.accurateDuration = info.source_duration || 0;
-                                
+                            if (loadedFrameCount !== undefined) {
+                                node.accurateFrameCount = loadedFrameCount;
+                                node.accurateDuration = loadedDuration || 0;
+                            }
+                            
+                            if (loadedFrameCount > 0 && endFrameWidget) {
                                 const currentEndFrame = parseInt(endFrameWidget.value) || 0;
                                 
                                 if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
                                     endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
                                     
-                                    if (endTimeWidget) endTimeWidget.value = parseFloat(info.source_duration.toFixed(3));
+                                    if (endTimeWidget) endTimeWidget.value = parseFloat((node.accurateDuration || 0).toFixed(3));
                                     
                                     updateRuler();
                                     updateUI(true);
                                 }
-                            }
+                            }                            
                         } catch(e) {
                             console.error("Failed to parse video_info", e);
                         }
@@ -404,19 +408,24 @@ app.registerExtension({
                             if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
-                            if (info.source_frame_count !== undefined && endFrameWidget) {
-                                node.accurateFrameCount = info.source_frame_count;
-                                node.accurateDuration = info.source_duration || 0;
-                                
+                            const loadedFrameCount = info.loaded_frame_count !== undefined ? info.loaded_frame_count : info.source_frame_count;
+                            const loadedDuration = info.loaded_duration !== undefined ? info.loaded_duration : info.source_duration;
+                            
+                            if (loadedFrameCount !== undefined) {
+                                node.accurateFrameCount = loadedFrameCount;
+                                node.accurateDuration = loadedDuration || 0;
+                            }
+                            
+                            if (loadedFrameCount > 0 && endFrameWidget) {
                                 const currentEndFrame = parseInt(endFrameWidget.value) || 0;
                                 
                                 if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
                                     endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
-                                    if (endTimeWidget) endTimeWidget.value = parseFloat(info.source_duration.toFixed(3));
+                                    if (endTimeWidget) endTimeWidget.value = parseFloat((node.accurateDuration || 0).toFixed(3));
                                     updateRuler();
                                     updateUI(true);
                                 }
-                            }
+                            }                            
                         } catch(e) {}
                     }
                 };
