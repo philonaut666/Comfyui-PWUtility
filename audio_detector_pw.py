@@ -6,7 +6,6 @@ class AudioDetectorPW:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                # 兼容大部分音频节点(如 Load Audio 等)输出的 AUDIO 类型
                 "audio": ("AUDIO",),
                 "threshold": ("FLOAT", {
                     "default": 0.01,
@@ -16,6 +15,15 @@ class AudioDetectorPW:
                     "display": "number",
                     "tooltip": "触发记录的波形起伏阈值 (AC RMS)"
                 }),
+                # 修改点1 & 2：移动到 window_size_ms 上方，改名并修改默认值为 0.8
+                "min_silence_ignore": ("FLOAT", {
+                    "default": 0.8,
+                    "min": 0.0,
+                    "max": 10.0,
+                    "step": 0.1,
+                    "display": "number",
+                    "tooltip": "忽略的最小静音间隔(秒)，短于此时间的静音会被合并，避免把一句话切碎"
+                }),
                 "window_size_ms": ("FLOAT", {
                     "default": 20.0,
                     "min": 5.0,
@@ -24,27 +32,16 @@ class AudioDetectorPW:
                     "display": "number",
                     "tooltip": "滑动检测窗口大小(毫秒)，用于平滑检测"
                 }),
-                "min_silence_duration": ("FLOAT", {
-                    "default": 0.1,
-                    "min": 0.0,
-                    "max": 10.0,
-                    "step": 0.1,
-                    "display": "number",
-                    "tooltip": "最小静音间隔(秒)，短于此时间的静音会被合并，避免把一句话切碎"
-                }),
             }
         }
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("time_segments",)
     FUNCTION = "detect"
-    
-    # ==========================================
-    # 修改点：将分类归入 PWUtility 目录
-    # ==========================================
     CATEGORY = "🔮PWUtility/Audio"
 
-    def detect(self, audio, threshold, window_size_ms, min_silence_duration):
+    # 修改点3：同步更新方法参数名和顺序
+    def detect(self, audio, threshold, min_silence_ignore, window_size_ms):
         # 1. 解析输入音频和采样率
         if isinstance(audio, dict):
             waveform = audio.get("waveform")
@@ -88,7 +85,6 @@ class AudioDetectorPW:
             window = audio_np[start_idx:end_idx]
             
             # 核心逻辑：减去均值消除直流偏移(DC Offset)
-            # 这样可以确保只检测真正的“起伏”，而忽略非零但无起伏的“直线”
             window_ac = window - np.mean(window)
             rms = np.sqrt(np.mean(np.square(window_ac)))
             
@@ -102,8 +98,8 @@ class AudioDetectorPW:
         starts = np.where(diffs == 1)[0]
         ends = np.where(diffs == -1)[0]
         
-        # 合并间隔较短的静音片段，避免将连续的声音切碎
-        min_silence_windows = max(1, int((min_silence_duration * 1000.0) / window_size_ms))
+        # 修改点4：同步内部变量名
+        min_silence_windows = max(1, int((min_silence_ignore * 1000.0) / window_size_ms))
         
         merged_starts = []
         merged_ends = []
