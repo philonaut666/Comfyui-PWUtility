@@ -46,6 +46,8 @@ Linkage Config中，通过点击右侧加号添加组并设置组的状态。组
 ## Video Loader PW
 用于加载视频，并包含视频长度调整，视频分割标记等功能。可以与[local media manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager)联合使用
 
+
+
 ### 预览窗口
 预览窗口中，可以用蓝色滑块切掉视频前段和后端，显示time,frames, 源视频的fps以及crop。
 - crop可以对视频进行画面裁切，点击开始显示蓝色，并进行crop操作，再次点击恢复白色，crop无效。
