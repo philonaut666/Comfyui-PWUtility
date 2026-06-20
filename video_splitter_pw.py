@@ -10,8 +10,8 @@ class VideoSplitterPW:
                 "audio": ("AUDIO",),
                 "fps": ("FLOAT", {"default": 25.000, "min": 0.001, "max": 1000.0, "step": 0.001, "tooltip": "FPS used for frame-to-time conversion to align audio."}),
                 "split_count": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Front only, 2: Front & Back"}),
-                "split_front_point_frame": ("INT", {"default": 1, "min": 0, "max": 10000000, "step": 1, "tooltip": "First frame of the Generate segment."}),
-                "split_back_point_frame": ("INT", {"default": 2, "min": 0, "max": 10000000, "step": 1, "tooltip": "First frame of the Back segment."}),
+                "split_front_point_idx": ("INT", {"default": 1, "min": 0, "max": 10000000, "step": 1, "tooltip": "First frame index of the Generate segment."}),
+                "split_back_point_idx": ("INT", {"default": 2, "min": -10000000, "max": 10000000, "step": 1, "tooltip": "First frame index of the Back segment. Negative values count from the end (e.g., -1 is the last frame)."}),
             },
             "optional": {
                 "split_info": ("STRING", {"forceInput": True, "tooltip": "Connect from Video Loader PW to auto split."}),
@@ -24,7 +24,7 @@ class VideoSplitterPW:
     FUNCTION = "split_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    def split_video(self, images, audio, fps, split_count, split_front_point_frame, split_back_point_frame, split_info=None):
+    def split_video(self, images, audio, fps, split_count, split_front_point_idx, split_back_point_idx, split_info=None):
         total_frames = images.shape[0]
         waveform = audio.get("waveform") if audio else None
         sample_rate = audio.get("sample_rate", 44100) if audio else 44100
@@ -80,13 +80,13 @@ class VideoSplitterPW:
                 return (images, audio, total_frames, img_f, aud_f, cnt_f, img_b, aud_b, cnt_b)
                 
             elif split_count == 1:
-                p = split_front_point_frame
+                p = split_front_point_idx
                 
                 # 【严格边界约束检查】
                 if p < 1:
-                    raise ValueError(f"边界约束违反: split_front_point_frame ({p}) 不可小于 1。")
+                    raise ValueError(f"边界约束违反: split_front_point_idx ({p}) 不可小于 1。")
                 if p > end_frame_idx:
-                    raise ValueError(f"边界约束违反: split_front_point_frame ({p}) 不可大于视频最后一帧的索引 ({end_frame_idx})。")
+                    raise ValueError(f"边界约束违反: split_front_point_idx ({p}) 不可大于视频最后一帧的索引 ({end_frame_idx})。")
                 
                 # 分割点 p 属于 split_generate 的首帧
                 front_start, front_end = 0, p - 1
@@ -94,16 +94,20 @@ class VideoSplitterPW:
                 back_start, back_end = 0, -1
                 
             elif split_count == 2:
-                p = split_front_point_frame
-                g = split_back_point_frame
+                p = split_front_point_idx
+                g = split_back_point_idx
+                
+                # 【负数索引转换】：如果小于0，表示倒数第几帧（如 -1 为倒数第一帧）
+                if g < 0:
+                    g = total_frames + g
                 
                 # 【严格边界约束检查】
                 if p < 1:
-                    raise ValueError(f"边界约束违反: split_front_point_frame ({p}) 不可小于 1。")
+                    raise ValueError(f"边界约束违反: split_front_point_idx ({p}) 不可小于 1。")
                 if g <= p:
-                    raise ValueError(f"边界约束违反: split_back_point_frame ({g}) 必须严格大于 split_front_point_frame ({p})。")
+                    raise ValueError(f"边界约束违反: split_back_point_idx (原始值: {split_back_point_idx}, 转换后: {g}) 必须严格大于 split_front_point_idx ({p})。")
                 if g > end_frame_idx:
-                    raise ValueError(f"边界约束违反: split_back_point_frame ({g}) 不可大于视频最后一帧的索引 ({end_frame_idx})。")
+                    raise ValueError(f"边界约束违反: split_back_point_idx (原始值: {split_back_point_idx}, 转换后: {g}) 不可大于视频最后一帧的索引 ({end_frame_idx})。")
                 
                 if g == end_frame_idx:
                     # 当 g 等于最后一帧时，忽略 g 的计算，退化为只被 p 分为两段
