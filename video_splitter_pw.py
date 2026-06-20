@@ -8,10 +8,10 @@ class VideoSplitterPW:
             "required": {
                 "images": ("IMAGE",),
                 "audio": ("AUDIO",),
+                "fps": ("FLOAT", {"default": 25.000, "min": 0.001, "max": 1000.0, "step": 0.001, "tooltip": "FPS used for frame-to-time conversion to align audio."}),
                 "split_count": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Front only, 2: Front & Back"}),
                 "split_front_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "split_back_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
-                "fps": ("FLOAT", {"default": 25.000, "min": 0.001, "max": 1000.0, "step": 0.001, "tooltip": "FPS used for frame-to-time conversion to align audio."}),
             },
             "optional": {
                 "split_info": ("STRING", {"forceInput": True, "tooltip": "Connect from Video Loader PW to auto split."}),
@@ -24,7 +24,7 @@ class VideoSplitterPW:
     FUNCTION = "split_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    def split_video(self, images, audio, split_count, split_front_point_frame, split_back_point_frame, fps, split_info=None):
+    def split_video(self, images, audio, fps, split_count, split_front_point_frame, split_back_point_frame, split_info=None):
         total_frames = images.shape[0]
         waveform = audio.get("waveform") if audio else None
         sample_rate = audio.get("sample_rate", 44100) if audio else 44100
@@ -36,7 +36,7 @@ class VideoSplitterPW:
             empty_aud = {"waveform": torch.zeros((1, 1, samples_1f)), "sample_rate": sample_rate}
             return empty_img, empty_aud, 0
 
-        # 2. 直通逻辑判断 (极速 Passthrough)
+        # 2. 判断 split_info 是否包含有效的分割信息
         use_info = False
         info_has_split = False
         
@@ -50,35 +50,33 @@ class VideoSplitterPW:
                 print(f"[VideoSplitterPW] Failed to parse split_info: {e}")
                 use_info = False
 
-        if not info_has_split and split_count == 0:
-            # 直通输出：全段属于 generate，front 和 back 为空占位符
-            img_f, aud_f, cnt_f = get_empty_segment()
-            img_b, aud_b, cnt_b = get_empty_segment()
-            return (images, audio, total_frames, img_f, aud_f, cnt_f, img_b, aud_b, cnt_b)
-
-        # 初始化默认切分点
-        front_start, front_end = 0, -1
-        gen_start, gen_end = 0, total_frames - 1
-        back_start, back_end = 0, -1
-        
-        # 3. 优先尝试解析 split_info
+        # 3. 优先尝试解析 split_info (只要有分割信息，无论 split_count 为何值都按 info 切分)
         if use_info and info_has_split:
             if "split_front" in info:
                 front_start = info["split_front"].get("start_frame", 0)
                 front_end = info["split_front"].get("end_frame", -1)
+            else:
+                front_start, front_end = 0, -1
+
             if "split_generate" in info:
                 gen_start = info["split_generate"].get("start_frame", 0)
                 gen_end = info["split_generate"].get("end_frame", total_frames - 1)
+            else:
+                gen_start, gen_end = 0, total_frames - 1
+
             if "split_back" in info:
                 back_start = info["split_back"].get("start_frame", 0)
                 back_end = info["split_back"].get("end_frame", -1)
+            else:
+                back_start, back_end = 0, -1
                 
-        # 4. 如果未连接 split_info，则使用手动输入的帧数参数
+        # 4. 如果未连接 split_info 或 split_info 为 {}，则使用手动输入的帧数参数
         else:
             if split_count == 0:
-                front_start, front_end = 0, -1
-                gen_start, gen_end = 0, total_frames - 1
-                back_start, back_end = 0, -1
+                # 直通输出：全段属于 generate，front 和 back 为空占位符
+                img_f, aud_f, cnt_f = get_empty_segment()
+                img_b, aud_b, cnt_b = get_empty_segment()
+                return (images, audio, total_frames, img_f, aud_f, cnt_f, img_b, aud_b, cnt_b)
             elif split_count == 1:
                 p = split_front_point_frame
                 front_start, front_end = 0, p - 1
