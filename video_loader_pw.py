@@ -28,7 +28,6 @@ async def upload_chunk(request):
     mode = "ab" if chunk_index > 0 else "wb"
     with open(file_path, mode) as f:
         f.write(file.file.read())
-
     if chunk_index == total_chunks - 1:
         return web.json_response({"name": filename})
     return web.json_response({"status": "ok"})
@@ -81,7 +80,7 @@ class VideoLoaderPW:
             if os.path.exists(video_path_annotated):
                 video_path = video_path_annotated
             else:
-                video_path_input = os.path.join(folder_paths.get_input_directory(), video_to_load) 
+                video_path_input = os.path.join(folder_paths.get_input_directory(), video_to_load)
                 if os.path.exists(video_path_input):
                     video_path = video_path_input
                 else:
@@ -177,7 +176,7 @@ class VideoLoaderPW:
             
             frame_interval = 1.0 / fr
             expected_target_time = actual_start_time
-            
+             
             alloc_end_time = actual_end_time if actual_end_time != float('inf') else video_duration
             expected_frames = 0
             if alloc_end_time > 0:
@@ -195,7 +194,7 @@ class VideoLoaderPW:
                 if frame_time < actual_start_time - 1e-5:
                     continue
                     
-                if actual_end_time != float('inf') and frame_time >= actual_end_time - 1e-5: 
+                if actual_end_time != float('inf') and frame_time >= actual_end_time - 1e-5:
                     break
                     
                 try:
@@ -278,19 +277,19 @@ class VideoLoaderPW:
                     if frame_time is None:
                         frame_time = float(frame.pts * float(audio_stream.time_base)) if frame.pts and audio_stream.time_base else 0.0
                         
-                    if frame_time > actual_end_time + 1.0: 
+                    if frame_time > actual_end_time + 1.0:
                         break
                         
                     if first_frame_time is None:
                         first_frame_time = frame_time
-                          
+                           
                     resampled_frames = resampler.resample(frame)
                     for r_frame in resampled_frames:
-                        audio_data.append(r_frame.to_ndarray())
+                        audio_data.append(r_frame.to_ndarray()) 
                           
                 if audio_data:
                     waveform_np = np.concatenate(audio_data, axis=1)
-                    waveform = torch.from_numpy(waveform_np).float()
+                    waveform = torch.from_numpy(waveform_np).float() 
                      
                     if first_frame_time is None:
                         first_frame_time = 0.0
@@ -304,7 +303,7 @@ class VideoLoaderPW:
                         waveform = waveform[:, start_sample:end_sample]
                     else:
                         waveform = waveform[:, start_sample:]
-                          
+                           
                     waveform = waveform.unsqueeze(0)
                     audio_dict = {"waveform": waveform, "sample_rate": sample_rate}
             except Exception as e:
@@ -400,7 +399,7 @@ class VideoLoaderPW:
         elif split_count == 1:
             p_abs_0 = max(0, split_purple_point_idx)
             p_local = p_abs_0 - g_start_frame
-            
+             
             p_local = max(1, min(p_local, g_end_local - 1))
             if p_local < 1: p_local = 1
             if p_local > g_end_local - 1: p_local = g_end_local - 1
@@ -427,7 +426,7 @@ class VideoLoaderPW:
         elif split_count == 2:
             p_abs_0 = max(0, split_purple_point_idx)
             g_abs_0 = max(0, split_green_point_idx)
-            
+             
             p_local = p_abs_0 - g_start_frame
             g_local = g_abs_0 - g_start_frame
             
