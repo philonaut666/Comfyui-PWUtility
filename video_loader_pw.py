@@ -49,7 +49,6 @@ class VideoLoaderPW:
                 "crop_y": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
-                "align_8n+1": ("BOOLEAN", {"default": True, "tooltip": "Align generate segment to 8n+1 frames by adjusting split points or repeating end frames."}),
                 "split_count": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Purple only, 2: Purple & Green"}),
                 "split_purple_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "split_purple_point_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
@@ -62,7 +61,6 @@ class VideoLoaderPW:
             }
         }
 
-    # 新增 duration 端口
     RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "FLOAT", "FLOAT", "STRING", "INT", "STRING")
     RETURN_NAMES = ("images", "audio", "frame_count", "duration", "fps", "video_info", "repeat_last_frame_count", "split_info")
     FUNCTION = "load_video"
@@ -402,7 +400,6 @@ class VideoLoaderPW:
             p_abs_0 = max(0, split_purple_point_frame)
             p_local = p_abs_0 - g_start_frame
             
-            # 严格限制：必须 > 0 (即 > start) 且 < g_end_local (即 < end)
             p_local = max(1, min(p_local, g_end_local - 1))
             if p_local < 1: p_local = 1
             if p_local > g_end_local - 1: p_local = g_end_local - 1
@@ -433,7 +430,6 @@ class VideoLoaderPW:
             p_local = p_abs_0 - g_start_frame
             g_local = g_abs_0 - g_start_frame
             
-            # 严格限制：purple < green < end
             p_local = max(1, min(p_local, g_end_local - 2))
             g_local = max(p_local + 1, min(g_local, g_end_local - 1))
             
@@ -455,7 +451,6 @@ class VideoLoaderPW:
 
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
-            # 新增 final_duration_sec 输出
             "result": (image_tensor, audio_dict, frame_count, final_duration_sec, float(frame_rate), video_info, repeat_last_frame_count, split_info_str)
         }
 
