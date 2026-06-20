@@ -181,6 +181,16 @@ app.registerExtension({
                     }
                 };
 
+                // 核心修复：提取公共函数，用于在加载新视频时重置所有分割参数
+                const resetSplitWidgets = () => {
+                    if (splitCountWidget) splitCountWidget.value = 0;
+                    if (splitPurpleWidget) splitPurpleWidget.value = 0.0;
+                    if (splitPurpleFrameWidget) splitPurpleFrameWidget.value = 0;
+                    if (splitGreenWidget) splitGreenWidget.value = 0.0;
+                    if (splitGreenFrameWidget) splitGreenFrameWidget.value = 0;
+                    node.toggleWidgetVisibility();
+                };
+
                 node.syncFramesFromTime = function () {
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
@@ -326,6 +336,9 @@ app.registerExtension({
                         if (endTimeWidget) endTimeWidget.value = 0;
                         if (startFrameWidget) startFrameWidget.value = 0;
                         if (endFrameWidget) endFrameWidget.value = 0;
+                        
+                        resetSplitWidgets(); // 核心修复：重置分割参数
+                        
                         if (node.syncFramesFromTime) node.syncFramesFromTime();
                     }
                 };
@@ -423,6 +436,7 @@ app.registerExtension({
                             if (endTimeWidget) endTimeWidget.value = 0;
                             if (startFrameWidget) startFrameWidget.value = 0;
                             if (endFrameWidget) endFrameWidget.value = 0;
+                            resetSplitWidgets(); // 核心修复：重置分割参数
                             node.syncFramesFromTime();
                             return;
                         }
@@ -453,6 +467,7 @@ app.registerExtension({
                                     if (endTimeWidget) endTimeWidget.value = 0;
                                     if (startFrameWidget) startFrameWidget.value = 0;
                                     if (endFrameWidget) endFrameWidget.value = 0;
+                                    resetSplitWidgets(); // 核心修复：重置分割参数
                                     node.syncFramesFromTime();
                                 }
                             }
@@ -469,6 +484,7 @@ app.registerExtension({
                                 if (endTimeWidget) endTimeWidget.value = 0;
                                 if (startFrameWidget) startFrameWidget.value = 0;
                                 if (endFrameWidget) endFrameWidget.value = 0;
+                                resetSplitWidgets(); // 核心修复：重置分割参数
                                 node.syncFramesFromTime();
                             } else {
                                 throw new Error(`Upload failed: ${resp.statusText}`);
@@ -1025,7 +1041,6 @@ app.registerExtension({
                     if (oldOnRemoved) oldOnRemoved.apply(this, arguments);
                 }
                 
-                // 核心修复：无论当前是 Time 还是 Frames 模式，拖动时同时更新秒数和帧数 Widget，防止被 clampSplitValues 覆盖
                 const setPurpleVal = (val_sec) => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     let p_f = Math.round(val_sec * fr);
