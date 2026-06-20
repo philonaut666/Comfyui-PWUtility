@@ -44,7 +44,7 @@ class VideoLoaderPW:
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "end_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1, "tooltip": "0 means to the end"}),
                 "frame_rate": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 120.0, "step": 0.1, "tooltip": "Force the video to a specific frame rate for extraction."}),
-                "display_mode": (["seconds", "frames"], {"default": "seconds"}),
+                "display_mode": (["seconds", "frames"], {"default": "frames"}),
                 "crop_x": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_y": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
