@@ -79,7 +79,14 @@ app.registerExtension({
                 const selectGenerateWidget = this.widgets.find((w) => w.name === "select_generate");
 
                 let isSyncing = false;
-                let isFramesMode = false;
+                
+                // 核心修改：默认初始化为 Frames 模式
+                let isFramesMode = displayModeWidget && displayModeWidget.value === "frames";
+                if (displayModeWidget && !displayModeWidget.value) {
+                    displayModeWidget.value = "frames";
+                    isFramesMode = true;
+                }
+
                 let duration = 0;
                 let dragging = null;
                 let dragOffset = 0;
@@ -414,7 +421,6 @@ app.registerExtension({
                     }
                 };
 
-                if (displayModeWidget && !displayModeWidget.value) displayModeWidget.value = "seconds";
                 node.toggleWidgetVisibility();
 
                 const fileInput = document.createElement("input");
@@ -560,7 +566,8 @@ app.registerExtension({
                     }
                 };
 
-                applySegmentState(false);
+                // 核心修改：根据初始状态应用高亮
+                applySegmentState(isFramesMode);
 
                 const doToggle = () => {
                     isFramesMode = !isFramesMode;
@@ -872,9 +879,12 @@ app.registerExtension({
                         if (node.size[0] < 690) node.size[0] = 690;
                         if (node.size[1] < 740) node.size[1] = 740;
                         if (node.onResize) node.onResize(node.size);
-                        if (displayModeWidget && displayModeWidget.value === "frames") {
-                            isFramesMode = false;
-                            switchBox.onclick();
+                        
+                        // 核心修改：确保 DOM 渲染后的状态与 Widget 一致
+                        if (displayModeWidget) {
+                            isFramesMode = displayModeWidget.value === "frames";
+                            applySegmentState(isFramesMode);
+                            node.toggleWidgetVisibility();
                         }
                         
                         const cw = cropWWidget ? parseFloat(cropWWidget.value) : 1;
