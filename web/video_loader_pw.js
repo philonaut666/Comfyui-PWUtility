@@ -96,64 +96,10 @@ app.registerExtension({
                 let currentAspectRatio = 0;
                 let isCropVisible = false;
 
-                // 核心修复：统一数据源辅助函数，彻底解决隐藏 Widget 导致的值丢失问题
-                const getFr = () => frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
-
-                const getStartSec = () => {
-                    if (isFramesMode && startFrameWidget) return (parseInt(startFrameWidget.value) || 0) / getFr();
-                    return startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
-                };
-
-                const getEndSec = () => {
-                    if (isFramesMode && endFrameWidget) {
-                        let ef = parseInt(endFrameWidget.value) || 0;
-                        if (ef === 0) return getActiveDuration();
-                        return (ef + 1) / getFr();
-                    }
-                    let et = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
-                    return et > 0 ? et : getActiveDuration();
-                };
-
-                const getPurpleSec = () => {
-                    if (isFramesMode && splitPurpleFrameWidget) return (parseInt(splitPurpleFrameWidget.value) || 0) / getFr();
-                    return splitPurpleWidget ? parseFloat(splitPurpleWidget.value) || 0 : 0;
-                };
-
-                const getGreenSec = () => {
-                    if (isFramesMode && splitGreenFrameWidget) return (parseInt(splitGreenFrameWidget.value) || 0) / getFr();
-                    return splitGreenWidget ? parseFloat(splitGreenWidget.value) || 0 : 0;
-                };
-
-                const getStartFrame = () => {
-                    if (isFramesMode && startFrameWidget) return parseInt(startFrameWidget.value) || 0;
-                    return Math.round((startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0) * getFr());
-                };
-
-                const getEndFrame = () => {
-                    if (isFramesMode && endFrameWidget) {
-                        let ef = parseInt(endFrameWidget.value) || 0;
-                        if (ef === 0) return node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * getFr()) - 1;
-                        return ef;
-                    }
-                    let et = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
-                    if (et === 0) return node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * getFr()) - 1;
-                    return Math.round(et * getFr()) - 1;
-                };
-
-                const getPurpleFrame = () => {
-                    if (isFramesMode && splitPurpleFrameWidget) return parseInt(splitPurpleFrameWidget.value) || 0;
-                    return Math.round((splitPurpleWidget ? parseFloat(splitPurpleWidget.value) || 0 : 0) * getFr());
-                };
-
-                const getGreenFrame = () => {
-                    if (isFramesMode && splitGreenFrameWidget) return parseInt(splitGreenFrameWidget.value) || 0;
-                    return Math.round((splitGreenWidget ? parseFloat(splitGreenWidget.value) || 0 : 0) * getFr());
-                };
-
                 const getActiveDuration = () => {
                     if (duration > 0) return duration;
-                    let e = getEndSec();
-                    let s = getStartSec();
+                    let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
+                    let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
                     let maxVal = Math.max(e, s);
                     return maxVal > 0 ? Math.max(maxVal, 1.0) : 1.0;
                 };
@@ -196,61 +142,107 @@ app.registerExtension({
                     if (typeof node.updateSplitHandles === 'function') node.updateSplitHandles();
                 };
 
+                // 核心修复：全局边界钳制函数，确保 start < purple < green < end 永远成立
+                const clampSplitValues = () => {
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    const sc = splitCountWidget ? splitCountWidget.value : 0;
+                    
+                    const s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
+                    let e_f = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
+                    if (e_f === 0) e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * fr) - 1;
+                    if (e_f <= s_f) e_f = s_f + 2;
+
+                    if (sc >= 1 && splitPurpleFrameWidget && splitPurpleWidget) {
+                        let p_f = parseInt(splitPurpleFrameWidget.value) || 0;
+                        let min_p = s_f + 1;
+                        let max_p = e_f - 1;
+                        
+                        if (sc === 2 && splitGreenFrameWidget) {
+                            let g_f = parseInt(splitGreenFrameWidget.value) || 0;
+                            max_p = Math.min(max_p, g_f - 1);
+                        }
+                        if (min_p > max_p) min_p = max_p;
+                        
+                        p_f = Math.max(min_p, Math.min(p_f, max_p));
+                        splitPurpleFrameWidget.value = p_f;
+                        splitPurpleWidget.value = parseFloat((p_f / fr).toFixed(3));
+                    }
+
+                    if (sc === 2 && splitGreenFrameWidget && splitGreenWidget) {
+                        let g_f = parseInt(splitGreenFrameWidget.value) || 0;
+                        let p_f = splitPurpleFrameWidget ? parseInt(splitPurpleFrameWidget.value) || 0 : s_f;
+                        
+                        let min_g = p_f + 1;
+                        let max_g = e_f - 1;
+                        if (min_g > max_g) min_g = max_g;
+                        
+                        g_f = Math.max(min_g, Math.min(g_f, max_g));
+                        splitGreenFrameWidget.value = g_f;
+                        splitGreenWidget.value = parseFloat((g_f / fr).toFixed(3));
+                    }
+                };
+
                 node.syncFramesFromTime = function () {
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
-                    const fr = getFr();
+                    const fr = parseFloat(frameRateWidget.value) || 25.0;
                     
                     if (startTimeWidget && startFrameWidget) {
-                        startFrameWidget.value = Math.max(0, Math.round((parseFloat(startTimeWidget.value) || 0) * fr));
+                        startFrameWidget.value = Math.max(0, Math.round(startTimeWidget.value * fr));
                     }
                     if (endTimeWidget && endFrameWidget) {
-                        let et = parseFloat(endTimeWidget.value) || 0;
-                        if (et > 0) {
-                            let endF = Math.round(et * fr) - 1;
+                        if (endTimeWidget.value > 0) {
+                            let endF = Math.round(endTimeWidget.value * fr) - 1;
                             if (node.accurateFrameCount > 0 && endF >= node.accurateFrameCount) {
                                 endF = node.accurateFrameCount - 1;
+                                endTimeWidget.value = parseFloat((endF / fr).toFixed(3));
                             }
                             endFrameWidget.value = Math.max(0, endF);
                         } else {
                             endFrameWidget.value = 0;
                         }
                     }
+                    
                     if (splitPurpleWidget && splitPurpleFrameWidget) {
-                        splitPurpleFrameWidget.value = Math.max(0, Math.round((parseFloat(splitPurpleWidget.value) || 0) * fr));
+                        splitPurpleFrameWidget.value = Math.max(0, Math.round(splitPurpleWidget.value * fr));
                     }
                     if (splitGreenWidget && splitGreenFrameWidget) {
-                        splitGreenFrameWidget.value = Math.max(0, Math.round((parseFloat(splitGreenWidget.value) || 0) * fr));
+                        splitGreenFrameWidget.value = Math.max(0, Math.round(splitGreenWidget.value * fr));
                     }
+
+                    clampSplitValues();
                     isSyncing = false;
                 };
 
                 node.syncTimeFromFrames = function () {
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
-                    const fr = getFr();
+                    const fr = parseFloat(frameRateWidget.value) || 25.0;
                      
                     if (startTimeWidget && startFrameWidget) {
-                        startTimeWidget.value = parseFloat(Math.max(0, (parseInt(startFrameWidget.value) || 0) / fr).toFixed(3));
+                        startTimeWidget.value = parseFloat(Math.max(0, startFrameWidget.value / fr).toFixed(3));
                     }
                     if (endTimeWidget && endFrameWidget) {
-                        let ef = parseInt(endFrameWidget.value) || 0;
-                        if (ef > 0) {
-                            if (node.accurateFrameCount > 0 && ef >= node.accurateFrameCount) {
-                                ef = node.accurateFrameCount - 1;
-                                endFrameWidget.value = ef;
+                        if (endFrameWidget.value > 0) {
+                            let endF = parseInt(endFrameWidget.value);
+                            if (node.accurateFrameCount > 0 && endF >= node.accurateFrameCount) {
+                                endF = node.accurateFrameCount - 1;
+                                endFrameWidget.value = endF;
                             }
-                            endTimeWidget.value = parseFloat(((ef + 1) / fr).toFixed(3));
+                            endTimeWidget.value = parseFloat(((endF + 1) / fr).toFixed(3));
                         } else {
                             endTimeWidget.value = 0;
                         }
                     }
+
                     if (splitPurpleWidget && splitPurpleFrameWidget) {
-                        splitPurpleWidget.value = parseFloat(Math.max(0, (parseInt(splitPurpleFrameWidget.value) || 0) / fr).toFixed(3));
+                        splitPurpleWidget.value = parseFloat(Math.max(0, splitPurpleFrameWidget.value / fr).toFixed(3));
                     }
                     if (splitGreenWidget && splitGreenFrameWidget) {
-                        splitGreenWidget.value = parseFloat(Math.max(0, (parseInt(splitGreenFrameWidget.value) || 0) / fr).toFixed(3));
+                        splitGreenWidget.value = parseFloat(Math.max(0, splitGreenFrameWidget.value / fr).toFixed(3));
                     }
+
+                    clampSplitValues();
                     isSyncing = false;
                 };
 
@@ -261,6 +253,9 @@ app.registerExtension({
                         if (orig) orig.apply(this, arguments);
                         if (isFrame) node.syncTimeFromFrames();
                         else node.syncFramesFromTime();
+                        
+                        clampSplitValues(); // 确保任何输入框修改后，边界都被严格限制
+                        
                         if (duration === 0 || isFrameRate) updateRuler();
                         updateUI(true);
                     };
@@ -282,18 +277,19 @@ app.registerExtension({
                     splitCountWidget.callback = function () {
                         if (orig) orig.apply(this, arguments);
                         const mode = splitCountWidget.value;
-                        const fr = getFr();
+                        const fr = parseFloat(frameRateWidget.value) || 25.0;
                         
                         if (mode >= 1 && splitPurpleFrameWidget) {
-                            let s_f = getStartFrame();
+                            let s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
                             splitPurpleFrameWidget.value = s_f + 1;
-                            node.syncTimeFromFrames();
                         }
                         if (mode === 2 && splitGreenFrameWidget) {
-                            let e_f = getEndFrame();
+                            let e_f = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
+                            if (e_f === 0) e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * fr) - 1;
                             splitGreenFrameWidget.value = e_f - 1;
-                            node.syncTimeFromFrames();
                         }
+                        
+                        clampSplitValues();
                         node.toggleWidgetVisibility();
                         updateUI(true);
                     };
@@ -556,14 +552,8 @@ app.registerExtension({
                     isFramesMode = !isFramesMode;
                     applySegmentState(isFramesMode);
                     if (displayModeWidget) displayModeWidget.value = isFramesMode ? "frames" : "seconds";
-                    
-                    // 核心修复：切换模式时，强制同步隐藏 Widget 的值
-                    if (isFramesMode) {
-                        node.syncFramesFromTime();
-                    } else {
-                        node.syncTimeFromFrames();
-                    }
-                    
+                    if (isFramesMode) node.syncFramesFromTime();
+                    else node.syncTimeFromFrames();
                     node.toggleWidgetVisibility();
                     updateRuler();
                     updateUI(true);
@@ -831,12 +821,17 @@ app.registerExtension({
                     if (!splitPurpleHandle || !splitGreenHandle) return;
                     const activeDur = getActiveDuration();
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     
+                    let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
+                    let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
+                    if (e === 0) e = activeDur;
+
                     if (sc < 1 || !splitPurpleWidget) {
                         splitPurpleHandle.style.display = "none";
                     } else {
                         splitPurpleHandle.style.display = "block";
-                        let val = getPurpleSec();
+                        let val = isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value);
                         const pct = activeDur > 0 ? (val / activeDur) * 100 : 0;
                         splitPurpleHandle.style.left = `${pct}%`;
                     }
@@ -845,7 +840,7 @@ app.registerExtension({
                         splitGreenHandle.style.display = "none";
                     } else {
                         splitGreenHandle.style.display = "block";
-                        let val = getGreenSec();
+                        let val = isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value);
                         const pct = activeDur > 0 ? (val / activeDur) * 100 : 0;
                         splitGreenHandle.style.left = `${pct}%`;
                     }
@@ -1032,59 +1027,25 @@ app.registerExtension({
                 }
                 
                 const setPurpleVal = (val_sec) => {
-                    const fr = getFr();
-                    let p_f = Math.round(val_sec * fr);
-                    
-                    let s_f = getStartFrame();
-                    let e_f = getEndFrame();
-                    if (e_f <= s_f) e_f = s_f + 2;
-                    
-                    let min_p_f = s_f + 1;
-                    let max_p_f = e_f - 1;
-                    const sc = splitCountWidget ? splitCountWidget.value : 0;
-                    if (sc === 2) {
-                        let g_f = getGreenFrame();
-                        max_p_f = Math.min(max_p_f, g_f - 1);
-                    }
-                    if (min_p_f > max_p_f) min_p_f = max_p_f;
-                    
-                    p_f = Math.max(min_p_f, Math.min(p_f, max_p_f));
-                    
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     if (isFramesMode) {
-                        if (splitPurpleFrameWidget) splitPurpleFrameWidget.value = p_f;
-                        node.syncTimeFromFrames();
+                        splitPurpleFrameWidget.value = Math.round(val_sec * fr);
                     } else {
-                        if (splitPurpleWidget) splitPurpleWidget.value = parseFloat((p_f / fr).toFixed(3));
-                        node.syncFramesFromTime();
+                        splitPurpleWidget.value = parseFloat(val_sec.toFixed(3));
                     }
+                    clampSplitValues();
+                    app.graph.setDirtyCanvas(true, false);
                 };
 
                 const setGreenVal = (val_sec) => {
-                    const fr = getFr();
-                    let g_f = Math.round(val_sec * fr);
-                    
-                    let s_f = getStartFrame();
-                    let e_f = getEndFrame();
-                    if (e_f <= s_f) e_f = s_f + 2;
-                    
-                    let min_g_f = s_f + 1;
-                    let max_g_f = e_f - 1;
-                    const sc = splitCountWidget ? splitCountWidget.value : 0;
-                    if (sc >= 1) {
-                        let p_f = getPurpleFrame();
-                        min_g_f = Math.max(min_g_f, p_f + 1);
-                    }
-                    if (min_g_f > max_g_f) min_g_f = max_g_f;
-                    
-                    g_f = Math.max(min_g_f, Math.min(g_f, max_g_f));
-                    
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     if (isFramesMode) {
-                        if (splitGreenFrameWidget) splitGreenFrameWidget.value = g_f;
-                        node.syncTimeFromFrames();
+                        splitGreenFrameWidget.value = Math.round(val_sec * fr);
                     } else {
-                        if (splitGreenWidget) splitGreenWidget.value = parseFloat((g_f / fr).toFixed(3));
-                        node.syncFramesFromTime();
+                        splitGreenWidget.value = parseFloat(val_sec.toFixed(3));
                     }
+                    clampSplitValues();
+                    app.graph.setDirtyCanvas(true, false);
                 };
 
                 const setupPurpleHandleEvents = () => {
@@ -1180,8 +1141,8 @@ app.registerExtension({
                     const numMajorTicks = 5;
                     const subTicks = 4;
                     const totalTicks = (numMajorTicks - 1) * subTicks;
-                    const isFrames = isFramesMode;
-                    const fr = getFr();
+                    const isFrames = displayModeWidget && displayModeWidget.value === "frames";
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
 
                     for (let i = 0; i <= totalTicks; i++) {
                         const pct = i / totalTicks;
@@ -1205,13 +1166,10 @@ app.registerExtension({
 
                 function updateUI(syncPlayer = false) {
                     const activeDur = getActiveDuration();
-                    const fr = getFr();
-                    
-                    let s = getStartSec();
-                    let e = getEndSec();
-                    
+                    let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
+                    let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
                     let visualEnd = e;
-                    if (visualEnd > activeDur) visualEnd = activeDur;
+                    if (visualEnd === 0 || visualEnd > activeDur) visualEnd = activeDur;
                     if (s > visualEnd) s = visualEnd;
 
                     let pStart = (s / activeDur) * 100;
@@ -1223,7 +1181,8 @@ app.registerExtension({
                     endHandle.style.left = `${pEnd}%`;
 
                     const currentDur = parseFloat((visualEnd - s).toFixed(2));
-                    const isFrames = isFramesMode;
+                    const isFrames = displayModeWidget && displayModeWidget.value === "frames";
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
 
                     trimLength.textContent = isFrames ? `Trimmed: ${Math.round(currentDur * fr)} frames` : `Trimmed: ${formatTime(currentDur)}`;
 
@@ -1233,8 +1192,8 @@ app.registerExtension({
                     let pS = 0, pE = 0, bS = 0, bE = 0, gS = 0, gE = 0;
                     const s_val = s;
                     const e_val = visualEnd;
-                    const p_val = getPurpleSec();
-                    const g_val = getGreenSec();
+                    const p_val = splitPurpleWidget ? parseFloat(splitPurpleWidget.value) || 0 : 0;
+                    const g_val = splitGreenWidget ? parseFloat(splitGreenWidget.value) || 0 : 0;
                     
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
                     
@@ -1275,8 +1234,9 @@ app.registerExtension({
 
                 videoPreview.ontimeupdate = () => {
                     if (!duration || dragging) return;
-                    let s = getStartSec();
-                    let e = getEndSec();
+                    let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
+                    let e = endTimeWidget ? parseFloat(endTimeWidget.value) || duration : duration;
+                    if (e === 0) e = duration;
                     if (videoPreview.currentTime >= e && e > 0) videoPreview.currentTime = s;
                     else if (videoPreview.currentTime < s) videoPreview.currentTime = s;
                 };
@@ -1286,8 +1246,9 @@ app.registerExtension({
                     const rect = sliderBox.getBoundingClientRect();
                     const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
                     const val = (x / rect.width) * activeDur;
-                    let s = getStartSec();
-                    let e_val = getEndSec();
+                    let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
+                    let e_val = endTimeWidget ? parseFloat(endTimeWidget.value) || activeDur : activeDur;
+                    if (e_val === 0) e_val = activeDur;
                     const handleTolerance = (10 / rect.width) * activeDur;
 
                     if (val > s + handleTolerance && val < e_val - handleTolerance) {
@@ -1317,11 +1278,12 @@ app.registerExtension({
                     const val = (x / rect.width) * activeDur;
 
                     if (dragging === 'start') {
-                        let e_val = getEndSec();
+                        let e_val = endTimeWidget ? parseFloat(endTimeWidget.value) || activeDur : activeDur;
+                        if (e_val === 0) e_val = activeDur;
                         if (startTimeWidget) startTimeWidget.value = parseFloat(Math.min(val, e_val).toFixed(2));
                         if (duration > 0) videoPreview.currentTime = startTimeWidget.value;
                     } else if (dragging === 'end') {
-                        const s = getStartSec();
+                        const s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
                         if (endTimeWidget) endTimeWidget.value = parseFloat(Math.max(val, s).toFixed(2));
                         if (duration > 0) videoPreview.currentTime = endTimeWidget.value;
                     } else if (dragging === 'center') {
