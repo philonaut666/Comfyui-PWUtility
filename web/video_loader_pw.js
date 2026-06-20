@@ -337,7 +337,12 @@ app.registerExtension({
                     node._lastLoadedVideoPath = p;
                     if (videoWidget) videoWidget.value = p;
                     if (isNewFile) {
+                        // 重置内部状态，清除旧视频的数据
+                        duration = 0;
+                        node.accurateFrameCount = 0;
+                        node.accurateDuration = 0;
                         node._execHandlerHasRun = false;
+                        
                         if (node.updatePreview) node.updatePreview(p);
                         if (startTimeWidget) startTimeWidget.value = 0;
                         if (endTimeWidget) endTimeWidget.value = 0;
@@ -347,6 +352,10 @@ app.registerExtension({
                         resetSplitWidgets();
                         
                         if (node.syncFramesFromTime) node.syncFramesFromTime();
+                        
+                        // 立即刷新UI，显示过渡状态
+                        updateRuler();
+                        updateUI(true);
                     }
                 };
 
@@ -878,8 +887,9 @@ app.registerExtension({
                     node.domWidget = node.addDOMWidget("VideoUI", "div", container);
                     node.domWidget.computeSize = function () { return [360, 250]; };
                     requestAnimationFrame(() => {
-                        if (node.size[0] < 690) node.size[0] = 690;
-                        if (node.size[1] < 740) node.size[1] = 740;
+                        // 默认宽度增加10%: 690 * 1.1 = 759, 740 * 1.1 = 814
+                        if (node.size[0] < 759) node.size[0] = 759;
+                        if (node.size[1] < 814) node.size[1] = 814;
                         if (node.onResize) node.onResize(node.size);
                         
                         if (displayModeWidget) {
@@ -1245,6 +1255,8 @@ app.registerExtension({
 
                 videoPreview.onloadedmetadata = () => {
                     duration = videoPreview.duration;
+                    // 只有在执行处理器尚未运行时才使用浏览器端的元数据
+                    // 避免覆盖Python端返回的更准确的转换后数值
                     if (!node._execHandlerHasRun) {
                         node.accurateDuration = duration;
                     }
