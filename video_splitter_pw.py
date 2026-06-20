@@ -7,13 +7,13 @@ class VideoSplitterPW:
         return {
             "required": {
                 "images": ("IMAGE",),
-                "audio": ("AUDIO",),
                 "fps": ("FLOAT", {"default": 25.000, "min": 0.001, "max": 1000.0, "step": 0.001, "tooltip": "FPS used for frame-to-time conversion to align audio."}),
                 "split_count": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Front only, 2: Front & Back"}),
                 "split_front_point_idx": ("INT", {"default": 1, "min": 0, "max": 10000000, "step": 1, "tooltip": "First frame index of the Generate segment."}),
                 "split_back_point_idx": ("INT", {"default": 2, "min": -10000000, "max": 10000000, "step": 1, "tooltip": "First frame index of the Back segment. Negative values count from the end (e.g., -1 is the last frame)."}),
             },
             "optional": {
+                "audio": ("AUDIO",),
                 "split_info": ("STRING", {"forceInput": True, "tooltip": "Connect from Video Loader PW to auto split."}),
             }
         }
@@ -24,17 +24,21 @@ class VideoSplitterPW:
     FUNCTION = "split_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    def split_video(self, images, audio, fps, split_count, split_front_point_idx, split_back_point_idx, split_info=None):
+    def split_video(self, images, fps, split_count, split_front_point_idx, split_back_point_idx, audio=None, split_info=None):
         total_frames = images.shape[0]
-        waveform = audio.get("waveform") if audio else None
-        sample_rate = audio.get("sample_rate", 44100) if audio else 44100
+        
+        # 【前置检测】：判断是否有有效的音频输入
+        has_audio = audio is not None and isinstance(audio, dict) and "waveform" in audio and audio["waveform"] is not None
+        
+        waveform = audio.get("waveform") if has_audio else None
+        sample_rate = audio.get("sample_rate", 44100) if has_audio else 44100
         end_frame_idx = max(0, total_frames - 1)
         
         # 1. 定义空段占位符生成器 (防止下游节点因 0 帧报错)
         def get_empty_segment():
             empty_img = torch.zeros((1, images.shape[1], images.shape[2], images.shape[3]), dtype=images.dtype)
-            samples_1f = max(1, int(round((1.0 / fps) * sample_rate))) if fps > 0 else 1
-            empty_aud = {"waveform": torch.zeros((1, 1, samples_1f)), "sample_rate": sample_rate}
+            # 如果没有音频输入，音频输出直接为 None
+            empty_aud = None
             return empty_img, empty_aud, 0
 
         # 2. 判断 split_info 是否包含有效的分割信息
@@ -131,8 +135,9 @@ class VideoSplitterPW:
             seg_imgs = images[s : e + 1]
             frames = seg_imgs.shape[0]
             
-            if waveform is not None and fps > 0:
-                # 【精度控制】：强制保留两位小数进行运算，避免浮点数溢出导致的音画错位
+            # 【条件判断】：仅当有音频输入时才进行音频分割运算
+            if has_audio and waveform is not None and fps > 0:
+                # 音频切片逻辑
                 start_sec = round(s / fps, 2)
                 end_sec = round((e + 1) / fps, 2)
                 start_sample = int(round(start_sec * sample_rate))
@@ -160,7 +165,8 @@ class VideoSplitterPW:
                         
                 seg_aud = {"waveform": seg_aud_w, "sample_rate": sample_rate}
             else:
-                seg_aud = audio if audio else {"waveform": torch.zeros((1, 1, 0)), "sample_rate": sample_rate}
+                # 没有音频输入，直接跳过运算，输出 None
+                seg_aud = None
                 
             return seg_imgs, seg_aud, frames
 
