@@ -142,7 +142,6 @@ app.registerExtension({
                     if (typeof node.updateSplitHandles === 'function') node.updateSplitHandles();
                 };
 
-                // 核心修复：全局边界钳制函数，确保 start < purple < green < end 永远成立
                 const clampSplitValues = () => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
@@ -254,7 +253,7 @@ app.registerExtension({
                         if (isFrame) node.syncTimeFromFrames();
                         else node.syncFramesFromTime();
                         
-                        clampSplitValues(); // 确保任何输入框修改后，边界都被严格限制
+                        clampSplitValues(); 
                         
                         if (duration === 0 || isFrameRate) updateRuler();
                         updateUI(true);
@@ -1026,24 +1025,23 @@ app.registerExtension({
                     if (oldOnRemoved) oldOnRemoved.apply(this, arguments);
                 }
                 
+                // 核心修复：无论当前是 Time 还是 Frames 模式，拖动时同时更新秒数和帧数 Widget，防止被 clampSplitValues 覆盖
                 const setPurpleVal = (val_sec) => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
-                    if (isFramesMode) {
-                        splitPurpleFrameWidget.value = Math.round(val_sec * fr);
-                    } else {
-                        splitPurpleWidget.value = parseFloat(val_sec.toFixed(3));
-                    }
+                    let p_f = Math.round(val_sec * fr);
+                    if (splitPurpleFrameWidget) splitPurpleFrameWidget.value = p_f;
+                    if (splitPurpleWidget) splitPurpleWidget.value = parseFloat(val_sec.toFixed(3));
+                    
                     clampSplitValues();
                     app.graph.setDirtyCanvas(true, false);
                 };
 
                 const setGreenVal = (val_sec) => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
-                    if (isFramesMode) {
-                        splitGreenFrameWidget.value = Math.round(val_sec * fr);
-                    } else {
-                        splitGreenWidget.value = parseFloat(val_sec.toFixed(3));
-                    }
+                    let g_f = Math.round(val_sec * fr);
+                    if (splitGreenFrameWidget) splitGreenFrameWidget.value = g_f;
+                    if (splitGreenWidget) splitGreenWidget.value = parseFloat(val_sec.toFixed(3));
+                    
                     clampSplitValues();
                     app.graph.setDirtyCanvas(true, false);
                 };
