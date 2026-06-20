@@ -73,9 +73,9 @@ app.registerExtension({
                 
                 const splitCountWidget = this.widgets.find((w) => w.name === "split_count");
                 const splitPurpleWidget = this.widgets.find((w) => w.name === "split_purple_point");
-                const splitPurpleFrameWidget = this.widgets.find((w) => w.name === "split_purple_point_frame");
+                const splitPurpleIdxWidget = this.widgets.find((w) => w.name === "split_purple_point_idx");
                 const splitGreenWidget = this.widgets.find((w) => w.name === "split_green_point");
-                const splitGreenFrameWidget = this.widgets.find((w) => w.name === "split_green_point_frame");
+                const splitGreenIdxWidget = this.widgets.find((w) => w.name === "split_green_point_idx");
                 const selectGenerateWidget = this.widgets.find((w) => w.name === "select_generate");
 
                 let isSyncing = false;
@@ -128,9 +128,9 @@ app.registerExtension({
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
                     
                     setWidgetVisibility(splitPurpleWidget, sc >= 1 && !isFramesMode, "FLOAT");
-                    setWidgetVisibility(splitPurpleFrameWidget, sc >= 1 && isFramesMode, "INT");
+                    setWidgetVisibility(splitPurpleIdxWidget, sc >= 1 && isFramesMode, "INT");
                     setWidgetVisibility(splitGreenWidget, sc === 2 && !isFramesMode, "FLOAT");
-                    setWidgetVisibility(splitGreenFrameWidget, sc === 2 && isFramesMode, "INT");
+                    setWidgetVisibility(splitGreenIdxWidget, sc === 2 && isFramesMode, "INT");
                     setWidgetVisibility(selectGenerateWidget, sc === 1, "combo");
 
                     const minSize = node.computeSize();
@@ -151,43 +151,42 @@ app.registerExtension({
                     if (e_f === 0) e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * fr) - 1;
                     if (e_f <= s_f) e_f = s_f + 2;
 
-                    if (sc >= 1 && splitPurpleFrameWidget && splitPurpleWidget) {
-                        let p_f = parseInt(splitPurpleFrameWidget.value) || 0;
+                    if (sc >= 1 && splitPurpleIdxWidget && splitPurpleWidget) {
+                        let p_f = parseInt(splitPurpleIdxWidget.value) || 0;
                         let min_p = s_f + 1;
                         let max_p = e_f - 1;
                         
-                        if (sc === 2 && splitGreenFrameWidget) {
-                            let g_f = parseInt(splitGreenFrameWidget.value) || 0;
+                        if (sc === 2 && splitGreenIdxWidget) {
+                            let g_f = parseInt(splitGreenIdxWidget.value) || 0;
                             max_p = Math.min(max_p, g_f - 1);
                         }
                         if (min_p > max_p) min_p = max_p;
                         
                         p_f = Math.max(min_p, Math.min(p_f, max_p));
-                        splitPurpleFrameWidget.value = p_f;
+                        splitPurpleIdxWidget.value = p_f;
                         splitPurpleWidget.value = parseFloat((p_f / fr).toFixed(3));
                     }
 
-                    if (sc === 2 && splitGreenFrameWidget && splitGreenWidget) {
-                        let g_f = parseInt(splitGreenFrameWidget.value) || 0;
-                        let p_f = splitPurpleFrameWidget ? parseInt(splitPurpleFrameWidget.value) || 0 : s_f;
+                    if (sc === 2 && splitGreenIdxWidget && splitGreenWidget) {
+                        let g_f = parseInt(splitGreenIdxWidget.value) || 0;
+                        let p_f = splitPurpleIdxWidget ? parseInt(splitPurpleIdxWidget.value) || 0 : s_f;
                         
                         let min_g = p_f + 1;
                         let max_g = e_f - 1;
                         if (min_g > max_g) min_g = max_g;
                         
                         g_f = Math.max(min_g, Math.min(g_f, max_g));
-                        splitGreenFrameWidget.value = g_f;
+                        splitGreenIdxWidget.value = g_f;
                         splitGreenWidget.value = parseFloat((g_f / fr).toFixed(3));
                     }
                 };
 
-                // 核心修复：提取公共函数，用于在加载新视频时重置所有分割参数
                 const resetSplitWidgets = () => {
                     if (splitCountWidget) splitCountWidget.value = 0;
                     if (splitPurpleWidget) splitPurpleWidget.value = 0.0;
-                    if (splitPurpleFrameWidget) splitPurpleFrameWidget.value = 0;
+                    if (splitPurpleIdxWidget) splitPurpleIdxWidget.value = 0;
                     if (splitGreenWidget) splitGreenWidget.value = 0.0;
-                    if (splitGreenFrameWidget) splitGreenFrameWidget.value = 0;
+                    if (splitGreenIdxWidget) splitGreenIdxWidget.value = 0;
                     node.toggleWidgetVisibility();
                 };
 
@@ -212,11 +211,11 @@ app.registerExtension({
                         }
                     }
                     
-                    if (splitPurpleWidget && splitPurpleFrameWidget) {
-                        splitPurpleFrameWidget.value = Math.max(0, Math.round(splitPurpleWidget.value * fr));
+                    if (splitPurpleWidget && splitPurpleIdxWidget) {
+                        splitPurpleIdxWidget.value = Math.max(0, Math.round(splitPurpleWidget.value * fr));
                     }
-                    if (splitGreenWidget && splitGreenFrameWidget) {
-                        splitGreenFrameWidget.value = Math.max(0, Math.round(splitGreenWidget.value * fr));
+                    if (splitGreenWidget && splitGreenIdxWidget) {
+                        splitGreenIdxWidget.value = Math.max(0, Math.round(splitGreenWidget.value * fr));
                     }
 
                     clampSplitValues();
@@ -244,11 +243,11 @@ app.registerExtension({
                         }
                     }
 
-                    if (splitPurpleWidget && splitPurpleFrameWidget) {
-                        splitPurpleWidget.value = parseFloat(Math.max(0, splitPurpleFrameWidget.value / fr).toFixed(3));
+                    if (splitPurpleWidget && splitPurpleIdxWidget) {
+                        splitPurpleWidget.value = parseFloat(Math.max(0, splitPurpleIdxWidget.value / fr).toFixed(3));
                     }
-                    if (splitGreenWidget && splitGreenFrameWidget) {
-                        splitGreenWidget.value = parseFloat(Math.max(0, splitGreenFrameWidget.value / fr).toFixed(3));
+                    if (splitGreenWidget && splitGreenIdxWidget) {
+                        splitGreenWidget.value = parseFloat(Math.max(0, splitGreenIdxWidget.value / fr).toFixed(3));
                     }
 
                     clampSplitValues();
@@ -276,9 +275,9 @@ app.registerExtension({
                 bindWidget(endFrameWidget, true);
                 bindWidget(frameRateWidget, false, true);
                 bindWidget(splitPurpleWidget, false);
-                bindWidget(splitPurpleFrameWidget, true);
+                bindWidget(splitPurpleIdxWidget, true);
                 bindWidget(splitGreenWidget, false);
-                bindWidget(splitGreenFrameWidget, true);
+                bindWidget(splitGreenIdxWidget, true);
                 bindWidget(selectGenerateWidget, false);
                 
                 if (splitCountWidget) {
@@ -288,14 +287,14 @@ app.registerExtension({
                         const mode = splitCountWidget.value;
                         const fr = parseFloat(frameRateWidget.value) || 25.0;
                         
-                        if (mode >= 1 && splitPurpleFrameWidget) {
+                        if (mode >= 1 && splitPurpleIdxWidget) {
                             let s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
-                            splitPurpleFrameWidget.value = s_f + 1;
+                            splitPurpleIdxWidget.value = s_f + 1;
                         }
-                        if (mode === 2 && splitGreenFrameWidget) {
+                        if (mode === 2 && splitGreenIdxWidget) {
                             let e_f = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
                             if (e_f === 0) e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * fr) - 1;
-                            splitGreenFrameWidget.value = e_f - 1;
+                            splitGreenIdxWidget.value = e_f - 1;
                         }
                         
                         clampSplitValues();
@@ -337,7 +336,7 @@ app.registerExtension({
                         if (startFrameWidget) startFrameWidget.value = 0;
                         if (endFrameWidget) endFrameWidget.value = 0;
                         
-                        resetSplitWidgets(); // 核心修复：重置分割参数
+                        resetSplitWidgets();
                         
                         if (node.syncFramesFromTime) node.syncFramesFromTime();
                     }
@@ -436,7 +435,7 @@ app.registerExtension({
                             if (endTimeWidget) endTimeWidget.value = 0;
                             if (startFrameWidget) startFrameWidget.value = 0;
                             if (endFrameWidget) endFrameWidget.value = 0;
-                            resetSplitWidgets(); // 核心修复：重置分割参数
+                            resetSplitWidgets();
                             node.syncFramesFromTime();
                             return;
                         }
@@ -467,7 +466,7 @@ app.registerExtension({
                                     if (endTimeWidget) endTimeWidget.value = 0;
                                     if (startFrameWidget) startFrameWidget.value = 0;
                                     if (endFrameWidget) endFrameWidget.value = 0;
-                                    resetSplitWidgets(); // 核心修复：重置分割参数
+                                    resetSplitWidgets();
                                     node.syncFramesFromTime();
                                 }
                             }
@@ -484,7 +483,7 @@ app.registerExtension({
                                 if (endTimeWidget) endTimeWidget.value = 0;
                                 if (startFrameWidget) startFrameWidget.value = 0;
                                 if (endFrameWidget) endFrameWidget.value = 0;
-                                resetSplitWidgets(); // 核心修复：重置分割参数
+                                resetSplitWidgets();
                                 node.syncFramesFromTime();
                             } else {
                                 throw new Error(`Upload failed: ${resp.statusText}`);
@@ -846,7 +845,7 @@ app.registerExtension({
                         splitPurpleHandle.style.display = "none";
                     } else {
                         splitPurpleHandle.style.display = "block";
-                        let val = isFramesMode ? (splitPurpleFrameWidget.value / fr) : parseFloat(splitPurpleWidget.value);
+                        let val = isFramesMode ? (splitPurpleIdxWidget.value / fr) : parseFloat(splitPurpleWidget.value);
                         const pct = activeDur > 0 ? (val / activeDur) * 100 : 0;
                         splitPurpleHandle.style.left = `${pct}%`;
                     }
@@ -855,7 +854,7 @@ app.registerExtension({
                         splitGreenHandle.style.display = "none";
                     } else {
                         splitGreenHandle.style.display = "block";
-                        let val = isFramesMode ? (splitGreenFrameWidget.value / fr) : parseFloat(splitGreenWidget.value);
+                        let val = isFramesMode ? (splitGreenIdxWidget.value / fr) : parseFloat(splitGreenWidget.value);
                         const pct = activeDur > 0 ? (val / activeDur) * 100 : 0;
                         splitGreenHandle.style.left = `${pct}%`;
                     }
@@ -1044,7 +1043,7 @@ app.registerExtension({
                 const setPurpleVal = (val_sec) => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     let p_f = Math.round(val_sec * fr);
-                    if (splitPurpleFrameWidget) splitPurpleFrameWidget.value = p_f;
+                    if (splitPurpleIdxWidget) splitPurpleIdxWidget.value = p_f;
                     if (splitPurpleWidget) splitPurpleWidget.value = parseFloat(val_sec.toFixed(3));
                     
                     clampSplitValues();
@@ -1054,7 +1053,7 @@ app.registerExtension({
                 const setGreenVal = (val_sec) => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     let g_f = Math.round(val_sec * fr);
-                    if (splitGreenFrameWidget) splitGreenFrameWidget.value = g_f;
+                    if (splitGreenIdxWidget) splitGreenIdxWidget.value = g_f;
                     if (splitGreenWidget) splitGreenWidget.value = parseFloat(val_sec.toFixed(3));
                     
                     clampSplitValues();
