@@ -193,6 +193,7 @@ app.registerExtension({
                     if (splitPurpleIdxWidget) splitPurpleIdxWidget.value = 0;
                     if (splitGreenWidget) splitGreenWidget.value = 0.0;
                     if (splitGreenIdxWidget) splitGreenIdxWidget.value = 0;
+                    if (selectGenerateWidget) selectGenerateWidget.value = "blue";
                     node.toggleWidgetVisibility();
                 };
 
@@ -321,34 +322,56 @@ app.registerExtension({
                     }
                 };
 
-                if (videoWidget) {
-                    const originalCallback = videoWidget.callback;
-                    videoWidget.callback = function () {
-                        if (originalCallback) originalCallback.apply(this, arguments);
-                        if (node.updatePreview) node.updatePreview(this.value);
-                    };
-                }
+                // 核心修改：将所有参数重置为默认
+                const resetAllParams = () => {
+                    if (startTimeWidget) startTimeWidget.value = 0;
+                    if (endTimeWidget) endTimeWidget.value = 0;
+                    if (startFrameWidget) startFrameWidget.value = 0;
+                    if (endFrameWidget) endFrameWidget.value = 0;
+                    
+                    if (cropXWidget) cropXWidget.value = 0.0;
+                    if (cropYWidget) cropYWidget.value = 0.0;
+                    if (cropWWidget) cropWWidget.value = 1.0;
+                    if (cropHWidget) cropHWidget.value = 1.0;
+                    
+                    isCropVisible = false;
+                    if (cropBtn) {
+                        cropBtn.style.background = "rgba(255, 255, 255, 0.1)";
+                        cropBtn.style.color = "white";
+                    }
+                    if (arSelect) arSelect.value = "0";
+                    currentAspectRatio = 0;
+                    if (wInput) wInput.value = "";
+                    if (hInput) hInput.value = "";
+                    
+                    resetSplitWidgets();
+                    
+                    if (node.syncFramesFromTime) node.syncFramesFromTime();
+                    updateCropUI();
+                };
 
+                // 核心修改：先重置参数，再加载视频
                 const applyVideoPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
                     const isNewFile = (p !== node._lastLoadedVideoPath);
                     node._lastLoadedVideoPath = p;
                     if (videoWidget) videoWidget.value = p;
+                    
                     if (isNewFile) {
+                        resetAllParams();
                         if (node.updatePreview) node.updatePreview(p);
-                        if (startTimeWidget) startTimeWidget.value = 0;
-                        if (endTimeWidget) endTimeWidget.value = 0;
-                        if (startFrameWidget) startFrameWidget.value = 0;
-                        if (endFrameWidget) endFrameWidget.value = 0;
-                        
-                        resetSplitWidgets();
-                        
-                        if (node.syncFramesFromTime) node.syncFramesFromTime();
                     }
                 };
 
-                // FIX 3: 使用 loaded_frame_count 替代 source_frame_count
+                if (videoWidget) {
+                    const originalCallback = videoWidget.callback;
+                    videoWidget.callback = function () {
+                        if (originalCallback) originalCallback.apply(this, arguments);
+                        applyVideoPath(this.value);
+                    };
+                }
+
                 const _videoExecHandler = ({ detail }) => {
                     if (!detail || String(detail.node) !== String(node.id)) return;
                     const out = detail.output;
@@ -367,24 +390,16 @@ app.registerExtension({
                                 fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
                             
-                            // 使用 loaded 数据而非 source 数据
-                            const loadedFrameCount = info.loaded_frame_count !== undefined ? info.loaded_frame_count : info.source_frame_count;
-                            const loadedDuration = info.loaded_duration !== undefined ? info.loaded_duration : info.source_duration;
-                            
-                            if (loadedFrameCount !== undefined && endFrameWidget) {
-                                node.accurateFrameCount = loadedFrameCount || 0;
-                                node.accurateDuration = loadedDuration || 0;
+                            if (info.loaded_frame_count !== undefined) {
+                                node.accurateFrameCount = info.loaded_frame_count;
+                                node.accurateDuration = info.loaded_duration || 0;
                                 
-                                const currentEndFrame = parseInt(endFrameWidget.value) || 0;
-                                
-                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
-                                    endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
-                                    
-                                    if (endTimeWidget) endTimeWidget.value = parseFloat((node.accurateDuration || 0).toFixed(3));
-                                    
-                                    updateRuler();
-                                    updateUI(true);
+                                if (endTimeWidget) {
+                                    endTimeWidget.value = node.accurateDuration;
                                 }
+                                node.syncFramesFromTime();
+                                updateRuler();
+                                updateUI(true);
                             }
                         } catch(e) {
                             console.error("Failed to parse video_info", e);
@@ -399,7 +414,6 @@ app.registerExtension({
                     if (_videoOrigRemoved) _videoOrigRemoved.apply(this, arguments);
                 };
 
-                // FIX 4: onExecuted 同样使用 loaded 数据
                 node.onExecuted = function (output) {
                     if (output && output.video_path && output.video_path.length > 0) {
                         applyVideoPath(output.video_path[0]);
@@ -414,21 +428,16 @@ app.registerExtension({
                                 fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
                             
-                            const loadedFrameCount = info.loaded_frame_count !== undefined ? info.loaded_frame_count : info.source_frame_count;
-                            const loadedDuration = info.loaded_duration !== undefined ? info.loaded_duration : info.source_duration;
-                            
-                            if (loadedFrameCount !== undefined && endFrameWidget) {
-                                node.accurateFrameCount = loadedFrameCount || 0;
-                                node.accurateDuration = loadedDuration || 0;
+                            if (info.loaded_frame_count !== undefined) {
+                                node.accurateFrameCount = info.loaded_frame_count;
+                                node.accurateDuration = info.loaded_duration || 0;
                                 
-                                const currentEndFrame = parseInt(endFrameWidget.value) || 0;
-                                
-                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
-                                    endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
-                                    if (endTimeWidget) endTimeWidget.value = parseFloat((node.accurateDuration || 0).toFixed(3));
-                                    updateRuler();
-                                    updateUI(true);
+                                if (endTimeWidget) {
+                                    endTimeWidget.value = node.accurateDuration;
                                 }
+                                node.syncFramesFromTime();
+                                updateRuler();
+                                updateUI(true);
                             }
                         } catch(e) {}
                     }
@@ -447,20 +456,16 @@ app.registerExtension({
                 const uploadFile = async (file) => {
                     try {
                         if (errorMsg) errorMsg.style.display = "none";
-                        if (file.path) {
-                            videoWidget.value = file.path;
-                            node.updatePreview(file.path);
-                            if (startTimeWidget) startTimeWidget.value = 0;
-                            if (endTimeWidget) endTimeWidget.value = 0;
-                            if (startFrameWidget) startFrameWidget.value = 0;
-                            if (endFrameWidget) endFrameWidget.value = 0;
-                            resetSplitWidgets();
-                            node.syncFramesFromTime();
-                            return;
-                        }
                         btnWidget.name = "Uploading...";
                         node.setDirtyCanvas(true, false);
                         const CHUNK_SIZE = 10 * 1024 * 1024;
+
+                        if (file.path) {
+                            resetAllParams();
+                            videoWidget.value = file.path;
+                            node.updatePreview(file.path);
+                            return;
+                        }
 
                         if (file.size > CHUNK_SIZE) {
                             const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
@@ -479,14 +484,9 @@ app.registerExtension({
                                 if (resp.status !== 200) throw new Error("Chunk upload failed");
                                 if (i === totalChunks - 1) {
                                     const data = await resp.json();
+                                    resetAllParams();
                                     videoWidget.value = data.name;
                                     node.updatePreview(data.name);
-                                    if (startTimeWidget) startTimeWidget.value = 0;
-                                    if (endTimeWidget) endTimeWidget.value = 0;
-                                    if (startFrameWidget) startFrameWidget.value = 0;
-                                    if (endFrameWidget) endFrameWidget.value = 0;
-                                    resetSplitWidgets();
-                                    node.syncFramesFromTime();
                                 }
                             }
                         } else {
@@ -496,14 +496,9 @@ app.registerExtension({
                             if (resp.status === 413) throw new Error("File too large.");
                             if (resp.status === 200) {
                                 const data = await resp.json();
+                                resetAllParams();
                                 videoWidget.value = data.name;
                                 node.updatePreview(data.name);
-                                if (startTimeWidget) startTimeWidget.value = 0;
-                                if (endTimeWidget) endTimeWidget.value = 0;
-                                if (startFrameWidget) startFrameWidget.value = 0;
-                                if (endFrameWidget) endFrameWidget.value = 0;
-                                resetSplitWidgets();
-                                node.syncFramesFromTime();
                             } else {
                                 throw new Error(`Upload failed: ${resp.statusText}`);
                             }
@@ -913,7 +908,8 @@ app.registerExtension({
                     });
                 }, 100);
 
-                const updateCropUI = () => {
+                // 核心修改：改为 function 声明以便提升，确保 resetAllParams 中能安全调用
+                function updateCropUI() {
                     const vw = videoPreview.videoWidth;
                     const vh = videoPreview.videoHeight;
                     let cx = cropXWidget ? parseFloat(cropXWidget.value) || 0 : 0;
@@ -948,7 +944,7 @@ app.registerExtension({
                     cropBox.style.top = `${yOffset + cy * renderedH}px`;
                     cropBox.style.width = `${cw_val * renderedW}px`;
                     cropBox.style.height = `${ch_val * renderedH}px`;
-                };
+                }
 
                 const onCropPointerDown = (e, handle) => {
                     if (!isCropVisible) return;
@@ -1253,17 +1249,14 @@ app.registerExtension({
 
                 setTimeout(() => { updateRuler(); updateUI(); }, 50);
 
-                // FIX 5: onloadedmetadata 始终重新计算并同步
                 videoPreview.onloadedmetadata = () => {
                     duration = videoPreview.duration;
                     node.accurateDuration = duration;
                     
-                    // 始终更新 endTimeWidget 为完整时长
                     if (endTimeWidget) {
                         endTimeWidget.value = duration;
                     }
                     
-                    // 始终同步帧数和时间
                     node.syncFramesFromTime();
                     
                     updateRuler();
@@ -1372,7 +1365,7 @@ app.registerExtension({
                     }
                 });
 
-                if (videoWidget && videoWidget.value) node.updatePreview(videoWidget.value);
+                if (videoWidget && videoWidget.value) applyVideoPath(videoWidget.value);
                 return r;
             };
         }
