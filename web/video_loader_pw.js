@@ -337,7 +337,7 @@ app.registerExtension({
                     node._lastLoadedVideoPath = p;
                     if (videoWidget) videoWidget.value = p;
                     if (isNewFile) {
-                        // 重置内部状态，清除旧视频的数据
+                        // 关键修复：立即重置所有内部状态，清除旧视频的数据
                         duration = 0;
                         node.accurateFrameCount = 0;
                         node.accurateDuration = 0;
@@ -377,6 +377,8 @@ app.registerExtension({
                             }
                             
                             if (info.loaded_frame_count !== undefined && endFrameWidget) {
+                                // 关键修复：主动更新 duration，不再单纯依赖浏览器的 onloadedmetadata
+                                duration = info.loaded_duration || 0;
                                 node.accurateFrameCount = info.loaded_frame_count;
                                 node.accurateDuration = info.loaded_duration || 0;
                                 
@@ -417,6 +419,7 @@ app.registerExtension({
                                 fpsDisplay.textContent = `source fps: ${info.source_fps}`;
                             }
                             if (info.loaded_frame_count !== undefined && endFrameWidget) {
+                                duration = info.loaded_duration || 0;
                                 node.accurateFrameCount = info.loaded_frame_count;
                                 node.accurateDuration = info.loaded_duration || 0;
                                 
@@ -1254,15 +1257,14 @@ app.registerExtension({
                 setTimeout(() => { updateRuler(); updateUI(); }, 50);
 
                 videoPreview.onloadedmetadata = () => {
-                    duration = videoPreview.duration;
-                    // 只有在执行处理器尚未运行时才使用浏览器端的元数据
-                    // 避免覆盖Python端返回的更准确的转换后数值
+                    // 只有在执行处理器尚未运行时，才使用浏览器端的元数据更新 duration
                     if (!node._execHandlerHasRun) {
+                        duration = videoPreview.duration;
                         node.accurateDuration = duration;
-                    }
-                    if (endTimeWidget && (endTimeWidget.value === 0 || (endTimeWidget.value > duration && !node._execHandlerHasRun))) {
-                        endTimeWidget.value = duration;
-                        node.syncFramesFromTime();
+                        if (endTimeWidget && (endTimeWidget.value === 0 || endTimeWidget.value > duration)) {
+                            endTimeWidget.value = duration;
+                            node.syncFramesFromTime();
+                        }
                     }
                     updateRuler();
                     updateUI();
