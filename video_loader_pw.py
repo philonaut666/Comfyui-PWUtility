@@ -155,11 +155,13 @@ class VideoLoaderPW:
         if actual_end_time <= 0:
             actual_end_time = float('inf')
 
+        # FIX 1: 修复 target_frame_count 计算逻辑
         target_frame_count = -1
         if display_mode == "frames":
             if end_frame > 0:
                 target_frame_count = end_frame - start_frame + 1
-            if target_frame_count < 0: target_frame_count = 0
+                if target_frame_count < 0: 
+                    target_frame_count = 0
 
         frames = []
         image_tensor = None
@@ -176,7 +178,7 @@ class VideoLoaderPW:
             
             frame_interval = 1.0 / fr
             expected_target_time = actual_start_time
-             
+            
             alloc_end_time = actual_end_time if actual_end_time != float('inf') else video_duration
             expected_frames = 0
             if alloc_end_time > 0:
@@ -216,7 +218,7 @@ class VideoLoaderPW:
                     if actual_end_time != float('inf') and expected_target_time >= actual_end_time - 1e-5:
                         break
                         
-                    if target_frame_count >= 0 and frames_loaded >= target_frame_count:
+                    if target_frame_count > 0 and frames_loaded >= target_frame_count:
                         break
                         
                     if image_tensor is None and expected_frames > 0:
@@ -285,11 +287,11 @@ class VideoLoaderPW:
                            
                     resampled_frames = resampler.resample(frame)
                     for r_frame in resampled_frames:
-                        audio_data.append(r_frame.to_ndarray()) 
+                        audio_data.append(r_frame.to_ndarray())
                           
                 if audio_data:
                     waveform_np = np.concatenate(audio_data, axis=1)
-                    waveform = torch.from_numpy(waveform_np).float() 
+                    waveform = torch.from_numpy(waveform_np).float()
                      
                     if first_frame_time is None:
                         first_frame_time = 0.0
@@ -318,28 +320,29 @@ class VideoLoaderPW:
         loaded_w = int(image_tensor.shape[2]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
         
         video_info = json.dumps({
-            "source_fps":         round(source_fps, 2),
+            "source_fps": round(source_fps, 2),
             "source_frame_count": source_frame_count,
-            "source_duration":    round(source_duration, 2),
-            "source_width":       orig_w,
-            "source_height":      orig_h,
-            "loaded_fps":         round(fr, 2),
+            "source_duration": round(source_duration, 2),
+            "source_width": orig_w,
+            "source_height": orig_h,
+            "loaded_fps": round(fr, 2),
             "loaded_frame_count": frame_count,
-            "loaded_duration":    final_duration_sec,
-            "loaded_width":       loaded_w,
-            "loaded_height":      loaded_h,
+            "loaded_duration": final_duration_sec,
+            "loaded_width": loaded_w,
+            "loaded_height": loaded_h,
         }, indent=4)
 
+        # FIX 2: 修复 g_end_frame 计算，使用目标fps而非原始fps
         if display_mode == "frames":
             g_start_frame = s_frame_0
             if e_frame_0 > 0:
                 g_end_frame = e_frame_0
             else:
-                g_end_frame = (source_frame_count - 1) if source_frame_count > 0 else int(round(video_duration * fr)) - 1
+                g_end_frame = int(round(video_duration * fr)) - 1
         else:
             g_start_frame = int(round(actual_start_time * fr))
             if actual_end_time == float('inf'):
-                g_end_frame = (source_frame_count - 1) if source_frame_count > 0 else int(round(video_duration * fr)) - 1
+                g_end_frame = int(round(video_duration * fr)) - 1
             else:
                 g_end_frame = max(g_start_frame, int(round(actual_end_time * fr)) - 1)
                 
@@ -399,7 +402,7 @@ class VideoLoaderPW:
         elif split_count == 1:
             p_abs_0 = max(0, split_purple_point_idx)
             p_local = p_abs_0 - g_start_frame
-             
+            
             p_local = max(1, min(p_local, g_end_local - 1))
             if p_local < 1: p_local = 1
             if p_local > g_end_local - 1: p_local = g_end_local - 1
@@ -426,7 +429,7 @@ class VideoLoaderPW:
         elif split_count == 2:
             p_abs_0 = max(0, split_purple_point_idx)
             g_abs_0 = max(0, split_green_point_idx)
-             
+            
             p_local = p_abs_0 - g_start_frame
             g_local = g_abs_0 - g_start_frame
             
@@ -450,7 +453,7 @@ class VideoLoaderPW:
         split_info_str = json.dumps(split_info_dict)
 
         return {
-            "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]}, 
+            "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]},
             "result": (image_tensor, audio_dict, frame_count, final_duration_sec, float(frame_rate), video_info, repeat_last_frame_count, split_info_str)
         }
 
