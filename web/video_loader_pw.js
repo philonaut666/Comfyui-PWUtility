@@ -187,16 +187,6 @@ app.registerExtension({
                     }
                 };
 
-                const resetSplitWidgets = () => {
-                    if (splitCountWidget) splitCountWidget.value = 0;
-                    if (splitPurpleWidget) splitPurpleWidget.value = 0.0;
-                    if (splitPurpleIdxWidget) splitPurpleIdxWidget.value = 0;
-                    if (splitGreenWidget) splitGreenWidget.value = 0.0;
-                    if (splitGreenIdxWidget) splitGreenIdxWidget.value = 0;
-                    if (selectGenerateWidget) selectGenerateWidget.value = "blue";
-                    node.toggleWidgetVisibility();
-                };
-
                 node.syncFramesFromTime = function () {
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
@@ -322,6 +312,7 @@ app.registerExtension({
                     }
                 };
 
+                // 【修改】改为 function 声明，确保可以在 resetAllParams 中安全调用
                 function updateCropUI() {
                     const vw = videoPreview.videoWidth;
                     const vh = videoPreview.videoHeight;
@@ -359,6 +350,7 @@ app.registerExtension({
                     cropBox.style.height = `${ch_val * renderedH}px`;
                 }
 
+                // 【修改】改为 function 声明
                 function updateRuler() {
                     timeRuler.innerHTML = '';
                     const activeDur = getActiveDuration();
@@ -388,6 +380,7 @@ app.registerExtension({
                     }
                 }
 
+                // 【修改】改为 function 声明
                 function updateUI(syncPlayer = false) {
                     const activeDur = getActiveDuration();
                     let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
@@ -442,24 +435,25 @@ app.registerExtension({
                     if (typeof node.updateSplitHandles === 'function') node.updateSplitHandles();
                 }
 
-                // 【核心修复 1】：彻底清空旧视频缓存，重置所有参数
+                // 【核心修改 1】：彻底重置所有参数与缓存
                 const resetAllParams = () => {
-                    node.accurateFrameCount = 0;
+                    // 1. 强制清空旧视频的元数据缓存 (防止限制新视频的滑块)
+                    duration = 0;
                     node.accurateDuration = 0;
-                    duration = 0; 
+                    node.accurateFrameCount = 0;
                     
+                    // 2. 重置 ComfyUI Widgets 到绝对默认值
                     if (startTimeWidget) startTimeWidget.value = 0;
+                    if (endTimeWidget) endTimeWidget.value = 0; // 0 代表到结尾
                     if (startFrameWidget) startFrameWidget.value = 0;
-                    
-                    // 将 end 设为 0，代表“到视频末尾”
-                    if (endTimeWidget) endTimeWidget.value = 0; 
-                    if (endFrameWidget) endFrameWidget.value = 0;
+                    if (endFrameWidget) endFrameWidget.value = 0; // 0 代表到结尾
                     
                     if (cropXWidget) cropXWidget.value = 0.0;
                     if (cropYWidget) cropYWidget.value = 0.0;
                     if (cropWWidget) cropWWidget.value = 1.0;
                     if (cropHWidget) cropHWidget.value = 1.0;
                     
+                    // 3. 重置预览窗口 UI 状态
                     isCropVisible = false;
                     if (cropBtn) {
                         cropBtn.style.background = "rgba(255, 255, 255, 0.1)";
@@ -470,31 +464,44 @@ app.registerExtension({
                     if (wInput) wInput.value = "";
                     if (hInput) hInput.value = "";
                     
-                    resetSplitWidgets();
+                    // 4. 重置分割点参数
+                    if (splitCountWidget) splitCountWidget.value = 0;
+                    if (splitPurpleWidget) splitPurpleWidget.value = 0.0;
+                    if (splitPurpleIdxWidget) splitPurpleIdxWidget.value = 0;
+                    if (splitGreenWidget) splitGreenWidget.value = 0.0;
+                    if (splitGreenIdxWidget) splitGreenIdxWidget.value = 0;
+                    if (selectGenerateWidget) selectGenerateWidget.value = "blue";
                     
+                    // 5. 更新 Widget 显隐
+                    node.toggleWidgetVisibility();
+                    
+                    // 6. 立即刷新 UI (此时 duration=0，UI 处于初始安全状态)
                     updateCropUI();
                     updateRuler();
                     updateUI(true);
                 };
 
+                // 【核心修改 2】：统一加载入口，严格遵循 重置 -> 加载
                 const applyVideoPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
                     const isNewFile = (p !== node._lastLoadedVideoPath);
                     
                     if (isNewFile) {
+                        // 步骤 1: 重置所有参数
                         resetAllParams(); 
                         
+                        // 记录新路径
                         node._lastLoadedVideoPath = p;
                         if (videoWidget) videoWidget.value = p;
                         
+                        // 步骤 2: 加载新视频，更新预览
                         if (node.updatePreview) node.updatePreview(p);
                     } else {
                         if (videoWidget) videoWidget.value = p;
                     }
                 };
 
-                // 【核心修复 2】：下拉框切换视频时，必须调用 applyVideoPath 触发重置
                 if (videoWidget) {
                     const originalCallback = videoWidget.callback;
                     videoWidget.callback = function () {
@@ -515,29 +522,33 @@ app.registerExtension({
                             const infoStr = Array.isArray(out.video_info) ? out.video_info[0] : out.video_info;
                             const info = JSON.parse(infoStr);
                             
-                            const loadedFps = info.loaded_fps !== undefined ? info.loaded_fps : info.source_fps;
-                            const loadedFrameCount = info.loaded_frame_count !== undefined ? info.loaded_frame_count : info.source_frame_count;
-                            const loadedDuration = info.loaded_duration !== undefined ? info.loaded_duration : info.source_duration;
-
-                            if (loadedFps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
-                                fpsDisplay.textContent = `fps: ${loadedFps}`;
+                            if (info.loaded_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
+                                fpsDisplay.textContent = `fps: ${info.loaded_fps}`;
+                            } else if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
+                                fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
                             
-                            if (loadedFrameCount !== undefined && endFrameWidget) {
-                                node.accurateFrameCount = loadedFrameCount;
-                                node.accurateDuration = loadedDuration || 0;
+                            // 【核心修改 4】：用后端精确数据覆盖前端估算数据
+                            if (info.loaded_frame_count !== undefined) {
+                                node.accurateFrameCount = info.loaded_frame_count;
+                                node.accurateDuration = info.loaded_duration || 0;
                                 
-                                const currentEndFrame = parseInt(endFrameWidget.value) || 0;
-                                
-                                // 【核心修复 3】：只要 end_frame 是 0，就强制跳到最后
-                                if (currentEndFrame === 0) {
-                                    endFrameWidget.value = loadedFrameCount > 0 ? loadedFrameCount - 1 : 0;
-                                    if (endTimeWidget) endTimeWidget.value = parseFloat((loadedDuration || 0).toFixed(3));
-                                    
-                                    node.syncFramesFromTime();
-                                    updateRuler();
-                                    updateUI(true);
+                                if (endTimeWidget) {
+                                    let currentEnd = parseFloat(endTimeWidget.value) || 0;
+                                    if (currentEnd === 0 || currentEnd > node.accurateDuration) {
+                                        endTimeWidget.value = node.accurateDuration;
+                                    }
                                 }
+                                if (endFrameWidget) {
+                                    let currentEndF = parseInt(endFrameWidget.value) || 0;
+                                    if (currentEndF === 0 || currentEndF >= node.accurateFrameCount) {
+                                        endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                                    }
+                                }
+                                
+                                node.syncFramesFromTime();
+                                updateRuler();
+                                updateUI(true);
                             }
                         } catch(e) {
                             console.error("Failed to parse video_info", e);
@@ -560,29 +571,32 @@ app.registerExtension({
                         try {
                             const infoStr = Array.isArray(output.video_info) ? output.video_info[0] : output.video_info;
                             const info = JSON.parse(infoStr);
-                            
-                            const loadedFps = info.loaded_fps !== undefined ? info.loaded_fps : info.source_fps;
-                            const loadedFrameCount = info.loaded_frame_count !== undefined ? info.loaded_frame_count : info.source_frame_count;
-                            const loadedDuration = info.loaded_duration !== undefined ? info.loaded_duration : info.source_duration;
-
-                            if (loadedFps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
-                                fpsDisplay.textContent = `fps: ${loadedFps}`;
+                            if (info.loaded_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
+                                fpsDisplay.textContent = `fps: ${info.loaded_fps}`;
+                            } else if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
+                                fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
                             
-                            if (loadedFrameCount !== undefined && endFrameWidget) {
-                                node.accurateFrameCount = loadedFrameCount;
-                                node.accurateDuration = loadedDuration || 0;
+                            if (info.loaded_frame_count !== undefined) {
+                                node.accurateFrameCount = info.loaded_frame_count;
+                                node.accurateDuration = info.loaded_duration || 0;
                                 
-                                const currentEndFrame = parseInt(endFrameWidget.value) || 0;
-                                
-                                if (currentEndFrame === 0) {
-                                    endFrameWidget.value = loadedFrameCount > 0 ? loadedFrameCount - 1 : 0;
-                                    if (endTimeWidget) endTimeWidget.value = parseFloat((loadedDuration || 0).toFixed(3));
-                                    
-                                    node.syncFramesFromTime();
-                                    updateRuler();
-                                    updateUI(true);
+                                if (endTimeWidget) {
+                                    let currentEnd = parseFloat(endTimeWidget.value) || 0;
+                                    if (currentEnd === 0 || currentEnd > node.accurateDuration) {
+                                        endTimeWidget.value = node.accurateDuration;
+                                    }
                                 }
+                                if (endFrameWidget) {
+                                    let currentEndF = parseInt(endFrameWidget.value) || 0;
+                                    if (currentEndF === 0 || currentEndF >= node.accurateFrameCount) {
+                                        endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                                    }
+                                }
+                                
+                                node.syncFramesFromTime();
+                                updateRuler();
+                                updateUI(true);
                             }
                         } catch(e) {}
                     }
@@ -606,6 +620,7 @@ app.registerExtension({
                         const CHUNK_SIZE = 10 * 1024 * 1024;
 
                         if (file.path) {
+                            // 步骤 1 & 2
                             resetAllParams();
                             videoWidget.value = file.path;
                             node.updatePreview(file.path);
@@ -629,6 +644,7 @@ app.registerExtension({
                                 if (resp.status !== 200) throw new Error("Chunk upload failed");
                                 if (i === totalChunks - 1) {
                                     const data = await resp.json();
+                                    // 步骤 1 & 2
                                     resetAllParams();
                                     videoWidget.value = data.name;
                                     node.updatePreview(data.name);
@@ -641,6 +657,7 @@ app.registerExtension({
                             if (resp.status === 413) throw new Error("File too large.");
                             if (resp.status === 200) {
                                 const data = await resp.json();
+                                // 步骤 1 & 2
                                 resetAllParams();
                                 videoWidget.value = data.name;
                                 node.updatePreview(data.name);
@@ -1273,32 +1290,30 @@ app.registerExtension({
 
                 setTimeout(() => { updateRuler(); updateUI(); }, 50);
 
-                // 【核心修复 4】：前端加载完成后，只要 end 为 0，强制跳到最后
+                // 【核心修改 3】：依据新载入的视频重新绘制，与之前的视频彻底无关
                 videoPreview.onloadedmetadata = () => {
                     const newDuration = videoPreview.duration;
                     if (!newDuration || newDuration === Infinity || isNaN(newDuration)) return;
 
+                    // 步骤 3: 根据新加载的视频，更新所有参数和预览窗口
+                    // 1. 更新时长缓存
                     duration = newDuration;
                     node.accurateDuration = newDuration;
                     
+                    // 2. 计算新视频的总帧数并更新缓存 (彻底破除旧帧数限制)
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     const newTotalFrames = Math.round(newDuration * fr);
                     node.accurateFrameCount = newTotalFrames; 
 
+                    // 3. 更新 end_time 和 end_frame 为新视频的最大值 (因为 resetAllParams 将它们设为了 0)
                     if (endTimeWidget) {
-                        let currentEnd = parseFloat(endTimeWidget.value) || 0;
-                        if (currentEnd === 0 || currentEnd > newDuration) {
-                            endTimeWidget.value = newDuration;
-                        }
+                        endTimeWidget.value = newDuration;
                     }
-                    
                     if (endFrameWidget) {
-                        let currentEndF = parseInt(endFrameWidget.value) || 0;
-                        if (currentEndF === 0 || currentEndF >= newTotalFrames) {
-                            endFrameWidget.value = newTotalFrames > 0 ? newTotalFrames - 1 : 0;
-                        }
+                        endFrameWidget.value = newTotalFrames > 0 ? newTotalFrames - 1 : 0;
                     }
 
+                    // 4. 强制同步并彻底重绘时间轴
                     node.syncFramesFromTime();
                     updateRuler();
                     updateUI(true);
