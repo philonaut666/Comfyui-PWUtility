@@ -1274,23 +1274,40 @@ app.registerExtension({
 
                 // 【核心修复 5】：无条件用新视频的 duration 覆盖旧值
                 videoPreview.onloadedmetadata = () => {
-                    duration = videoPreview.duration;
-                    node.accurateDuration = duration;
+                    const newDuration = videoPreview.duration;
+                    // 过滤掉无效的 duration (如某些特殊封装视频导致的 NaN 或 Infinity)
+                    if (!newDuration || newDuration === Infinity || isNaN(newDuration)) return;
+                
+                    // 1. 彻底清空旧的时间缓存，使用新视频的真实时长
+                    duration = newDuration;
+                    node.accurateDuration = newDuration;
                     
+                    // 2. 【核心修复】：依据新视频时长和当前 fps，计算新的总帧数，彻底覆盖旧帧数缓存
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    const newTotalFrames = Math.round(newDuration * fr);
+                    node.accurateFrameCount = newTotalFrames; 
+                
+                    // 3. 强制更新 end_time 和 end_frame 为新视频的最大值 (如果当前为 0 代表到结尾)
                     if (endTimeWidget) {
                         let currentEnd = parseFloat(endTimeWidget.value) || 0;
-                        if (currentEnd === 0 || currentEnd > duration) {
-                            endTimeWidget.value = duration;
+                        if (currentEnd === 0 || currentEnd > newDuration) {
+                            endTimeWidget.value = newDuration;
                         }
                     }
                     
+                    if (endFrameWidget) {
+                        let currentEndF = parseInt(endFrameWidget.value) || 0;
+                        if (currentEndF === 0 || currentEndF >= newTotalFrames) {
+                            endFrameWidget.value = newTotalFrames > 0 ? newTotalFrames - 1 : 0;
+                        }
+                    }
+                
+                    // 4. 强制同步并彻底重绘时间轴，与旧视频完全切割
                     node.syncFramesFromTime();
-                    
                     updateRuler();
                     updateUI(true);
                     updateCropUI();
                 };
-
                 videoPreview.ontimeupdate = () => {
                     if (!duration || dragging) return;
                     let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
