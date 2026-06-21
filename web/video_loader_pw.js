@@ -322,7 +322,6 @@ app.registerExtension({
                     }
                 };
 
-                // 【核心修复 1】：改为 function 声明，确保可以在 resetAllParams 中安全调用
                 function updateCropUI() {
                     const vw = videoPreview.videoWidth;
                     const vh = videoPreview.videoHeight;
@@ -443,22 +442,19 @@ app.registerExtension({
                     if (typeof node.updateSplitHandles === 'function') node.updateSplitHandles();
                 }
 
-                // 【核心修复 2】：彻底清空缓存并重置所有参数
+                // 【核心修复 1】：彻底清空旧视频缓存，重置所有参数
                 const resetAllParams = () => {
-                    // 1. 强制清空旧视频的元数据缓存，防止限制新视频的滑块
                     node.accurateFrameCount = 0;
                     node.accurateDuration = 0;
                     duration = 0; 
                     
-                    // 2. 重置时间/帧数参数到绝对默认值
                     if (startTimeWidget) startTimeWidget.value = 0;
                     if (startFrameWidget) startFrameWidget.value = 0;
                     
-                    // end_time 和 end_frame 设置为 0 表示“到视频结尾”
+                    // 将 end 设为 0，代表“到视频末尾”
                     if (endTimeWidget) endTimeWidget.value = 0; 
                     if (endFrameWidget) endFrameWidget.value = 0;
                     
-                    // 3. 重置裁剪参数
                     if (cropXWidget) cropXWidget.value = 0.0;
                     if (cropYWidget) cropYWidget.value = 0.0;
                     if (cropWWidget) cropWWidget.value = 1.0;
@@ -474,16 +470,13 @@ app.registerExtension({
                     if (wInput) wInput.value = "";
                     if (hInput) hInput.value = "";
                     
-                    // 4. 重置分割参数
                     resetSplitWidgets();
                     
-                    // 5. 立即刷新 UI
                     updateCropUI();
                     updateRuler();
                     updateUI(true);
                 };
 
-                // 【核心修复 3】：先重置，后加载
                 const applyVideoPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
@@ -501,6 +494,7 @@ app.registerExtension({
                     }
                 };
 
+                // 【核心修复 2】：下拉框切换视频时，必须调用 applyVideoPath 触发重置
                 if (videoWidget) {
                     const originalCallback = videoWidget.callback;
                     videoWidget.callback = function () {
@@ -521,26 +515,29 @@ app.registerExtension({
                             const infoStr = Array.isArray(out.video_info) ? out.video_info[0] : out.video_info;
                             const info = JSON.parse(infoStr);
                             
-                            if (info.loaded_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
-                                fpsDisplay.textContent = `fps: ${info.loaded_fps}`;
-                            } else if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
-                                fpsDisplay.textContent = `fps: ${info.source_fps}`;
+                            const loadedFps = info.loaded_fps !== undefined ? info.loaded_fps : info.source_fps;
+                            const loadedFrameCount = info.loaded_frame_count !== undefined ? info.loaded_frame_count : info.source_frame_count;
+                            const loadedDuration = info.loaded_duration !== undefined ? info.loaded_duration : info.source_duration;
+
+                            if (loadedFps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
+                                fpsDisplay.textContent = `fps: ${loadedFps}`;
                             }
                             
-                            if (info.loaded_frame_count !== undefined) {
-                                node.accurateFrameCount = info.loaded_frame_count;
-                                node.accurateDuration = info.loaded_duration || 0;
+                            if (loadedFrameCount !== undefined && endFrameWidget) {
+                                node.accurateFrameCount = loadedFrameCount;
+                                node.accurateDuration = loadedDuration || 0;
                                 
-                                // 【核心修复 4】：只要 end_time 是 0，就强制更新为新视频的真实时长
-                                if (endTimeWidget) {
-                                    let currentEnd = parseFloat(endTimeWidget.value) || 0;
-                                    if (currentEnd === 0 || currentEnd > node.accurateDuration) {
-                                        endTimeWidget.value = node.accurateDuration;
-                                    }
+                                const currentEndFrame = parseInt(endFrameWidget.value) || 0;
+                                
+                                // 【核心修复 3】：只要 end_frame 是 0，就强制跳到最后
+                                if (currentEndFrame === 0) {
+                                    endFrameWidget.value = loadedFrameCount > 0 ? loadedFrameCount - 1 : 0;
+                                    if (endTimeWidget) endTimeWidget.value = parseFloat((loadedDuration || 0).toFixed(3));
+                                    
+                                    node.syncFramesFromTime();
+                                    updateRuler();
+                                    updateUI(true);
                                 }
-                                node.syncFramesFromTime();
-                                updateRuler();
-                                updateUI(true);
                             }
                         } catch(e) {
                             console.error("Failed to parse video_info", e);
@@ -563,25 +560,29 @@ app.registerExtension({
                         try {
                             const infoStr = Array.isArray(output.video_info) ? output.video_info[0] : output.video_info;
                             const info = JSON.parse(infoStr);
-                            if (info.loaded_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
-                                fpsDisplay.textContent = `fps: ${info.loaded_fps}`;
-                            } else if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
-                                fpsDisplay.textContent = `fps: ${info.source_fps}`;
+                            
+                            const loadedFps = info.loaded_fps !== undefined ? info.loaded_fps : info.source_fps;
+                            const loadedFrameCount = info.loaded_frame_count !== undefined ? info.loaded_frame_count : info.source_frame_count;
+                            const loadedDuration = info.loaded_duration !== undefined ? info.loaded_duration : info.source_duration;
+
+                            if (loadedFps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
+                                fpsDisplay.textContent = `fps: ${loadedFps}`;
                             }
                             
-                            if (info.loaded_frame_count !== undefined) {
-                                node.accurateFrameCount = info.loaded_frame_count;
-                                node.accurateDuration = info.loaded_duration || 0;
+                            if (loadedFrameCount !== undefined && endFrameWidget) {
+                                node.accurateFrameCount = loadedFrameCount;
+                                node.accurateDuration = loadedDuration || 0;
                                 
-                                if (endTimeWidget) {
-                                    let currentEnd = parseFloat(endTimeWidget.value) || 0;
-                                    if (currentEnd === 0 || currentEnd > node.accurateDuration) {
-                                        endTimeWidget.value = node.accurateDuration;
-                                    }
+                                const currentEndFrame = parseInt(endFrameWidget.value) || 0;
+                                
+                                if (currentEndFrame === 0) {
+                                    endFrameWidget.value = loadedFrameCount > 0 ? loadedFrameCount - 1 : 0;
+                                    if (endTimeWidget) endTimeWidget.value = parseFloat((loadedDuration || 0).toFixed(3));
+                                    
+                                    node.syncFramesFromTime();
+                                    updateRuler();
+                                    updateUI(true);
                                 }
-                                node.syncFramesFromTime();
-                                updateRuler();
-                                updateUI(true);
                             }
                         } catch(e) {}
                     }
@@ -1272,22 +1273,18 @@ app.registerExtension({
 
                 setTimeout(() => { updateRuler(); updateUI(); }, 50);
 
-                // 【核心修复 5】：无条件用新视频的 duration 覆盖旧值
+                // 【核心修复 4】：前端加载完成后，只要 end 为 0，强制跳到最后
                 videoPreview.onloadedmetadata = () => {
                     const newDuration = videoPreview.duration;
-                    // 过滤掉无效的 duration (如某些特殊封装视频导致的 NaN 或 Infinity)
                     if (!newDuration || newDuration === Infinity || isNaN(newDuration)) return;
-                
-                    // 1. 彻底清空旧的时间缓存，使用新视频的真实时长
+
                     duration = newDuration;
                     node.accurateDuration = newDuration;
                     
-                    // 2. 【核心修复】：依据新视频时长和当前 fps，计算新的总帧数，彻底覆盖旧帧数缓存
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     const newTotalFrames = Math.round(newDuration * fr);
                     node.accurateFrameCount = newTotalFrames; 
-                
-                    // 3. 强制更新 end_time 和 end_frame 为新视频的最大值 (如果当前为 0 代表到结尾)
+
                     if (endTimeWidget) {
                         let currentEnd = parseFloat(endTimeWidget.value) || 0;
                         if (currentEnd === 0 || currentEnd > newDuration) {
@@ -1301,13 +1298,13 @@ app.registerExtension({
                             endFrameWidget.value = newTotalFrames > 0 ? newTotalFrames - 1 : 0;
                         }
                     }
-                
-                    // 4. 强制同步并彻底重绘时间轴，与旧视频完全切割
+
                     node.syncFramesFromTime();
                     updateRuler();
                     updateUI(true);
                     updateCropUI();
                 };
+
                 videoPreview.ontimeupdate = () => {
                     if (!duration || dragging) return;
                     let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
