@@ -525,7 +525,7 @@ app.registerExtension({
                             if (info.loaded_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `fps: ${info.loaded_fps}`;
                             } else if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
-                                fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
+                                fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
                             
                             // 【核心修改 4】：用后端精确数据覆盖前端估算数据
@@ -574,7 +574,7 @@ app.registerExtension({
                             if (info.loaded_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `fps: ${info.loaded_fps}`;
                             } else if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
-                                fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
+                                fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
                             
                             if (info.loaded_frame_count !== undefined) {
@@ -763,7 +763,7 @@ app.registerExtension({
 
                 const fpsDisplay = document.createElement("span");
                 Object.assign(fpsDisplay.style, { fontSize: "12px", color: "#38bdf8", fontWeight: "bold", whiteSpace: "nowrap", marginLeft: "10px" });
-                fpsDisplay.textContent = "source_fps: -";
+                fpsDisplay.textContent = "fps: -";
                 toggleWrapper.appendChild(fpsDisplay);
 
                 const leftContainer = document.createElement("div");
@@ -1043,10 +1043,10 @@ app.registerExtension({
 
                 setTimeout(() => {
                     node.domWidget = node.addDOMWidget("VideoUI", "div", container);
-                    node.domWidget.computeSize = function () { return [396, 250]; };
+                    node.domWidget.computeSize = function () { return [360, 250]; };
                     requestAnimationFrame(() => {
                         if (node.size[0] < 690) node.size[0] = 690;
-                        if (node.size[1] < 760) node.size[1] = 760;
+                        if (node.size[1] < 740) node.size[1] = 740;
                         if (node.onResize) node.onResize(node.size);
                         
                         if (displayModeWidget) {
