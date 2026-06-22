@@ -1038,7 +1038,7 @@ app.registerExtension({
                     node.domWidget.computeSize = function () { return [400, 250]; };
                     requestAnimationFrame(() => {
                         if (node.size[0] < 760) node.size[0] = 760;
-                        if (node.size[1] < 740) node.size[1] = 740;
+                        if (node.size[1] < 900) node.size[1] = 900;
                         if (node.onResize) node.onResize(node.size);
                         
                         if (displayModeWidget) {
