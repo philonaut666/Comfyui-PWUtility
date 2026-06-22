@@ -522,8 +522,8 @@ app.registerExtension({
                             const infoStr = Array.isArray(out.video_info) ? out.video_info[0] : out.video_info;
                             const info = JSON.parse(infoStr);
                             
-                            if (info.loaded_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
-                                fpsDisplay.textContent = `fps: ${info.loaded_fps}`;
+                            if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
+                                fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             } else if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
@@ -571,8 +571,8 @@ app.registerExtension({
                         try {
                             const infoStr = Array.isArray(output.video_info) ? output.video_info[0] : output.video_info;
                             const info = JSON.parse(infoStr);
-                            if (info.loaded_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
-                                fpsDisplay.textContent = `fps: ${info.loaded_fps}`;
+                            if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
+                                fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             } else if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `fps: ${info.source_fps}`;
                             }
@@ -1045,7 +1045,7 @@ app.registerExtension({
                     node.domWidget = node.addDOMWidget("VideoUI", "div", container);
                     node.domWidget.computeSize = function () { return [360, 250]; };
                     requestAnimationFrame(() => {
-                        if (node.size[0] < 690) node.size[0] = 690;
+                        if (node.size[0] < 690) node.size[0] = 760;
                         if (node.size[1] < 740) node.size[1] = 740;
                         if (node.onResize) node.onResize(node.size);
                         
