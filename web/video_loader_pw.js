@@ -1035,9 +1035,9 @@ app.registerExtension({
 
                 setTimeout(() => {
                     node.domWidget = node.addDOMWidget("VideoUI", "div", container);
-                    node.domWidget.computeSize = function () { return [360, 250]; };
+                    node.domWidget.computeSize = function () { return [400, 250]; };
                     requestAnimationFrame(() => {
-                        if (node.size[0] < 690) node.size[0] = 690;
+                        if (node.size[0] < 760) node.size[0] = 760;
                         if (node.size[1] < 740) node.size[1] = 740;
                         if (node.onResize) node.onResize(node.size);
                         
