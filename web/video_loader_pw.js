@@ -16,9 +16,11 @@ app.registerExtension({
                 if (this.toggleWidgetVisibility) this.toggleWidgetVisibility();
                 if (this.syncToggleVisual) this.syncToggleVisual();
 
+                // 【修改点 4】：加载工作流时同步状态并刷新预览
                 if (this.widgets) {
                     const videoWidget = this.widgets.find(w => w.name === "video");
                     if (videoWidget && videoWidget.value && this.updatePreview) {
+                        this._lastLoadedVideoPath = videoWidget.value;
                         this.updatePreview(videoWidget.value);
                     }
                 }
@@ -49,7 +51,7 @@ app.registerExtension({
                         }
                     }
                     this.domWidget.element.style.height = `${Math.max(150, size[1] - yOffset - 18)}px`;
-                }
+                } 
             };
 
             nodeType.prototype.onNodeCreated = function () {
@@ -151,7 +153,7 @@ app.registerExtension({
                 const clampSplitValues = () => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
-                    
+                     
                     const s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
                     let e_f = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
                     if (e_f === 0) e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * fr) - 1;
@@ -161,11 +163,11 @@ app.registerExtension({
                         let p_f = parseInt(splitPurpleIdxWidget.value) || 0;
                         let min_p = s_f + 1;
                         let max_p = e_f - 1;
-                        
+                         
                         if (sc === 2 && splitGreenIdxWidget) {
                             let g_f = parseInt(splitGreenIdxWidget.value) || 0;
                             max_p = Math.min(max_p, g_f - 1);
-                        }
+                        } 
                         if (min_p > max_p) min_p = max_p;
                         
                         p_f = Math.max(min_p, Math.min(p_f, max_p));
@@ -303,22 +305,25 @@ app.registerExtension({
                             if (e_f === 0) e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * fr) - 1;
                             splitGreenIdxWidget.value = e_f - 1;
                         }
-                        
+                         
                         clampSplitValues();
                         node.toggleWidgetVisibility();
                         updateUI(true);
                     };
                 }
 
+                // 【修改点 1】：强制刷新视频预览并绕过缓存
                 node.updatePreview = function (filename) {
                     if (!filename) return;
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
-                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
-                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
+                    const timestamp = Date.now();
+                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}&t=${timestamp}`);
+                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input&t=${timestamp}`);
                     
-                    if (videoPreview && videoPreview.src !== url) {
+                    if (videoPreview) {
                         videoPreview.src = url;
+                        videoPreview.load();
                     }
                 };
 
@@ -431,7 +436,7 @@ app.registerExtension({
                         bS = p_val; bE = g_val;
                         gS = g_val; gE = e_val;
                     }
-                    
+                     
                     fillPurple.style.left = `${toPct(pS)}%`;
                     fillPurple.style.width = `${Math.max(0, toPct(pE) - toPct(pS))}%`;
                     fillBlue.style.left = `${toPct(bS)}%`;
@@ -481,21 +486,19 @@ app.registerExtension({
                     updateUI(true);
                 };
 
+                // 【修改点 2】：确保 applyVideoPath 总是刷新预览
                 const applyVideoPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
                     const isNewFile = (p !== node._lastLoadedVideoPath);
-                    
+                     
                     if (isNewFile) {
                         resetAllParams(); 
-                        
                         node._lastLoadedVideoPath = p;
-                        if (videoWidget) videoWidget.value = p;
-                        
-                        if (node.updatePreview) node.updatePreview(p);
-                    } else {
-                        if (videoWidget) videoWidget.value = p;
                     }
+                    
+                    if (videoWidget) videoWidget.value = p;
+                    if (node.updatePreview) node.updatePreview(p);
                 };
 
                 if (videoWidget) {
@@ -518,7 +521,6 @@ app.registerExtension({
                             const infoStr = Array.isArray(out.video_info) ? out.video_info[0] : out.video_info;
                             const info = JSON.parse(infoStr);
                             
-                            // 【修改点 1】：显示 source_fps
                             if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
                             }
@@ -566,7 +568,6 @@ app.registerExtension({
                             const infoStr = Array.isArray(output.video_info) ? output.video_info[0] : output.video_info;
                             const info = JSON.parse(infoStr);
                             
-                            // 【修改点 2】：显示 source_fps
                             if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
                             }
@@ -606,6 +607,7 @@ app.registerExtension({
 
                 const btnWidget = this.addWidget("button", "choose file to upload", null, () => { fileInput.click(); });
 
+                // 【修改点 3】：修复各上传分支的状态同步
                 const uploadFile = async (file) => {
                     try {
                         if (errorMsg) errorMsg.style.display = "none";
@@ -616,6 +618,7 @@ app.registerExtension({
                         if (file.path) {
                             resetAllParams();
                             videoWidget.value = file.path;
+                            node._lastLoadedVideoPath = file.path;
                             node.updatePreview(file.path);
                             return;
                         }
@@ -639,6 +642,7 @@ app.registerExtension({
                                     const data = await resp.json();
                                     resetAllParams();
                                     videoWidget.value = data.name;
+                                    node._lastLoadedVideoPath = data.name;
                                     node.updatePreview(data.name);
                                 }
                             }
@@ -651,6 +655,7 @@ app.registerExtension({
                                 const data = await resp.json();
                                 resetAllParams();
                                 videoWidget.value = data.name;
+                                node._lastLoadedVideoPath = data.name;
                                 node.updatePreview(data.name);
                             } else {
                                 throw new Error(`Upload failed: ${resp.statusText}`);
@@ -672,7 +677,7 @@ app.registerExtension({
                         uploadFile(file);
                         return true;
                     }
-                    return false;
+                    return false; 
                 };
 
                 const originalOnRemove = node.onRemoved;
@@ -752,7 +757,6 @@ app.registerExtension({
                 toggleWrapper.appendChild(toggleTitle);
                 toggleWrapper.appendChild(segmentedToggle);
 
-                // 【修改点 3】：初始化文本改为 source_fps: -
                 const fpsDisplay = document.createElement("span");
                 Object.assign(fpsDisplay.style, { fontSize: "12px", color: "#38bdf8", fontWeight: "bold", whiteSpace: "nowrap", marginLeft: "10px" });
                 fpsDisplay.textContent = "source_fps: -";
@@ -1028,7 +1032,7 @@ app.registerExtension({
                     }
                 };
                 
-                node.updateSplitHandles();
+                node.updateSplitHandles(); 
 
                 trimArea.appendChild(sliderBox);
                 container.appendChild(trimArea);
@@ -1060,7 +1064,7 @@ app.registerExtension({
                         
                         app.graph.setDirtyCanvas(true, true);
                     });
-                }, 100);
+                }, 100); 
 
                 const onCropPointerDown = (e, handle) => {
                     if (!isCropVisible) return;
@@ -1289,7 +1293,7 @@ app.registerExtension({
                     duration = newDuration;
                     node.accurateDuration = newDuration;
                     
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0; 
                     const newTotalFrames = Math.round(newDuration * fr);
                     node.accurateFrameCount = newTotalFrames; 
 
