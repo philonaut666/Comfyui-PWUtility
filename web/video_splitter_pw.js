@@ -9,15 +9,28 @@ app.registerExtension({
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
                 const node = this;
 
-                // 获取对应的 Widget 控件 (已更新为最新的 _idx 后缀)
                 const splitCountWidget = this.widgets.find(w => w.name === "split_count");
+                const alignWidget = this.widgets.find(w => w.name === "align_8n_1");
                 const splitFrontWidget = this.widgets.find(w => w.name === "split_front_point_idx");
                 const splitBackWidget = this.widgets.find(w => w.name === "split_back_point_idx");
 
                 function updateVisibility() {
                     const count = splitCountWidget ? splitCountWidget.value : 0;
 
-                    // 控制 split_front_point_idx 的显隐 (count < 1 即 count == 0 时隐藏)
+                    // 控制 align_8n_1 的显隐
+                    if (alignWidget) {
+                        alignWidget.hidden = count < 1;
+                        if (count < 1) {
+                            alignWidget.type = "hidden";
+                            alignWidget.computeSize = () => [0, -4];
+                        } else {
+                            alignWidget.type = "toggle"; // BOOLEAN 在 ComfyUI 中对应 toggle
+                            delete alignWidget.computeSize;
+                            alignWidget.label = "align_8n+1"; // 美化显示名称
+                        }
+                    }
+
+                    // 控制 split_front_point_idx 的显隐
                     if (splitFrontWidget) {
                         splitFrontWidget.hidden = count < 1;
                         if (count < 1) {
@@ -29,7 +42,7 @@ app.registerExtension({
                         }
                     }
 
-                    // 控制 split_back_point_idx 的显隐 (count < 2 即 count == 0 或 1 时隐藏)
+                    // 控制 split_back_point_idx 的显隐
                     if (splitBackWidget) {
                         splitBackWidget.hidden = count < 2;
                         if (count < 2) {
@@ -41,7 +54,6 @@ app.registerExtension({
                         }
                     }
 
-                    // 重新计算节点尺寸，自适应高度
                     if (node.computeSize) {
                         const minSize = node.computeSize();
                         node.size[0] = Math.max(node.size[0], minSize[0]);
@@ -50,7 +62,6 @@ app.registerExtension({
                     app.graph.setDirtyCanvas(true, true);
                 }
 
-                // 监听 split_count 的变化
                 if (splitCountWidget) {
                     const origCb = splitCountWidget.callback;
                     splitCountWidget.callback = function() {
@@ -59,7 +70,6 @@ app.registerExtension({
                     };
                 }
 
-                // 节点创建时初始化一次可见性
                 setTimeout(updateVisibility, 100);
                 return r;
             };
