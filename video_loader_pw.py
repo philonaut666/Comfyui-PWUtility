@@ -23,11 +23,14 @@ async def upload_chunk(request):
     filename = post.get("filename")
     chunk_index = int(post.get("chunk_index"))
     total_chunks = int(post.get("total_chunks"))
+    
     upload_dir = folder_paths.get_input_directory()
     file_path = os.path.join(upload_dir, filename)
+    
     mode = "ab" if chunk_index > 0 else "wb"
     with open(file_path, mode) as f:
         f.write(file.file.read())
+        
     if chunk_index == total_chunks - 1:
         return web.json_response({"name": filename})
     return web.json_response({"status": "ok"})
@@ -57,7 +60,8 @@ class VideoLoaderPW:
                 "select_generate": (["blue", "purple"], {"default": "blue", "tooltip": "Which segment to use as generate when split_count=1"}),
             },
             "optional": {
-                "path": ("STRING", {"forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
+                # 【修改点 1】：将 path 的类型从 "STRING" 改为 ["STRING", "LIST"] 以支持列表输入
+                "path": (["STRING", "LIST"], {"forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
             }
         }
 
@@ -68,7 +72,17 @@ class VideoLoaderPW:
 
     def load_video(self, video, frame_rate, display_mode, start_time, end_time, start_frame, end_frame, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_purple_point=0.0, split_purple_point_idx=0, split_green_point=0.0, split_green_point_idx=0, select_generate="blue", path=None, **kwargs):
         align_8n_plus_1 = kwargs.get("align_8n+1", True)
-        video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
+        
+        # 【修改点 2】：增加对 list 类型的兼容处理
+        if isinstance(path, list):
+            path = path[0] if path else ""
+            
+        if isinstance(path, str) and path.strip():
+            video_to_load = path.strip()
+        elif isinstance(video, str) and video.strip():
+            video_to_load = video.strip()
+        else:
+            video_to_load = ""
 
         if not video_to_load:
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
@@ -155,7 +169,6 @@ class VideoLoaderPW:
         if actual_end_time <= 0:
             actual_end_time = float('inf')
 
-        # FIX 1: 修复 target_frame_count 计算逻辑
         target_frame_count = -1
         if display_mode == "frames":
             if end_frame > 0:
@@ -178,7 +191,7 @@ class VideoLoaderPW:
             
             frame_interval = 1.0 / fr
             expected_target_time = actual_start_time
-            
+             
             alloc_end_time = actual_end_time if actual_end_time != float('inf') else video_duration
             expected_frames = 0
             if alloc_end_time > 0:
@@ -284,14 +297,14 @@ class VideoLoaderPW:
                         
                     if first_frame_time is None:
                         first_frame_time = frame_time
-                           
+                            
                     resampled_frames = resampler.resample(frame)
                     for r_frame in resampled_frames:
-                        audio_data.append(r_frame.to_ndarray())
+                        audio_data.append(r_frame.to_ndarray()) 
                           
                 if audio_data:
                     waveform_np = np.concatenate(audio_data, axis=1)
-                    waveform = torch.from_numpy(waveform_np).float()
+                    waveform = torch.from_numpy(waveform_np).float() 
                      
                     if first_frame_time is None:
                         first_frame_time = 0.0
@@ -305,7 +318,7 @@ class VideoLoaderPW:
                         waveform = waveform[:, start_sample:end_sample]
                     else:
                         waveform = waveform[:, start_sample:]
-                           
+                            
                     waveform = waveform.unsqueeze(0)
                     audio_dict = {"waveform": waveform, "sample_rate": sample_rate}
             except Exception as e:
@@ -332,7 +345,6 @@ class VideoLoaderPW:
             "loaded_height": loaded_h,
         }, indent=4)
 
-        # FIX 2: 修复 g_end_frame 计算，使用目标fps而非原始fps
         if display_mode == "frames":
             g_start_frame = s_frame_0
             if e_frame_0 > 0:
@@ -349,7 +361,7 @@ class VideoLoaderPW:
         g_start_frame = max(0, g_start_frame)
         g_end_frame = max(g_start_frame, g_end_frame)
         g_end_local = g_end_frame - g_start_frame
-        
+         
         repeat_last_frame_count = 0
 
         def calc_segment(seg_start_local, seg_end_local):
@@ -402,7 +414,7 @@ class VideoLoaderPW:
         elif split_count == 1:
             p_abs_0 = max(0, split_purple_point_idx)
             p_local = p_abs_0 - g_start_frame
-            
+             
             p_local = max(1, min(p_local, g_end_local - 1))
             if p_local < 1: p_local = 1
             if p_local > g_end_local - 1: p_local = g_end_local - 1
@@ -429,7 +441,7 @@ class VideoLoaderPW:
         elif split_count == 2:
             p_abs_0 = max(0, split_purple_point_idx)
             g_abs_0 = max(0, split_green_point_idx)
-            
+             
             p_local = p_abs_0 - g_start_frame
             g_local = g_abs_0 - g_start_frame
             
