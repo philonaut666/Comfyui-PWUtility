@@ -19,16 +19,18 @@ class Queue_Trigger_PW:
     RETURN_NAMES = ("Index", "total")
     OUTPUT_NODE = True     
 
-    # 【核心功能】：强制该节点永不使用 ComfyUI 执行缓存
+    # 【核心机制 1】：强制该节点永不使用 ComfyUI 执行缓存
     @classmethod
     def IS_CHANGED(cls, **kwargs):
         # 返回 NaN (Not a Number)，在 Python 中 NaN != NaN
         # ComfyUI 校验缓存时发现签名不同，就会跳过缓存，每次都强制执行此节点。
+        # 前方节点不受影响，依然正常享受缓存。
         return float("NaN")
 
     def doit(self, Index, total, mode, unique_id):  
         if mode:
             if Index < total - 1:
+                # 没到总次数，Index+1 并触发下一次队列
                 PromptServer.instance.send_sync("node-feedback", {
                     "node_id": unique_id, 
                     "widget_name": "Index", 
@@ -37,6 +39,7 @@ class Queue_Trigger_PW:
                 })
                 PromptServer.instance.send_sync("add-queue", {})
             elif Index >= total - 1:
+                # 达到总次数，循环结束，通知前端归零
                 PromptServer.instance.send_sync("node-feedback", {
                     "node_id": unique_id, 
                     "widget_name": "Index", 
