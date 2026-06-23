@@ -1,3 +1,4 @@
+import math
 from server import PromptServer
 
 class Queue_Trigger_PW:
@@ -18,10 +19,14 @@ class Queue_Trigger_PW:
     RETURN_NAMES = ("Index", "total")
     OUTPUT_NODE = True     
 
+    @classmethod
+    def IS_CHANGED(cls, Index, total, mode, unique_id):
+        # 【核心修复 1】：返回 NaN 强制 ComfyUI 认为节点输入已改变，永不命中缓存
+        return math.nan
+
     def doit(self, Index, total, mode, unique_id):  
         if mode:
             if Index < total - 1:
-                # 还没到总次数，Index + 1 并触发下一次运行
                 PromptServer.instance.send_sync("node-feedback", {
                     "node_id": unique_id, 
                     "widget_name": "Index", 
@@ -30,7 +35,6 @@ class Queue_Trigger_PW:
                 })
                 PromptServer.instance.send_sync("add-queue", {})
             else:
-                # 达到总次数，将 Index 重置为 0，且不触发 add-queue（停止运行）
                 PromptServer.instance.send_sync("node-feedback", {
                     "node_id": unique_id, 
                     "widget_name": "Index", 
