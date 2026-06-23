@@ -1,5 +1,4 @@
 import math
-from server import PromptServer
 
 class Queue_Trigger_PW:
     @classmethod
@@ -21,27 +20,11 @@ class Queue_Trigger_PW:
 
     @classmethod
     def IS_CHANGED(cls, Index, total, mode, unique_id):
-        # 【核心修复 1】：返回 NaN 强制 ComfyUI 认为节点输入已改变，永不命中缓存
+        # 强制返回 NaN，确保 ComfyUI 后端永远不命中缓存
         return math.nan
 
     def doit(self, Index, total, mode, unique_id):  
-        if mode:
-            if Index < total - 1:
-                PromptServer.instance.send_sync("node-feedback", {
-                    "node_id": unique_id, 
-                    "widget_name": "Index", 
-                    "type": "int", 
-                    "value": Index + 1
-                })
-                PromptServer.instance.send_sync("add-queue", {})
-            else:
-                PromptServer.instance.send_sync("node-feedback", {
-                    "node_id": unique_id, 
-                    "widget_name": "Index", 
-                    "type": "int", 
-                    "value": 0
-                })
-
+        # Python 端只做透传，循环逻辑由前端 JS 控制
         return (Index, total)
 
 NODE_CLASS_MAPPINGS = {
