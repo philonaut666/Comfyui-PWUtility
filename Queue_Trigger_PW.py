@@ -9,7 +9,6 @@ class Queue_Trigger_PW:
                 "total": ("INT", {"default": 10, "min": 1, "max": 0xffffffffffffffff}),
                 "mode": ("BOOLEAN", {"default": True, "label_on": "Trigger", "label_off": "Don't trigger"}),
             },
-            "optional": {},
             "hidden": {"unique_id": "UNIQUE_ID"}
         }
     
@@ -19,10 +18,14 @@ class Queue_Trigger_PW:
     RETURN_NAMES = ("Index", "total")
     OUTPUT_NODE = True     
 
+    @classmethod
+    def IS_CHANGED(cls, Index, total, mode, unique_id):
+        # 【终极修复】：返回 NaN 强制 ComfyUI 每次都重新计算该节点，彻底打破后端执行缓存
+        return float("NaN")
+
     def doit(self, Index, total, mode, unique_id):  
         if mode:
             if Index < total - 1:
-                # 注意：事件名和字典键已去除多余空格
                 PromptServer.instance.send_sync("node-feedback", {
                     "node_id": unique_id, 
                     "widget_name": "Index", 
@@ -40,7 +43,6 @@ class Queue_Trigger_PW:
 
         return (Index, total)
 
-# 节点注册映射
 NODE_CLASS_MAPPINGS = {
     "Queue_Trigger_PW": Queue_Trigger_PW
 }
