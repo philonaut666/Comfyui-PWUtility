@@ -9,6 +9,7 @@ class Queue_Trigger_PW:
                 "total": ("INT", {"default": 10, "min": 1, "max": 0xffffffffffffffff}),
                 "mode": ("BOOLEAN", {"default": True, "label_on": "Trigger", "label_off": "Don't trigger"}),
             },
+            "optional": {},
             "hidden": {"unique_id": "UNIQUE_ID"}
         }
     
@@ -18,9 +19,11 @@ class Queue_Trigger_PW:
     RETURN_NAMES = ("Index", "total")
     OUTPUT_NODE = True     
 
+    # 【核心功能】：强制该节点永不使用 ComfyUI 执行缓存
     @classmethod
-    def IS_CHANGED(cls, Index, total, mode, unique_id):
-        # 【终极修复】：返回 NaN 强制 ComfyUI 每次都重新计算该节点，彻底打破后端执行缓存
+    def IS_CHANGED(cls, **kwargs):
+        # 返回 NaN (Not a Number)，在 Python 中 NaN != NaN
+        # ComfyUI 校验缓存时发现签名不同，就会跳过缓存，每次都强制执行此节点。
         return float("NaN")
 
     def doit(self, Index, total, mode, unique_id):  
