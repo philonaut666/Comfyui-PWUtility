@@ -29,7 +29,27 @@ function dialog_show_wrapper(html) {
 }
 app.ui.dialog.show = dialog_show_wrapper;
 
-// --- 【核心修复】：打破 ComfyUI 执行缓存的 Handler ---
+// --- 【核心机制 2】：提取公共的归零函数 ---
+function resetAllTriggerNodes() {
+    if (!app.graph || !app.graph._nodes) return;
+    for (let node of app.graph._nodes) {
+        // 匹配节点类名
+        if (node.comfyClass === "Queue_Trigger_PW" || node.type === "Queue Trigger PW") {
+            const w = node.widgets.find(w => w.name === "Index");
+            if (w && w.value !== 0) {
+                w.value = 0;
+                if (w.callback) w.callback(w.value, app.canvas, node);
+                const widgetIndex = node.widgets.indexOf(w);
+                if (widgetIndex !== -1 && node.widgets_values) {
+                    node.widgets_values[widgetIndex] = w.value;
+                }
+                node.setDirtyCanvas(true, true);
+            }
+        }
+    }
+}
+
+// --- 接收后端反馈，更新 UI ---
 function nodeFeedbackHandler(event) {
     let node = app.graph.getNodeById(event.detail.node_id);
     if(node) {
@@ -47,35 +67,21 @@ function nodeFeedbackHandler(event) {
 }
 api.addEventListener("node-feedback", nodeFeedbackHandler);
 
-// --- 【新增核心功能】：拦截 QueuePrompt 实现手动归零 ---
+// --- 【核心机制 3】：拦截 QueuePrompt 实现手动触发归零 ---
 const originalQueuePrompt = app.queuePrompt;
-window._isPWAutoQueue = false; // 全局标志位
+window._isPWAutoQueue = false; // 全局标志位：区分是自动循环还是手动点击
 
 app.queuePrompt = async function(...args) {
     // 如果不是自动触发的队列（即用户手动点击 Queue 按钮），则强制归零
     if (!window._isPWAutoQueue) {
-        for (let node of app.graph._nodes) {
-            // 匹配节点类名
-            if (node.comfyClass === "Queue_Trigger_PW" || node.type === "Queue Trigger PW") {
-                const w = node.widgets.find(w => w.name === "Index");
-                if (w && w.value !== 0) {
-                    w.value = 0;
-                    if (w.callback) w.callback(w.value, app.canvas, node);
-                    const widgetIndex = node.widgets.indexOf(w);
-                    if (widgetIndex !== -1 && node.widgets_values) {
-                        node.widgets_values[widgetIndex] = w.value;
-                    }
-                    node.setDirtyCanvas(true, true);
-                }
-            }
-        }
+        resetAllTriggerNodes();
     }
     return originalQueuePrompt.apply(this, args);
 };
 
+// --- 接收后端的自动队列指令 ---
 function addQueue(event) {
-    // 标记为自动触发，防止归零逻辑生效
-    window._isPWAutoQueue = true; 
+    window._isPWAutoQueue = true; // 标记为自动触发，防止归零逻辑生效
     if (typeof originalQueuePrompt === 'function') {
         originalQueuePrompt(); 
     }
@@ -85,6 +91,10 @@ function addQueue(event) {
     }, 100);
 }
 api.addEventListener("add-queue", addQueue);
+
+// --- 【核心机制 4】：监听中断和报错事件，强制归零 ---
+api.addEventListener("execution_interrupted", resetAllTriggerNodes);
+api.addEventListener("execution_error", resetAllTriggerNodes);
 
 // --- 保留原有的 valueSendHandler ---
 function valueSendHandler(event) {
@@ -110,7 +120,7 @@ const ext = {
     name: "PWUtility.QueueTriggerPW",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name === "Queue Trigger PW") {
-            // 可在此处添加节点特定的前端逻辑
+            // 节点特定前端逻辑预留
         }
     }
 };
