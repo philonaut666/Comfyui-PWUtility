@@ -42,7 +42,7 @@ function dialog_show_wrapper(html) {
 }
 app.ui.dialog.show = dialog_show_wrapper;
 
-// --- 【核心修复】：打破 ComfyUI 执行缓存的 Handler ---
+// --- 【核心修复 1】：打破 ComfyUI 前端缓存的 Handler ---
 function nodeFeedbackHandler(event) {
     let nodes = app.graph._nodes_by_id;
     let node = nodes[event.detail.node_id];
@@ -51,28 +51,34 @@ function nodeFeedbackHandler(event) {
         if(w) {
             w.value = event.detail.value;
             
-            // 1. 触发 widget 的 callback，通知 LiteGraph 值已改变
             if (w.callback) {
                 w.callback(w.value, app.canvas, node);
             }
             
-            // 2. 同步更新 widgets_values，确保序列化发送给后端时包含新值
             const widgetIndex = node.widgets.indexOf(w);
-            if (widgetIndex !== -1 && node.widgets_values) {
+            if (widgetIndex !== -1) {
+                if (!node.widgets_values) node.widgets_values = [];
                 node.widgets_values[widgetIndex] = w.value;
             }
             
-            // 3. 标记节点为脏，强制刷新 UI 并打破 ComfyUI 的执行缓存
             node.setDirtyCanvas(true, true);
+            // 【关键】：强制增加 graph 版本号，确保下次序列化时必定抓取最新值
+            if(app.graph) {
+                app.graph._version++;
+            }
         }
     }
 }
 api.addEventListener("node-feedback", nodeFeedbackHandler);
 
+// --- 【核心修复 2】：延迟触发 Queue，确保值已更新 ---
 function addQueue(event) {
-    if (typeof app.queuePrompt === 'function') {
-        app.queuePrompt(); 
-    }
+    // 【关键】：使用 setTimeout 确保 node-feedback 的值更新先生效，防止发送旧值给后端
+    setTimeout(() => {
+        if (typeof app.queuePrompt === 'function') {
+            app.queuePrompt(); 
+        }
+    }, 100); // 延迟 100ms
 }
 api.addEventListener("add-queue", addQueue);
 
