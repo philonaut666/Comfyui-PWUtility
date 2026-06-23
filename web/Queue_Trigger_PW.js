@@ -48,25 +48,35 @@ function resetAllTriggerNodes() {
     }
 }
 
-// --- 接收后端反馈，更新 UI ---
+// --- 【核心修复】：恢复最稳妥的 _nodes_by_id 查找方式，确保 UI 能正确更新 ---
 function nodeFeedbackHandler(event) {
-    let node = app.graph.getNodeById(event.detail.node_id);
+    // 使用 _nodes_by_id 字典查找，避免 getNodeById 的类型匹配问题
+    let nodes = app.graph._nodes_by_id;
+    let node = nodes[event.detail.node_id];
+    
     if(node) {
         const w = node.widgets.find((w) => event.detail.widget_name === w.name);
         if(w) {
             w.value = event.detail.value;
-            if (w.callback) w.callback(w.value, app.canvas, node);
+            
+            // 触发 callback 通知 LiteGraph
+            if (w.callback) {
+                w.callback(w.value, app.canvas, node);
+            }
+            
+            // 【关键】：同步更新 widgets_values，这是序列化发送给后端的核心数据！
             const widgetIndex = node.widgets.indexOf(w);
             if (widgetIndex !== -1 && node.widgets_values) {
                 node.widgets_values[widgetIndex] = w.value;
             }
+            
+            // 标记脏数据，强制刷新 UI
             node.setDirtyCanvas(true, true);
         }
     }
 }
 
-// --- 【核心修复 1】：保存原始函数并拦截手动触发 ---
-// 使用 bind 确保 this 指向正确
+// --- 保存原始函数并拦截手动触发 ---
 const originalQueuePrompt = app.queuePrompt.bind(app);
 
 // 重写 app.queuePrompt，仅用于拦截“用户手动点击 UI 按钮”
@@ -76,10 +86,9 @@ app.queuePrompt = async function(...args) {
     return originalQueuePrompt(...args);
 };
 
-// --- 【核心修复 2】：自动队列指令（绕过拦截器） ---
+// --- 自动队列指令（绕过拦截器，不触发归零） ---
 function addQueue(event) {
-    // 关键：直接调用原始函数引用 originalQueuePrompt！
-    // 这样完全绕过了上面重写的 app.queuePrompt，不会触发 resetAllTriggerNodes()
+    // 直接调用原始函数引用，完全绕过上面重写的 app.queuePrompt
     // 从而保证 Index 能够正常递增，不会陷入死循环。
     if (typeof originalQueuePrompt === 'function') {
         originalQueuePrompt(); 
@@ -109,11 +118,10 @@ function valueSendHandler(event) {
     }
 }
 
-// --- 【核心修复 3】：使用 setup 钩子防止事件重复绑定 ---
+// --- 使用 setup 钩子防止事件重复绑定 ---
 const ext = {
     name: "PWUtility.QueueTriggerPW",
     async setup() {
-        // 先移除再添加，彻底杜绝因热重载或多次注册导致的重复监听（并发暴走）
         api.removeEventListener("node-feedback", nodeFeedbackHandler);
         api.addEventListener("node-feedback", nodeFeedbackHandler);
         
