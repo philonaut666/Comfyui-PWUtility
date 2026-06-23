@@ -1,10 +1,7 @@
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 
-// --- 全局状态存储：记录每个节点真实的 Index，彻底摆脱 LiteGraph 序列化坑 ---
-window._pwTriggerStates = window._pwTriggerStates || {};
-
-// --- 保留原有的工具函数 ---
+// --- 工具函数 ---
 export function customAlert(message) {
     try { app.extensionManager.toast.addAlert(message); } catch { alert(message); }
 }
@@ -30,102 +27,126 @@ function dialog_show_wrapper(html) {
 }
 app.ui.dialog.show = dialog_show_wrapper;
 
-// --- 【核心 1】：接收后端反馈，更新全局状态和 UI ---
+// --- 【核心 1】：带详细日志的 Handler (兼容旧版带空格的节点) ---
 function nodeFeedbackHandler(event) {
-    const targetId = event.detail.node_id.toString(); // 强制转字符串，解决类型匹配 Bug
+    const targetId = String(event.detail.node_id).trim();
+    const targetWidgetName = String(event.detail.widget_name).trim();
     const newValue = event.detail.value;
 
-    // 1. 更新全局真实状态 (这是后续序列化的唯一真理来源)
-    window._pwTriggerStates[targetId] = newValue;
+    console.log(`[PW-Trigger] 📩 收到反馈 -> NodeID: ${targetId}, Widget: "${targetWidgetName}", 新值: ${newValue}`);
 
-    // 2. 遍历查找节点 (彻底抛弃 _nodes_by_id，杜绝找不到节点的问题)
+    let targetNode = null;
     for (let node of app.graph._nodes) {
-        if (node.id.toString() === targetId) {
-            const w = node.widgets.find(w => w.name === "Index");
-            if (w) {
-                w.value = newValue; // 仅用于 UI 显示
-                if (w.callback) w.callback(newValue, app.canvas, node);
-                node.setDirtyCanvas(true, true);
-            }
+        if (String(node.id).trim() === targetId) {
+            targetNode = node;
             break;
         }
     }
-}
+    
+    if (!targetNode) {
+        console.error(`[PW-Trigger] ❌ 致命错误：在 Graph 中找不到 ID 为 ${targetId} 的节点！`);
+        return;
+    }
 
-// --- 【核心 2】：归零函数 ---
-function resetAllTriggerNodes() {
-    for (let node of app.graph._nodes) {
-        if (node.comfyClass === "Queue_Trigger_PW" || node.type === "Queue Trigger PW") {
-            const nodeId = node.id.toString();
-            window._pwTriggerStates[nodeId] = 0; // 归零全局状态
-            const w = node.widgets.find(w => w.name === "Index");
-            if (w) {
-                w.value = 0;
-                if (w.callback) w.callback(0, app.canvas, node);
-                node.setDirtyCanvas(true, true);
-            }
+    let targetWidget = null;
+    for (let w of targetNode.widgets) {
+        if (String(w.name).trim() === targetWidgetName) {
+            targetWidget = w;
+            break;
         }
     }
+
+    if (!targetWidget) {
+        console.error(`[PW-Trigger] ❌ 致命错误：在节点 ${targetId} 中找不到名为 "${targetWidgetName}" 的 Widget！`);
+        return;
+    }
+
+    targetWidget.value = newValue;
+    if (targetWidget.callback) targetWidget.callback(newValue, app.canvas, targetNode);
+    
+    const idx = targetNode.widgets.indexOf(targetWidget);
+    if (idx !== -1 && targetNode.widgets_values) targetNode.widgets_values[idx] = newValue;
+    
+    targetNode.setDirtyCanvas(true, true);
+    console.log(`[PW-Trigger] ✅ 成功将 UI 上的 "${targetWidgetName}" 更新为 ${newValue}`);
 }
 
-// --- 【核心 3】：序列化拦截器 (终极杀器) ---
-function injectRealIndex() {
+// --- 归零函数 ---
+function resetAllTriggerNodes() {
     for (let node of app.graph._nodes) {
-        if (node.comfyClass === "Queue_Trigger_PW" || node.type === "Queue Trigger PW") {
-            const nodeId = node.id.toString();
-            const realIndex = window._pwTriggerStates[nodeId];
-            
-            // 强行将真实的 Index 塞进 ComfyUI 的序列化数组中
-            if (realIndex !== undefined && node.widgets_values) {
-                const w = node.widgets.find(w => w.name === "Index");
-                if (w) {
+        if (node.comfyClass === "Queue_Trigger_PW" || node.type === "Queue Trigger PW" || node.type === "flow_QueueTrigger") {
+            for (let w of node.widgets) {
+                if (String(w.name).trim() === "Index") {
+                    w.value = 0;
+                    if (w.callback) w.callback(0, app.canvas, node);
                     const idx = node.widgets.indexOf(w);
-                    if (idx !== -1) {
-                        node.widgets_values[idx] = realIndex;
-                    }
+                    if (idx !== -1 && node.widgets_values) node.widgets_values[idx] = 0;
+                    node.setDirtyCanvas(true, true);
                 }
             }
         }
     }
 }
 
-// --- 保存原始函数 ---
+// --- 拦截手动 Queue ---
 const originalQueuePrompt = app.queuePrompt.bind(app);
-
-// --- 重写 app.queuePrompt (仅拦截用户手动点击 UI 按钮) ---
 app.queuePrompt = async function(...args) {
-    // 1. 手动触发，强制归零
+    console.log("[PW-Trigger] 🛑 拦截到手动 Queue，执行归零...");
     resetAllTriggerNodes();
-    // 2. 注入真实值 (此时全是 0)
-    injectRealIndex();
-    // 3. 发送
     return originalQueuePrompt(...args);
 };
 
-// --- 自动队列指令 (绕过拦截器，不触发归零) ---
+// --- 【终极杀器】：序列化拦截器 (彻底解决底层忽略 w.value 的 Bug) ---
+const originalGraphToPrompt = app.graphToPrompt.bind(app);
+app.graphToPrompt = async function() {
+    const res = await originalGraphToPrompt();
+    const output = res.output;
+    
+    // 在数据包发出的最后一毫秒，强行注入真实的 Index 值！
+    for (let node of app.graph._nodes) {
+        if (node.comfyClass === "Queue_Trigger_PW" || node.type === "Queue Trigger PW" || node.type === "flow_QueueTrigger") {
+            const nodeId = String(node.id);
+            if (output[nodeId] && output[nodeId].inputs) {
+                for (let w of node.widgets) {
+                    if (String(w.name).trim() === "Index") {
+                        output[nodeId].inputs["Index"] = w.value;
+                        output[nodeId].inputs["Index "] = w.value; // 兼容旧版带空格的键
+                        console.log(`[PW-Trigger] 🚀 序列化拦截器：强制注入 Node ${nodeId} 的 Index = ${w.value}`);
+                    }
+                }
+            }
+        }
+    }
+    return res;
+};
+
+// --- 自动 Queue ---
 function addQueue(event) {
-    // 1. 注入真实值 (此时是递增的 1, 2, 3...)
-    injectRealIndex();
-    // 2. 直接调用原始函数，完全绕过上面的归零逻辑！彻底杜绝死循环！
+    console.log("[PW-Trigger] 🔄 收到 add-queue，触发自动队列...");
     if (typeof originalQueuePrompt === 'function') {
         originalQueuePrompt(); 
     }
 }
 
-// --- 监听中断和报错 ---
+// --- 中断/报错归零 ---
 function handleInterruptOrError() {
+    console.log("[PW-Trigger] ⚠️ 检测到中断或报错，执行归零...");
     resetAllTriggerNodes();
 }
 
-// --- 注册扩展 (防重复绑定) ---
+// --- 注册扩展 ---
 const ext = {
     name: "PWUtility.QueueTriggerPW",
     async setup() {
         api.removeEventListener("node-feedback", nodeFeedbackHandler);
+        api.removeEventListener("node-feedback ", nodeFeedbackHandler);
         api.addEventListener("node-feedback", nodeFeedbackHandler);
+        api.addEventListener("node-feedback ", nodeFeedbackHandler);
         
         api.removeEventListener("add-queue", addQueue);
+        api.removeEventListener("add-queue ", addQueue);
         api.addEventListener("add-queue", addQueue);
+        api.addEventListener("add-queue ", addQueue);
         
         api.removeEventListener("execution_interrupted", handleInterruptOrError);
         api.addEventListener("execution_interrupted", handleInterruptOrError);
