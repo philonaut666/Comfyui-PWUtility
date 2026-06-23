@@ -1,11 +1,13 @@
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 
+// --- 全局状态存储：记录每个节点真实的 Index，彻底摆脱 LiteGraph 序列化坑 ---
+window._pwTriggerStates = window._pwTriggerStates || {};
+
 // --- 保留原有的工具函数 ---
 export function customAlert(message) {
     try { app.extensionManager.toast.addAlert(message); } catch { alert(message); }
 }
-
 export function isBeforeFrontendVersion(compareVersion) {
     try {
         const frontendVersion = window['COMFYUI_FRONTEND_VERSION'];
@@ -17,7 +19,6 @@ export function isBeforeFrontendVersion(compareVersion) {
         return false;
     } catch { return true; }
 }
-
 function dialog_show_wrapper(html) {
     if (typeof html === "string") {
         if(html.includes("IMPACT-PACK-SIGNAL: STOP CONTROL BRIDGE")) return;
@@ -29,96 +30,94 @@ function dialog_show_wrapper(html) {
 }
 app.ui.dialog.show = dialog_show_wrapper;
 
-// --- 提取公共的归零函数 ---
+// --- 【核心 1】：接收后端反馈，更新全局状态和 UI ---
+function nodeFeedbackHandler(event) {
+    const targetId = event.detail.node_id.toString(); // 强制转字符串，解决类型匹配 Bug
+    const newValue = event.detail.value;
+
+    // 1. 更新全局真实状态 (这是后续序列化的唯一真理来源)
+    window._pwTriggerStates[targetId] = newValue;
+
+    // 2. 遍历查找节点 (彻底抛弃 _nodes_by_id，杜绝找不到节点的问题)
+    for (let node of app.graph._nodes) {
+        if (node.id.toString() === targetId) {
+            const w = node.widgets.find(w => w.name === "Index");
+            if (w) {
+                w.value = newValue; // 仅用于 UI 显示
+                if (w.callback) w.callback(newValue, app.canvas, node);
+                node.setDirtyCanvas(true, true);
+            }
+            break;
+        }
+    }
+}
+
+// --- 【核心 2】：归零函数 ---
 function resetAllTriggerNodes() {
-    if (!app.graph || !app.graph._nodes) return;
     for (let node of app.graph._nodes) {
         if (node.comfyClass === "Queue_Trigger_PW" || node.type === "Queue Trigger PW") {
+            const nodeId = node.id.toString();
+            window._pwTriggerStates[nodeId] = 0; // 归零全局状态
             const w = node.widgets.find(w => w.name === "Index");
-            if (w && w.value !== 0) {
+            if (w) {
                 w.value = 0;
-                if (w.callback) w.callback(w.value, app.canvas, node);
-                const widgetIndex = node.widgets.indexOf(w);
-                if (widgetIndex !== -1 && node.widgets_values) {
-                    node.widgets_values[widgetIndex] = w.value;
-                }
+                if (w.callback) w.callback(0, app.canvas, node);
                 node.setDirtyCanvas(true, true);
             }
         }
     }
 }
 
-// --- 【核心修复】：恢复最稳妥的 _nodes_by_id 查找方式，确保 UI 能正确更新 ---
-function nodeFeedbackHandler(event) {
-    // 使用 _nodes_by_id 字典查找，避免 getNodeById 的类型匹配问题
-    let nodes = app.graph._nodes_by_id;
-    let node = nodes[event.detail.node_id];
-    
-    if(node) {
-        const w = node.widgets.find((w) => event.detail.widget_name === w.name);
-        if(w) {
-            w.value = event.detail.value;
+// --- 【核心 3】：序列化拦截器 (终极杀器) ---
+function injectRealIndex() {
+    for (let node of app.graph._nodes) {
+        if (node.comfyClass === "Queue_Trigger_PW" || node.type === "Queue Trigger PW") {
+            const nodeId = node.id.toString();
+            const realIndex = window._pwTriggerStates[nodeId];
             
-            // 触发 callback 通知 LiteGraph
-            if (w.callback) {
-                w.callback(w.value, app.canvas, node);
+            // 强行将真实的 Index 塞进 ComfyUI 的序列化数组中
+            if (realIndex !== undefined && node.widgets_values) {
+                const w = node.widgets.find(w => w.name === "Index");
+                if (w) {
+                    const idx = node.widgets.indexOf(w);
+                    if (idx !== -1) {
+                        node.widgets_values[idx] = realIndex;
+                    }
+                }
             }
-            
-            // 【关键】：同步更新 widgets_values，这是序列化发送给后端的核心数据！
-            const widgetIndex = node.widgets.indexOf(w);
-            if (widgetIndex !== -1 && node.widgets_values) {
-                node.widgets_values[widgetIndex] = w.value;
-            }
-            
-            // 标记脏数据，强制刷新 UI
-            node.setDirtyCanvas(true, true);
         }
     }
 }
 
-// --- 保存原始函数并拦截手动触发 ---
+// --- 保存原始函数 ---
 const originalQueuePrompt = app.queuePrompt.bind(app);
 
-// 重写 app.queuePrompt，仅用于拦截“用户手动点击 UI 按钮”
+// --- 重写 app.queuePrompt (仅拦截用户手动点击 UI 按钮) ---
 app.queuePrompt = async function(...args) {
-    // 只要是通过 app.queuePrompt 调用的，一律视为手动触发，强制归零
+    // 1. 手动触发，强制归零
     resetAllTriggerNodes();
+    // 2. 注入真实值 (此时全是 0)
+    injectRealIndex();
+    // 3. 发送
     return originalQueuePrompt(...args);
 };
 
-// --- 自动队列指令（绕过拦截器，不触发归零） ---
+// --- 自动队列指令 (绕过拦截器，不触发归零) ---
 function addQueue(event) {
-    // 直接调用原始函数引用，完全绕过上面重写的 app.queuePrompt
-    // 从而保证 Index 能够正常递增，不会陷入死循环。
+    // 1. 注入真实值 (此时是递增的 1, 2, 3...)
+    injectRealIndex();
+    // 2. 直接调用原始函数，完全绕过上面的归零逻辑！彻底杜绝死循环！
     if (typeof originalQueuePrompt === 'function') {
         originalQueuePrompt(); 
     }
 }
 
-// --- 监听中断和报错事件，强制归零 ---
+// --- 监听中断和报错 ---
 function handleInterruptOrError() {
     resetAllTriggerNodes();
 }
 
-// --- 保留原有的 valueSendHandler ---
-function valueSendHandler(event) {
-    let nodes = app.graph._nodes;
-    for(let i in nodes) {
-        if(nodes[i].type == 'flow_ValueReceiver') {
-            if(nodes[i].widgets[2].value == event.detail.link_id) {
-                nodes[i].widgets[1].value = event.detail.value;
-                let typ = typeof event.detail.value;
-                if(typ == 'string') nodes[i].widgets[0].value = "STRING";
-                else if(typ == "boolean") nodes[i].widgets[0].value = "BOOLEAN";
-                else if(typ != "number") nodes[i].widgets[0].value = typeof event.detail.value;
-                else if(Number.isInteger(event.detail.value)) nodes[i].widgets[0].value = "INT";
-                else nodes[i].widgets[0].value = "FLOAT";
-            }
-        }
-    }
-}
-
-// --- 使用 setup 钩子防止事件重复绑定 ---
+// --- 注册扩展 (防重复绑定) ---
 const ext = {
     name: "PWUtility.QueueTriggerPW",
     async setup() {
@@ -133,14 +132,6 @@ const ext = {
         
         api.removeEventListener("execution_error", handleInterruptOrError);
         api.addEventListener("execution_error", handleInterruptOrError);
-
-        api.removeEventListener("value-send", valueSendHandler);
-        api.addEventListener("value-send", valueSendHandler);
-    },
-    async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "Queue Trigger PW") {
-            // 节点特定前端逻辑预留
-        }
     }
 };
 app.registerExtension(ext);
