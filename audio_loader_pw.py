@@ -54,7 +54,7 @@ class AudioLoaderPW:
                 except:
                     files = sorted(all_files)
         
-        # 【核心修改】：强制将 "none" 放在列表最前面，确保新建节点时默认不选中任何实际文件
+        # 强制将 "none" 放在列表最前面，确保新建节点时默认不选中任何实际文件
         files = ["none"] + [f for f in files if f != "none"]
 
         return {
@@ -74,9 +74,10 @@ class AudioLoaderPW:
             }
         }
 
-    CATEGORY = "🔮PWUtility/Audio"
-    RETURN_TYPES = ("AUDIO", "FLOAT")
-    RETURN_NAMES = ("audio", "duration")
+    CATEGORY = "PWUtility/Audio"
+    # 新增 INT 类型的 frame_count 输出端口
+    RETURN_TYPES = ("AUDIO", "FLOAT", "INT")
+    RETURN_NAMES = ("audio", "duration", "frame_count")
     FUNCTION = "load_audio"
 
     @classmethod
@@ -137,7 +138,7 @@ class AudioLoaderPW:
         final_waveform = torch.cat((pre_silence_waveform, trimmed_waveform, post_silence_waveform), dim=1)
         
         # ==========================================
-        # 8n+1 帧对齐逻辑 (严格遵循：仅不符合时才计算和补齐)
+        # 8n+1 帧对齐逻辑
         # ==========================================
         if align_flag and fps > 0:
             audio_length_sec = final_waveform.shape[1] / sample_rate
@@ -163,4 +164,7 @@ class AudioLoaderPW:
         
         audio_output = {"waveform": final_waveform.unsqueeze(0), "sample_rate": sample_rate}
         
-        return {"ui": {"audio_path": [str(audio_to_load)]}, "result": (audio_output, final_duration)}
+        # 计算最终帧数 (使用 round 消除浮点精度误差，确保输出精确的整数)
+        frame_count = int(round(final_duration * fps)) if fps > 0 else 0
+        
+        return {"ui": {"audio_path": [str(audio_to_load)]}, "result": (audio_output, final_duration, frame_count)}
