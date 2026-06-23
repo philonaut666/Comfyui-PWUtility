@@ -1,7 +1,7 @@
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 
-// --- 工具函数 (保留原有) ---
+// --- 工具函数 ---
 export function customAlert(message) {
     try { app.extensionManager.toast.addAlert(message); } catch { alert(message); }
 }
@@ -46,18 +46,19 @@ function resetIndexToZero() {
     }
 }
 
-// --- 【核心机制 1】：拦截 ComfyUI 的主运行按钮 (Queue Prompt) ---
-// 通过重写 app.queuePrompt，我们可以区分“用户手动点击”和“节点自动触发”
-const originalQueuePrompt = app.queuePrompt ? app.queuePrompt.bind(app) : async () => {};
-app.queuePrompt = async function(...args) {
-    // 如果没有自动运行标记，说明是用户手动点击了 Run 按钮！
-    if (!window._pw_auto_queue_flag) {
-        resetIndexToZero(); // 强制归零
-    } else {
-        window._pw_auto_queue_flag = false; // 消耗掉标记
-    }
-    return await originalQueuePrompt(...args);
-};
+// --- 【核心机制 1】：拦截 ComfyUI 的主运行按钮 ---
+if (!window._pw_queue_prompt_patched) {
+    window._pw_queue_prompt_patched = true;
+    const originalQueuePrompt = app.queuePrompt ? app.queuePrompt.bind(app) : async () => {};
+    app.queuePrompt = async function(number = 0, batchSize = 1, ...args) {
+        if (!window._pw_auto_queue_flag) {
+            resetIndexToZero(); 
+        } else {
+            window._pw_auto_queue_flag = false; 
+        }
+        return await originalQueuePrompt(number, batchSize, ...args);
+    };
+}
 
 // --- 【核心机制 2】：处理后端发来的反馈和自动队列请求 ---
 function nodeFeedbackHandler(event) {
@@ -74,26 +75,25 @@ function nodeFeedbackHandler(event) {
         }
     }
 }
-api.addEventListener("node-feedback", nodeFeedbackHandler);
 
 function addQueue(event) {
-    // 打上标记，告诉 queuePrompt 这是节点自动触发的，不要重置 Index
     window._pw_auto_queue_flag = true;
+    // 【核心修复 2】：强制传入 (0, 1)，锁定 Batch Size 为 1，防止因界面设置导致倍数执行
     if (typeof app.queuePrompt === 'function') {
-        app.queuePrompt(); 
+        app.queuePrompt(0, 1); 
     }
 }
-api.addEventListener("add-queue", addQueue);
 
-// --- 【核心机制 3】：监听中途停止和报错事件 ---
-// 当用户点击“Stop”打断运行，或者工作流报错时，强制归零
-api.addEventListener("execution_interrupted", () => {
-    resetIndexToZero();
-});
-
-api.addEventListener("execution_error", () => {
-    resetIndexToZero();
-});
+// 【核心修复 3】：使用全局标志位防止事件监听器被重复注册
+if (!window._pw_queue_trigger_listeners_registered) {
+    window._pw_queue_trigger_listeners_registered = true;
+    api.addEventListener("node-feedback", nodeFeedbackHandler);
+    api.addEventListener("add-queue", addQueue);
+    
+    // 监听中途停止和报错，确保安全归零
+    api.addEventListener("execution_interrupted", resetIndexToZero);
+    api.addEventListener("execution_error", resetIndexToZero);
+}
 
 // --- 保留原有的 valueSendHandler ---
 function valueSendHandler(event) {
@@ -112,7 +112,10 @@ function valueSendHandler(event) {
         }
     }
 }
-api.addEventListener("value-send", valueSendHandler);
+if (!window._pw_value_send_registered) {
+    window._pw_value_send_registered = true;
+    api.addEventListener("value-send", valueSendHandler);
+}
 
 // --- 注册扩展 ---
 const ext = {
