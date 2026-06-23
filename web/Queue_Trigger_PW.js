@@ -3,32 +3,19 @@ import { app } from "../../scripts/app.js";
 
 // --- 保留原有的工具函数 ---
 export function customAlert(message) {
-    try {
-        app.extensionManager.toast.addAlert(message);
-    } catch {
-        alert(message);
-    }
+    try { app.extensionManager.toast.addAlert(message); } catch { alert(message); }
 }
 
 export function isBeforeFrontendVersion(compareVersion) {
     try {
         const frontendVersion = window['COMFYUI_FRONTEND_VERSION'];
         if (typeof frontendVersion !== 'string') return false;
-        function parseVersion(versionString) {
-            const parts = versionString.split('.').map(Number);
-            return parts.length === 3 && parts.every(part => !isNaN(part)) ? parts : null;
-        }
-        const currentVersion = parseVersion(frontendVersion);
-        const comparisonVersion = parseVersion(compareVersion);
-        if (!currentVersion || !comparisonVersion) return false;
-        for (let i = 0; i < 3; i++) {
-            if (currentVersion[i] > comparisonVersion[i]) return false;
-            else if (currentVersion[i] < comparisonVersion[i]) return true;
-        }
+        function parseVersion(v) { const p = v.split('.').map(Number); return p.length === 3 && p.every(x => !isNaN(x)) ? p : null; }
+        const c = parseVersion(frontendVersion), t = parseVersion(compareVersion);
+        if (!c || !t) return false;
+        for (let i = 0; i < 3; i++) { if (c[i] > t[i]) return false; else if (c[i] < t[i]) return true; }
         return false;
-    } catch {
-        return true;
-    }
+    } catch { return true; }
 }
 
 function dialog_show_wrapper(html) {
@@ -42,43 +29,60 @@ function dialog_show_wrapper(html) {
 }
 app.ui.dialog.show = dialog_show_wrapper;
 
-// --- 【核心修复 1】：打破 ComfyUI 前端缓存的 Handler ---
+// --- 【核心修复】：打破 ComfyUI 执行缓存的 Handler ---
 function nodeFeedbackHandler(event) {
-    let nodes = app.graph._nodes_by_id;
-    let node = nodes[event.detail.node_id];
+    let node = app.graph.getNodeById(event.detail.node_id);
     if(node) {
         const w = node.widgets.find((w) => event.detail.widget_name === w.name);
         if(w) {
             w.value = event.detail.value;
-            
-            if (w.callback) {
-                w.callback(w.value, app.canvas, node);
-            }
-            
+            if (w.callback) w.callback(w.value, app.canvas, node);
             const widgetIndex = node.widgets.indexOf(w);
-            if (widgetIndex !== -1) {
-                if (!node.widgets_values) node.widgets_values = [];
+            if (widgetIndex !== -1 && node.widgets_values) {
                 node.widgets_values[widgetIndex] = w.value;
             }
-            
             node.setDirtyCanvas(true, true);
-            // 【关键】：强制增加 graph 版本号，确保下次序列化时必定抓取最新值
-            if(app.graph) {
-                app.graph._version++;
-            }
         }
     }
 }
 api.addEventListener("node-feedback", nodeFeedbackHandler);
 
-// --- 【核心修复 2】：延迟触发 Queue，确保值已更新 ---
-function addQueue(event) {
-    // 【关键】：使用 setTimeout 确保 node-feedback 的值更新先生效，防止发送旧值给后端
-    setTimeout(() => {
-        if (typeof app.queuePrompt === 'function') {
-            app.queuePrompt(); 
+// --- 【新增核心功能】：拦截 QueuePrompt 实现手动归零 ---
+const originalQueuePrompt = app.queuePrompt;
+window._isPWAutoQueue = false; // 全局标志位
+
+app.queuePrompt = async function(...args) {
+    // 如果不是自动触发的队列（即用户手动点击 Queue 按钮），则强制归零
+    if (!window._isPWAutoQueue) {
+        for (let node of app.graph._nodes) {
+            // 匹配节点类名
+            if (node.comfyClass === "Queue_Trigger_PW" || node.type === "Queue Trigger PW") {
+                const w = node.widgets.find(w => w.name === "Index");
+                if (w && w.value !== 0) {
+                    w.value = 0;
+                    if (w.callback) w.callback(w.value, app.canvas, node);
+                    const widgetIndex = node.widgets.indexOf(w);
+                    if (widgetIndex !== -1 && node.widgets_values) {
+                        node.widgets_values[widgetIndex] = w.value;
+                    }
+                    node.setDirtyCanvas(true, true);
+                }
+            }
         }
-    }, 100); // 延迟 100ms
+    }
+    return originalQueuePrompt.apply(this, args);
+};
+
+function addQueue(event) {
+    // 标记为自动触发，防止归零逻辑生效
+    window._isPWAutoQueue = true; 
+    if (typeof originalQueuePrompt === 'function') {
+        originalQueuePrompt(); 
+    }
+    // 异步重置标志位
+    setTimeout(() => {
+        window._isPWAutoQueue = false;
+    }, 100);
 }
 api.addEventListener("add-queue", addQueue);
 
