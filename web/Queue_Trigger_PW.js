@@ -29,11 +29,10 @@ function dialog_show_wrapper(html) {
 }
 app.ui.dialog.show = dialog_show_wrapper;
 
-// --- 【核心机制 2】：提取公共的归零函数 ---
+// --- 提取公共的归零函数 ---
 function resetAllTriggerNodes() {
     if (!app.graph || !app.graph._nodes) return;
     for (let node of app.graph._nodes) {
-        // 匹配节点类名
         if (node.comfyClass === "Queue_Trigger_PW" || node.type === "Queue Trigger PW") {
             const w = node.widgets.find(w => w.name === "Index");
             if (w && w.value !== 0) {
@@ -65,36 +64,32 @@ function nodeFeedbackHandler(event) {
         }
     }
 }
-api.addEventListener("node-feedback", nodeFeedbackHandler);
 
-// --- 【核心机制 3】：拦截 QueuePrompt 实现手动触发归零 ---
-const originalQueuePrompt = app.queuePrompt;
-window._isPWAutoQueue = false; // 全局标志位：区分是自动循环还是手动点击
+// --- 【核心修复 1】：保存原始函数并拦截手动触发 ---
+// 使用 bind 确保 this 指向正确
+const originalQueuePrompt = app.queuePrompt.bind(app);
 
+// 重写 app.queuePrompt，仅用于拦截“用户手动点击 UI 按钮”
 app.queuePrompt = async function(...args) {
-    // 如果不是自动触发的队列（即用户手动点击 Queue 按钮），则强制归零
-    if (!window._isPWAutoQueue) {
-        resetAllTriggerNodes();
-    }
-    return originalQueuePrompt.apply(this, args);
+    // 只要是通过 app.queuePrompt 调用的，一律视为手动触发，强制归零
+    resetAllTriggerNodes();
+    return originalQueuePrompt(...args);
 };
 
-// --- 接收后端的自动队列指令 ---
+// --- 【核心修复 2】：自动队列指令（绕过拦截器） ---
 function addQueue(event) {
-    window._isPWAutoQueue = true; // 标记为自动触发，防止归零逻辑生效
+    // 关键：直接调用原始函数引用 originalQueuePrompt！
+    // 这样完全绕过了上面重写的 app.queuePrompt，不会触发 resetAllTriggerNodes()
+    // 从而保证 Index 能够正常递增，不会陷入死循环。
     if (typeof originalQueuePrompt === 'function') {
         originalQueuePrompt(); 
     }
-    // 异步重置标志位
-    setTimeout(() => {
-        window._isPWAutoQueue = false;
-    }, 100);
 }
-api.addEventListener("add-queue", addQueue);
 
-// --- 【核心机制 4】：监听中断和报错事件，强制归零 ---
-api.addEventListener("execution_interrupted", resetAllTriggerNodes);
-api.addEventListener("execution_error", resetAllTriggerNodes);
+// --- 监听中断和报错事件，强制归零 ---
+function handleInterruptOrError() {
+    resetAllTriggerNodes();
+}
 
 // --- 保留原有的 valueSendHandler ---
 function valueSendHandler(event) {
@@ -113,11 +108,27 @@ function valueSendHandler(event) {
         }
     }
 }
-api.addEventListener("value-send", valueSendHandler);
 
-// --- 注册扩展 ---
+// --- 【核心修复 3】：使用 setup 钩子防止事件重复绑定 ---
 const ext = {
     name: "PWUtility.QueueTriggerPW",
+    async setup() {
+        // 先移除再添加，彻底杜绝因热重载或多次注册导致的重复监听（并发暴走）
+        api.removeEventListener("node-feedback", nodeFeedbackHandler);
+        api.addEventListener("node-feedback", nodeFeedbackHandler);
+        
+        api.removeEventListener("add-queue", addQueue);
+        api.addEventListener("add-queue", addQueue);
+        
+        api.removeEventListener("execution_interrupted", handleInterruptOrError);
+        api.addEventListener("execution_interrupted", handleInterruptOrError);
+        
+        api.removeEventListener("execution_error", handleInterruptOrError);
+        api.addEventListener("execution_error", handleInterruptOrError);
+
+        api.removeEventListener("value-send", valueSendHandler);
+        api.addEventListener("value-send", valueSendHandler);
+    },
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name === "Queue Trigger PW") {
             // 节点特定前端逻辑预留
