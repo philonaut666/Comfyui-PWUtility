@@ -16,7 +16,6 @@ app.registerExtension({
                 if (this.toggleWidgetVisibility) this.toggleWidgetVisibility();
                 if (this.syncToggleVisual) this.syncToggleVisual();
 
-                // 【修改点 4】：加载工作流时同步状态并刷新预览
                 if (this.widgets) {
                     const videoWidget = this.widgets.find(w => w.name === "video");
                     if (videoWidget && videoWidget.value && this.updatePreview) {
@@ -51,7 +50,7 @@ app.registerExtension({
                         }
                     }
                     this.domWidget.element.style.height = `${Math.max(150, size[1] - yOffset - 18)}px`;
-                } 
+                }
             };
 
             nodeType.prototype.onNodeCreated = function () {
@@ -153,7 +152,7 @@ app.registerExtension({
                 const clampSplitValues = () => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
-                     
+                    
                     const s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
                     let e_f = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
                     if (e_f === 0) e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * fr) - 1;
@@ -163,11 +162,11 @@ app.registerExtension({
                         let p_f = parseInt(splitPurpleIdxWidget.value) || 0;
                         let min_p = s_f + 1;
                         let max_p = e_f - 1;
-                         
+                        
                         if (sc === 2 && splitGreenIdxWidget) {
                             let g_f = parseInt(splitGreenIdxWidget.value) || 0;
                             max_p = Math.min(max_p, g_f - 1);
-                        } 
+                        }
                         if (min_p > max_p) min_p = max_p;
                         
                         p_f = Math.max(min_p, Math.min(p_f, max_p));
@@ -305,200 +304,43 @@ app.registerExtension({
                             if (e_f === 0) e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * fr) - 1;
                             splitGreenIdxWidget.value = e_f - 1;
                         }
-                         
+                        
                         clampSplitValues();
                         node.toggleWidgetVisibility();
                         updateUI(true);
                     };
                 }
 
-                // 【修改点 1】：强制刷新视频预览并绕过缓存
                 node.updatePreview = function (filename) {
                     if (!filename) return;
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
-                    const timestamp = Date.now();
-                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}&t=${timestamp}`);
-                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input&t=${timestamp}`);
+                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
+                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
                     
-                    if (videoPreview) {
+                    if (videoPreview && videoPreview.src !== url) {
                         videoPreview.src = url;
-                        videoPreview.load();
                     }
                 };
 
-                function updateCropUI() {
-                    const vw = videoPreview.videoWidth;
-                    const vh = videoPreview.videoHeight;
-                    let cx = cropXWidget ? parseFloat(cropXWidget.value) || 0 : 0;
-                    let cy = cropYWidget ? parseFloat(cropYWidget.value) || 0 : 0;
-                    let cw_val = cropWWidget ? parseFloat(cropWWidget.value) || 1 : 1;
-                    let ch_val = cropHWidget ? parseFloat(cropHWidget.value) || 1 : 1;
-                    const actualW = vw ? Math.round(cw_val * vw) : 0;
-                    const actualH = vh ? Math.round(ch_val * vh) : 0;
-
-                    if (!isCropVisible || !vw) {
-                        cropBox.style.display = "none";
-                        cropEditContainer.style.display = "none";
-                        if (cw_val < 0.999 || ch_val < 0.999 || cx > 0.001 || cy > 0.001) {
-                            cropDims.textContent = `Crop: ${actualW}x${actualH}`;
-                            cropDims.style.display = "inline-block";
-                        } else { cropDims.style.display = "none"; }
-                        return;
-                    }
-                    cropDims.style.display = "none";
-                    cropEditContainer.style.display = "flex";
-                    cropBox.style.display = "block";
-                    if (document.activeElement !== wInput) wInput.value = actualW;
-                    if (document.activeElement !== hInput) hInput.value = actualH;
-                    const cw = videoPreview.clientWidth;
-                    const ch = videoPreview.clientHeight;
-                    const ratio = Math.min(cw / vw, ch / vh);
-                    const renderedW = vw * ratio;
-                    const renderedH = vh * ratio;
-                    const xOffset = (cw - renderedW) / 2;
-                    const yOffset = (ch - renderedH) / 2;
-                    cropBox.style.left = `${xOffset + cx * renderedW}px`;
-                    cropBox.style.top = `${yOffset + cy * renderedH}px`;
-                    cropBox.style.width = `${cw_val * renderedW}px`;
-                    cropBox.style.height = `${ch_val * renderedH}px`;
-                }
-
-                function updateRuler() {
-                    timeRuler.innerHTML = '';
-                    const activeDur = getActiveDuration();
-                    const numMajorTicks = 5;
-                    const subTicks = 4;
-                    const totalTicks = (numMajorTicks - 1) * subTicks;
-                    const isFrames = displayModeWidget && displayModeWidget.value === "frames";
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
-
-                    for (let i = 0; i <= totalTicks; i++) {
-                        const pct = i / totalTicks;
-                        const t = activeDur * pct;
-                        const isMajor = i % subTicks === 0;
-                        const tickWrapper = document.createElement("div");
-                        Object.assign(tickWrapper.style, { position: "absolute", left: `${pct * 100}%`, top: "0", display: "flex", flexDirection: "column", alignItems: "center", transform: "translateX(-50%)" });
-                        if (i === 0) { tickWrapper.style.transform = "none"; tickWrapper.style.alignItems = "flex-start"; }
-                        if (i === totalTicks) { tickWrapper.style.transform = "translateX(-100%)"; tickWrapper.style.alignItems = "flex-end"; }
-                        const line = document.createElement("div");
-                        Object.assign(line.style, { width: isMajor ? "2px" : "1px", height: isMajor ? "6px" : "4px", background: isMajor ? "#aaa" : "#555", marginBottom: "2px", borderRadius: "1px" });
-                        tickWrapper.appendChild(line);
-                        if (isMajor) {
-                            const label = document.createElement("div");
-                            label.textContent = isFrames ? Math.round(t * fr) : formatTime(t);
-                            tickWrapper.appendChild(label);
-                        }
-                        timeRuler.appendChild(tickWrapper);
-                    }
-                }
-
-                function updateUI(syncPlayer = false) {
-                    const activeDur = getActiveDuration();
-                    let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
-                    let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
-                    let visualEnd = e;
-                    if (visualEnd === 0 || visualEnd > activeDur) visualEnd = activeDur;
-                    if (s > visualEnd) s = visualEnd;
-
-                    let pStart = (s / activeDur) * 100;
-                    let pEnd = (visualEnd / activeDur) * 100;
-                    pStart = Math.max(0, Math.min(pStart, 100));
-                    pEnd = Math.max(0, Math.min(pEnd, 100));
-
-                    startHandle.style.left = `${pStart}%`;
-                    endHandle.style.left = `${pEnd}%`;
-
-                    const currentDur = parseFloat((visualEnd - s).toFixed(2));
-                    const isFrames = displayModeWidget && displayModeWidget.value === "frames";
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
-
-                    trimLength.textContent = isFrames ? `Trimmed: ${Math.round(currentDur * fr)} frames` : `Trimmed: ${formatTime(currentDur)}`;
-
-                    if (syncPlayer && duration > 0) videoPreview.currentTime = s;
-                    
-                    const toPct = (val) => Math.max(0, Math.min(100, (val / activeDur) * 100));
-                    let pS = 0, pE = 0, bS = 0, bE = 0, gS = 0, gE = 0;
-                    const s_val = s;
-                    const e_val = visualEnd;
-                    const p_val = splitPurpleWidget ? parseFloat(splitPurpleWidget.value) || 0 : 0;
-                    const g_val = splitGreenWidget ? parseFloat(splitGreenWidget.value) || 0 : 0;
-                    
-                    const sc = splitCountWidget ? splitCountWidget.value : 0;
-                    
-                    if (sc === 0) {
-                        bS = s_val; bE = e_val;
-                    } else if (sc === 1) {
-                        pS = s_val; pE = p_val;
-                        bS = p_val; bE = e_val;
-                    } else if (sc === 2) {
-                        pS = s_val; pE = p_val;
-                        bS = p_val; bE = g_val;
-                        gS = g_val; gE = e_val;
-                    }
-                     
-                    fillPurple.style.left = `${toPct(pS)}%`;
-                    fillPurple.style.width = `${Math.max(0, toPct(pE) - toPct(pS))}%`;
-                    fillBlue.style.left = `${toPct(bS)}%`;
-                    fillBlue.style.width = `${Math.max(0, toPct(bE) - toPct(bS))}%`;
-                    fillGreen.style.left = `${toPct(gS)}%`;
-                    fillGreen.style.width = `${Math.max(0, toPct(gE) - toPct(gS))}%`;
-                    
-                    if (typeof node.updateSplitHandles === 'function') node.updateSplitHandles();
-                }
-
-                const resetAllParams = () => {
-                    duration = 0;
-                    node.accurateDuration = 0;
-                    node.accurateFrameCount = 0;
-                    
-                    if (startTimeWidget) startTimeWidget.value = 0;
-                    if (endTimeWidget) endTimeWidget.value = 0; 
-                    if (startFrameWidget) startFrameWidget.value = 0;
-                    if (endFrameWidget) endFrameWidget.value = 0;
-                    
-                    if (cropXWidget) cropXWidget.value = 0.0;
-                    if (cropYWidget) cropYWidget.value = 0.0;
-                    if (cropWWidget) cropWWidget.value = 1.0;
-                    if (cropHWidget) cropHWidget.value = 1.0;
-                    
-                    isCropVisible = false;
-                    if (cropBtn) {
-                        cropBtn.style.background = "rgba(255, 255, 255, 0.1)";
-                        cropBtn.style.color = "white";
-                    }
-                    if (arSelect) arSelect.value = "0";
-                    currentAspectRatio = 0;
-                    if (wInput) wInput.value = "";
-                    if (hInput) hInput.value = "";
-                    
-                    if (splitCountWidget) splitCountWidget.value = 0;
-                    if (splitPurpleWidget) splitPurpleWidget.value = 0.0;
-                    if (splitPurpleIdxWidget) splitPurpleIdxWidget.value = 0;
-                    if (splitGreenWidget) splitGreenWidget.value = 0.0;
-                    if (splitGreenIdxWidget) splitGreenIdxWidget.value = 0;
-                    if (selectGenerateWidget) selectGenerateWidget.value = "blue";
-                    
-                    node.toggleWidgetVisibility();
-                    
-                    updateCropUI();
-                    updateRuler();
-                    updateUI(true);
-                };
-
-                // 【修改点 2】：确保 applyVideoPath 总是刷新预览
                 const applyVideoPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
                     const isNewFile = (p !== node._lastLoadedVideoPath);
-                     
-                    if (isNewFile) {
-                        resetAllParams(); 
-                        node._lastLoadedVideoPath = p;
-                    }
-                    
+                    node._lastLoadedVideoPath = p;
                     if (videoWidget) videoWidget.value = p;
-                    if (node.updatePreview) node.updatePreview(p);
+                    
+                    if (isNewFile) {
+                        if (node.updatePreview) node.updatePreview(p);
+                        if (startTimeWidget) startTimeWidget.value = 0;
+                        if (endTimeWidget) endTimeWidget.value = 0;
+                        if (startFrameWidget) startFrameWidget.value = 0;
+                        if (endFrameWidget) endFrameWidget.value = 0;
+                        
+                        resetSplitWidgets();
+                        
+                        if (node.syncFramesFromTime) node.syncFramesFromTime();
+                    }
                 };
 
                 if (videoWidget) {
@@ -525,26 +367,21 @@ app.registerExtension({
                                 fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
                             }
                             
-                            if (info.loaded_frame_count !== undefined) {
+                            // 【核心修复】：使用 loaded_frame_count 替代 source_frame_count
+                            if (info.loaded_frame_count !== undefined && endFrameWidget) {
                                 node.accurateFrameCount = info.loaded_frame_count;
                                 node.accurateDuration = info.loaded_duration || 0;
+                                 
+                                const currentEndFrame = parseInt(endFrameWidget.value) || 0;
                                 
-                                if (endTimeWidget) {
-                                    let currentEnd = parseFloat(endTimeWidget.value) || 0;
-                                    if (currentEnd === 0 || currentEnd > node.accurateDuration) {
-                                        endTimeWidget.value = node.accurateDuration;
-                                    }
+                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
+                                    endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                                    
+                                    if (endTimeWidget) endTimeWidget.value = parseFloat(info.loaded_duration.toFixed(3));
+                                    
+                                    updateRuler();
+                                    updateUI(true);
                                 }
-                                if (endFrameWidget) {
-                                    let currentEndF = parseInt(endFrameWidget.value) || 0;
-                                    if (currentEndF === 0 || currentEndF >= node.accurateFrameCount) {
-                                        endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
-                                    }
-                                }
-                                
-                                node.syncFramesFromTime();
-                                updateRuler();
-                                updateUI(true);
                             }
                         } catch(e) {
                             console.error("Failed to parse video_info", e);
@@ -567,31 +404,23 @@ app.registerExtension({
                         try {
                             const infoStr = Array.isArray(output.video_info) ? output.video_info[0] : output.video_info;
                             const info = JSON.parse(infoStr);
-                            
                             if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
                             }
                             
-                            if (info.loaded_frame_count !== undefined) {
+                            // 【核心修复】：使用 loaded_frame_count 替代 source_frame_count
+                            if (info.loaded_frame_count !== undefined && endFrameWidget) {
                                 node.accurateFrameCount = info.loaded_frame_count;
                                 node.accurateDuration = info.loaded_duration || 0;
+                                 
+                                const currentEndFrame = parseInt(endFrameWidget.value) || 0;
                                 
-                                if (endTimeWidget) {
-                                    let currentEnd = parseFloat(endTimeWidget.value) || 0;
-                                    if (currentEnd === 0 || currentEnd > node.accurateDuration) {
-                                        endTimeWidget.value = node.accurateDuration;
-                                    }
+                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
+                                    endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                                    if (endTimeWidget) endTimeWidget.value = parseFloat(info.loaded_duration.toFixed(3));
+                                    updateRuler();
+                                    updateUI(true);
                                 }
-                                if (endFrameWidget) {
-                                    let currentEndF = parseInt(endFrameWidget.value) || 0;
-                                    if (currentEndF === 0 || currentEndF >= node.accurateFrameCount) {
-                                        endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
-                                    }
-                                }
-                                
-                                node.syncFramesFromTime();
-                                updateRuler();
-                                updateUI(true);
                             }
                         } catch(e) {}
                     }
@@ -607,21 +436,23 @@ app.registerExtension({
 
                 const btnWidget = this.addWidget("button", "choose file to upload", null, () => { fileInput.click(); });
 
-                // 【修改点 3】：修复各上传分支的状态同步
                 const uploadFile = async (file) => {
                     try {
                         if (errorMsg) errorMsg.style.display = "none";
+                        if (file.path) {
+                            videoWidget.value = file.path;
+                            node.updatePreview(file.path);
+                            if (startTimeWidget) startTimeWidget.value = 0;
+                            if (endTimeWidget) endTimeWidget.value = 0;
+                            if (startFrameWidget) startFrameWidget.value = 0;
+                            if (endFrameWidget) endFrameWidget.value = 0;
+                            resetSplitWidgets();
+                            node.syncFramesFromTime();
+                            return;
+                        }
                         btnWidget.name = "Uploading...";
                         node.setDirtyCanvas(true, false);
                         const CHUNK_SIZE = 10 * 1024 * 1024;
-
-                        if (file.path) {
-                            resetAllParams();
-                            videoWidget.value = file.path;
-                            node._lastLoadedVideoPath = file.path;
-                            node.updatePreview(file.path);
-                            return;
-                        }
 
                         if (file.size > CHUNK_SIZE) {
                             const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
@@ -640,10 +471,14 @@ app.registerExtension({
                                 if (resp.status !== 200) throw new Error("Chunk upload failed");
                                 if (i === totalChunks - 1) {
                                     const data = await resp.json();
-                                    resetAllParams();
                                     videoWidget.value = data.name;
-                                    node._lastLoadedVideoPath = data.name;
                                     node.updatePreview(data.name);
+                                    if (startTimeWidget) startTimeWidget.value = 0;
+                                    if (endTimeWidget) endTimeWidget.value = 0;
+                                    if (startFrameWidget) startFrameWidget.value = 0;
+                                    if (endFrameWidget) endFrameWidget.value = 0;
+                                    resetSplitWidgets();
+                                    node.syncFramesFromTime();
                                 }
                             }
                         } else {
@@ -653,10 +488,14 @@ app.registerExtension({
                             if (resp.status === 413) throw new Error("File too large.");
                             if (resp.status === 200) {
                                 const data = await resp.json();
-                                resetAllParams();
                                 videoWidget.value = data.name;
-                                node._lastLoadedVideoPath = data.name;
                                 node.updatePreview(data.name);
+                                if (startTimeWidget) startTimeWidget.value = 0;
+                                if (endTimeWidget) endTimeWidget.value = 0;
+                                if (startFrameWidget) startFrameWidget.value = 0;
+                                if (endFrameWidget) endFrameWidget.value = 0;
+                                resetSplitWidgets();
+                                node.syncFramesFromTime();
                             } else {
                                 throw new Error(`Upload failed: ${resp.statusText}`);
                             }
@@ -677,7 +516,7 @@ app.registerExtension({
                         uploadFile(file);
                         return true;
                     }
-                    return false; 
+                    return false;
                 };
 
                 const originalOnRemove = node.onRemoved;
@@ -1032,17 +871,17 @@ app.registerExtension({
                     }
                 };
                 
-                node.updateSplitHandles(); 
+                node.updateSplitHandles();
 
                 trimArea.appendChild(sliderBox);
                 container.appendChild(trimArea);
 
                 setTimeout(() => {
                     node.domWidget = node.addDOMWidget("VideoUI", "div", container);
-                    node.domWidget.computeSize = function () { return [400, 250]; };
+                    node.domWidget.computeSize = function () { return [360, 250]; };
                     requestAnimationFrame(() => {
-                        if (node.size[0] < 760) node.size[0] = 760;
-                        if (node.size[1] < 880) node.size[1] = 880;
+                        if (node.size[0] < 690) node.size[0] = 690;
+                        if (node.size[1] < 740) node.size[1] = 740;
                         if (node.onResize) node.onResize(node.size);
                         
                         if (displayModeWidget) {
@@ -1064,7 +903,44 @@ app.registerExtension({
                         
                         app.graph.setDirtyCanvas(true, true);
                     });
-                }, 100); 
+                }, 100);
+
+                const updateCropUI = () => {
+                    const vw = videoPreview.videoWidth;
+                    const vh = videoPreview.videoHeight;
+                    let cx = cropXWidget ? parseFloat(cropXWidget.value) || 0 : 0;
+                    let cy = cropYWidget ? parseFloat(cropYWidget.value) || 0 : 0;
+                    let cw_val = cropWWidget ? parseFloat(cropWWidget.value) || 1 : 1;
+                    let ch_val = cropHWidget ? parseFloat(cropHWidget.value) || 1 : 1;
+                    const actualW = vw ? Math.round(cw_val * vw) : 0;
+                    const actualH = vh ? Math.round(ch_val * vh) : 0;
+
+                    if (!isCropVisible || !vw) {
+                        cropBox.style.display = "none";
+                        cropEditContainer.style.display = "none";
+                        if (cw_val < 0.999 || ch_val < 0.999 || cx > 0.001 || cy > 0.001) {
+                            cropDims.textContent = `Crop: ${actualW}x${actualH}`;
+                            cropDims.style.display = "inline-block";
+                        } else { cropDims.style.display = "none"; }
+                        return;
+                    }
+                    cropDims.style.display = "none";
+                    cropEditContainer.style.display = "flex";
+                    cropBox.style.display = "block";
+                    if (document.activeElement !== wInput) wInput.value = actualW;
+                    if (document.activeElement !== hInput) hInput.value = actualH;
+                    const cw = videoPreview.clientWidth;
+                    const ch = videoPreview.clientHeight;
+                    const ratio = Math.min(cw / vw, ch / vh);
+                    const renderedW = vw * ratio;
+                    const renderedH = vh * ratio;
+                    const xOffset = (cw - renderedW) / 2;
+                    const yOffset = (ch - renderedH) / 2;
+                    cropBox.style.left = `${xOffset + cx * renderedW}px`;
+                    cropBox.style.top = `${yOffset + cy * renderedH}px`;
+                    cropBox.style.width = `${cw_val * renderedW}px`;
+                    cropBox.style.height = `${ch_val * renderedH}px`;
+                };
 
                 const onCropPointerDown = (e, handle) => {
                     if (!isCropVisible) return;
@@ -1284,16 +1160,99 @@ app.registerExtension({
                 setupPurpleHandleEvents();
                 setupGreenHandleEvents();
 
+                const updateRuler = () => {
+                    timeRuler.innerHTML = '';
+                    const activeDur = getActiveDuration();
+                    const numMajorTicks = 5;
+                    const subTicks = 4;
+                    const totalTicks = (numMajorTicks - 1) * subTicks;
+                    const isFrames = displayModeWidget && displayModeWidget.value === "frames";
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+
+                    for (let i = 0; i <= totalTicks; i++) {
+                        const pct = i / totalTicks;
+                        const t = activeDur * pct;
+                        const isMajor = i % subTicks === 0;
+                        const tickWrapper = document.createElement("div");
+                        Object.assign(tickWrapper.style, { position: "absolute", left: `${pct * 100}%`, top: "0", display: "flex", flexDirection: "column", alignItems: "center", transform: "translateX(-50%)" });
+                        if (i === 0) { tickWrapper.style.transform = "none"; tickWrapper.style.alignItems = "flex-start"; }
+                        if (i === totalTicks) { tickWrapper.style.transform = "translateX(-100%)"; tickWrapper.style.alignItems = "flex-end"; }
+                        const line = document.createElement("div");
+                        Object.assign(line.style, { width: isMajor ? "2px" : "1px", height: isMajor ? "6px" : "4px", background: isMajor ? "#aaa" : "#555", marginBottom: "2px", borderRadius: "1px" });
+                        tickWrapper.appendChild(line);
+                        if (isMajor) {
+                            const label = document.createElement("div");
+                            label.textContent = isFrames ? Math.round(t * fr) : formatTime(t);
+                            tickWrapper.appendChild(label);
+                        }
+                        timeRuler.appendChild(tickWrapper);
+                    }
+                };
+
+                function updateUI(syncPlayer = false) {
+                    const activeDur = getActiveDuration();
+                    let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
+                    let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
+                    let visualEnd = e;
+                    if (visualEnd === 0 || visualEnd > activeDur) visualEnd = activeDur;
+                    if (s > visualEnd) s = visualEnd;
+
+                    let pStart = (s / activeDur) * 100;
+                    let pEnd = (visualEnd / activeDur) * 100;
+                    pStart = Math.max(0, Math.min(pStart, 100));
+                    pEnd = Math.max(0, Math.min(pEnd, 100));
+
+                    startHandle.style.left = `${pStart}%`;
+                    endHandle.style.left = `${pEnd}%`;
+
+                    const currentDur = parseFloat((visualEnd - s).toFixed(2));
+                    const isFrames = displayModeWidget && displayModeWidget.value === "frames";
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+
+                    trimLength.textContent = isFrames ? `Trimmed: ${Math.round(currentDur * fr)} frames` : `Trimmed: ${formatTime(currentDur)}`;
+
+                    if (syncPlayer && duration > 0) videoPreview.currentTime = s;
+                    
+                    const toPct = (val) => Math.max(0, Math.min(100, (val / activeDur) * 100));
+                    let pS = 0, pE = 0, bS = 0, bE = 0, gS = 0, gE = 0;
+                    const s_val = s;
+                    const e_val = visualEnd;
+                    const p_val = splitPurpleWidget ? parseFloat(splitPurpleWidget.value) || 0 : 0;
+                    const g_val = splitGreenWidget ? parseFloat(splitGreenWidget.value) || 0 : 0;
+                    
+                    const sc = splitCountWidget ? splitCountWidget.value : 0;
+                    
+                    if (sc === 0) {
+                        bS = s_val; bE = e_val;
+                    } else if (sc === 1) {
+                        pS = s_val; pE = p_val;
+                        bS = p_val; bE = e_val;
+                    } else if (sc === 2) {
+                        pS = s_val; pE = p_val;
+                        bS = p_val; bE = g_val;
+                        gS = g_val; gE = e_val;
+                    }
+                    
+                    fillPurple.style.left = `${toPct(pS)}%`;
+                    fillPurple.style.width = `${Math.max(0, toPct(pE) - toPct(pS))}%`;
+                    fillBlue.style.left = `${toPct(bS)}%`;
+                    fillBlue.style.width = `${Math.max(0, toPct(bE) - toPct(bS))}%`;
+                    fillGreen.style.left = `${toPct(gS)}%`;
+                    fillGreen.style.width = `${Math.max(0, toPct(gE) - toPct(gS))}%`;
+                    
+                    if (typeof node.updateSplitHandles === 'function') node.updateSplitHandles();
+                }
+
                 setTimeout(() => { updateRuler(); updateUI(); }, 50);
 
                 videoPreview.onloadedmetadata = () => {
                     const newDuration = videoPreview.duration;
                     if (!newDuration || newDuration === Infinity || isNaN(newDuration)) return;
-
+                    
                     duration = newDuration;
                     node.accurateDuration = newDuration;
                     
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0; 
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;  
                     const newTotalFrames = Math.round(newDuration * fr);
                     node.accurateFrameCount = newTotalFrames; 
 
@@ -1411,7 +1370,7 @@ app.registerExtension({
                     }
                 });
 
-                if (videoWidget && videoWidget.value) applyVideoPath(videoWidget.value);
+                if (videoWidget && videoWidget.value) node.updatePreview(videoWidget.value);
                 return r;
             };
         }
