@@ -155,7 +155,6 @@ class VideoLoaderPW:
         if actual_end_time <= 0:
             actual_end_time = float('inf')
 
-        # FIX 1: 修复 target_frame_count 计算逻辑
         target_frame_count = -1
         if display_mode == "frames":
             if end_frame > 0:
@@ -332,20 +331,20 @@ class VideoLoaderPW:
             "loaded_height": loaded_h,
         }, indent=4)
 
-        # FIX 2: 修复 g_end_frame 计算，使用目标fps而非原始fps
+        # 修复：使用实际提取的 frame_count 计算 g_end_frame，避免 duration 浮点数误差
         if display_mode == "frames":
             g_start_frame = s_frame_0
             if e_frame_0 > 0:
                 g_end_frame = e_frame_0
             else:
-                g_end_frame = int(round(video_duration * fr)) - 1
+                g_end_frame = frame_count - 1 if frame_count > 0 else 0
         else:
             g_start_frame = int(round(actual_start_time * fr))
             if actual_end_time == float('inf'):
-                g_end_frame = int(round(video_duration * fr)) - 1
+                g_end_frame = frame_count - 1 if frame_count > 0 else 0
             else:
                 g_end_frame = max(g_start_frame, int(round(actual_end_time * fr)) - 1)
-                
+            
         g_start_frame = max(0, g_start_frame)
         g_end_frame = max(g_start_frame, g_end_frame)
         g_end_local = g_end_frame - g_start_frame
