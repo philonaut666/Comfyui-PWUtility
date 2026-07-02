@@ -45,7 +45,8 @@ function reduceNodesDepthFirst(nodeOrNodes, reduceFn, reduceTo) {
         const { node } = stack.pop();
         const result = reduceFn(node, reduceTo);
         if (result !== undefined && result !== reduceTo) reduceTo = result;
-        if (node.isSubgraphNode?.() && node.subgraph) {
+        // 【修复】使用 node.subgraph 检测子图节点
+        if (node.subgraph && node.subgraph.nodes) {
             const children = node.subgraph.nodes;
             for (let i = children.length - 1; i >= 0; i--) stack.push({ node: children[i] });
         }
@@ -54,12 +55,24 @@ function reduceNodesDepthFirst(nodeOrNodes, reduceFn, reduceTo) {
 }
 
 function changeModeOfNodes(nodeOrNodes, mode) {
-    reduceNodesDepthFirst(nodeOrNodes, (n) => { n.mode = mode; });
+    reduceNodesDepthFirst(nodeOrNodes, (n) => { 
+        if (n.mode !== mode) {
+            n.mode = mode;
+            // 确保节点状态变更被画布感知
+            if (n.setDirtyCanvas) n.setDirtyCanvas(true, true);
+        }
+    });
 }
 
 function getNodesInGroupGlobal(groupInfo) {
     const group = groupInfo?._pwOriginalGroup || groupInfo;
     if (!group) return [];
+    
+    // 【修复】确保 group.graph 指向正确的子图，否则 recomputeInsideNodes 会失败
+    if (groupInfo?._pwGraph && group.graph !== groupInfo._pwGraph) {
+        group.graph = groupInfo._pwGraph;
+    }
+    
     try { if (typeof group.recomputeInsideNodes === "function") group.recomputeInsideNodes(); } catch (e) {}
     return Array.from(group._children || []).filter((c) => c instanceof LGraphNode);
 }
@@ -79,7 +92,8 @@ class GroupSwitchService {
                     count += (graph._groups || []).filter(g => g && g.title).length;
                     if (graph.nodes) {
                         for (const node of graph.nodes) {
-                            if (node.isSubgraphNode?.() && node.subgraph) {
+                            // 【修复】使用 node.subgraph 检测子图节点
+                            if (node.subgraph && node.subgraph._groups !== undefined) {
                                 countGroups(node.subgraph);
                             }
                         }
@@ -317,10 +331,6 @@ app.registerExtension({
             if (el) el.textContent = this.properties.switchMode === 'bypass' ? t('modeBypass') : t('modeDisable');
         };
 
-        /**
-         * 【子图支持核心】递归获取主图及所有子图中的组
-         * 返回带有 _pwUniqueId (唯一标识) 和 _pwDisplayName (显示名称) 的组信息对象
-         */
         nodeType.prototype.getAllGroupsFlat = function () {
             const result = [];
             const collectGroups = (graph, pathParts, topSubgraphNode) => {
@@ -344,8 +354,9 @@ app.registerExtension({
                 }
                 if (graph.nodes) {
                     for (const node of graph.nodes) {
-                        if (node.isSubgraphNode?.() && node.subgraph) {
-                            const subName = node.title || 'Subgraph';
+                        // 【修复】使用 node.subgraph 检测子图节点
+                        if (node.subgraph && node.subgraph._groups !== undefined) {
+                            const subName = node.title || node.type || 'Subgraph';
                             const newTopNode = topSubgraphNode || node;
                             collectGroups(node.subgraph, [...pathParts, subName], newTopNode);
                         }
@@ -537,7 +548,8 @@ app.registerExtension({
                         if (node.type === "GroupSwitchADV" || node.comfyClass === "GroupSwitchADV") {
                             result.push(node);
                         }
-                        if (node.isSubgraphNode?.() && node.subgraph) {
+                        // 【修复】使用 node.subgraph 检测子图节点
+                        if (node.subgraph && node.subgraph.nodes) {
                             result = result.concat(collectAdvNodes(node.subgraph));
                         }
                     }
@@ -602,7 +614,8 @@ app.registerExtension({
                         if (node.type === "GroupSwitchADV" || node.comfyClass === "GroupSwitchADV") {
                             node.refreshWidgets?.();
                         }
-                        if (node.isSubgraphNode?.() && node.subgraph) {
+                        // 【修复】使用 node.subgraph 检测子图节点
+                        if (node.subgraph && node.subgraph.nodes) {
                             refreshAll(node.subgraph);
                         }
                     }
@@ -882,7 +895,6 @@ app.registerExtension({
             if (info.toggleRestriction !== undefined) this.properties.toggleRestriction = info.toggleRestriction;
             if (info.showNavigate !== undefined) this.properties.showNavigate = info.showNavigate;
 
-            // 【子图支持】迁移旧版工作流数据：将纯组名转换为唯一标识符
             if (this.properties.groups && Array.isArray(this.properties.groups)) {
                 const allGroups = this.getAllGroupsFlat();
                 for (const cfg of this.properties.groups) {
@@ -890,7 +902,6 @@ app.registerExtension({
                         const match = allGroups.find(g => g.title === cfg.group_name && !g._pwPath);
                         if (match) cfg.group_name = match._pwUniqueId;
                     }
-                    // 迁移联动规则中的旧组名
                     if (cfg.linkage) {
                         for (const type of ['on_enable', 'on_disable']) {
                             if (cfg.linkage[type]) {
