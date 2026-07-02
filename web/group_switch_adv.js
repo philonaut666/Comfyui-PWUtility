@@ -14,7 +14,7 @@ const i18n = {
         restrictionUnlimited: "无限制", restrictionAlwaysOne: "始终仅开启一个", navigateIndicator: "定位按钮",
         show: "显示", hide: "隐藏", linkageConfig: "联动配置：", whenGroupOn: "组开启时", whenGroupOff: "组关闭时",
         searchGroup: "搜索组...",
-        helpTitle: "Group Switch ADV", helpDesc: "极简版组管理器。支持跨节点全局联动、拖拽排序、条件过滤。"
+        helpTitle: "Group Switch ADV", helpDesc: "极简版组管理器。支持跨节点全局联动、拖拽排序、条件过滤及子图组控制。"
     },
     en: {
         title: "Group Switch ADV", allColors: "All", refresh: "Refresh", settings: "Settings", cancel: "Cancel", confirm: "Confirm",
@@ -27,7 +27,7 @@ const i18n = {
         restrictionUnlimited: "Unlimited", restrictionAlwaysOne: "Always One Active", navigateIndicator: "Navigate Button",
         show: "Show", hide: "Hide", linkageConfig: "Linkage Config: ", whenGroupOn: "When Group ON", whenGroupOff: "When Group OFF",
         searchGroup: "Search group...",
-        helpTitle: "Group Switch ADV", helpDesc: "Minimalist Group Manager. Supports global cross-node linkage, drag-sort, and filtering."
+        helpTitle: "Group Switch ADV", helpDesc: "Minimalist Group Manager. Supports global cross-node linkage, drag-sort, filtering, and subgraph group control."
     }
 };
 
@@ -35,6 +35,7 @@ function getLocale() {
     const comfyLocale = app?.ui?.settings?.getSettingValue?.('Comfy.Locale');
     return comfyLocale === 'zh-CN' || comfyLocale === 'zh' ? 'zh' : 'en';
 }
+
 function t(key) { return i18n[getLocale()][key] || i18n['en'][key] || key; }
 
 function reduceNodesDepthFirst(nodeOrNodes, reduceFn, reduceTo) {
@@ -56,22 +57,45 @@ function changeModeOfNodes(nodeOrNodes, mode) {
     reduceNodesDepthFirst(nodeOrNodes, (n) => { n.mode = mode; });
 }
 
-function getNodesInGroupGlobal(group) {
-    if (!group || !app.graph) return [];
+function getNodesInGroupGlobal(groupInfo) {
+    const group = groupInfo?._pwOriginalGroup || groupInfo;
+    if (!group) return [];
     try { if (typeof group.recomputeInsideNodes === "function") group.recomputeInsideNodes(); } catch (e) {}
     return Array.from(group._children || []).filter((c) => c instanceof LGraphNode);
 }
 
 class GroupSwitchService {
-    constructor() { 
-        this.nodes = []; 
+    constructor() {
+        this.nodes = [];
         this.runScheduledForMs = null;
         this.runScheduleTimeout = null;
         this.runScheduleAnimation = null;
+        this._lastGroupCount = -1;
+        this._checkInterval = setInterval(() => {
+            if (this.nodes.length > 0 && app.graph) {
+                let count = 0;
+                const countGroups = (graph) => {
+                    if (!graph) return;
+                    count += (graph._groups || []).filter(g => g && g.title).length;
+                    if (graph.nodes) {
+                        for (const node of graph.nodes) {
+                            if (node.isSubgraphNode?.() && node.subgraph) {
+                                countGroups(node.subgraph);
+                            }
+                        }
+                    }
+                };
+                countGroups(app.graph);
+                if (count !== this._lastGroupCount) {
+                    this._lastGroupCount = count;
+                    this.scheduleRun(300);
+                }
+            }
+        }, 2000);
     }
-    addNode(node) { 
-        this.nodes.push(node); 
-        this.scheduleRun(300); 
+    addNode(node) {
+        this.nodes.push(node);
+        this.scheduleRun(300);
     }
     removeNode(node) {
         const i = this.nodes.indexOf(node);
@@ -93,14 +117,15 @@ class GroupSwitchService {
             }, ms);
         }
     }
-    clearScheduledRun() { 
+    clearScheduledRun() {
         if (this.runScheduleTimeout) clearTimeout(this.runScheduleTimeout);
         if (this.runScheduleAnimation) cancelAnimationFrame(this.runScheduleAnimation);
         this.runScheduleTimeout = null;
         this.runScheduleAnimation = null;
-        this.runScheduledForMs = null; 
+        this.runScheduledForMs = null;
     }
 }
+
 const GSA_SERVICE = new GroupSwitchService();
 
 app.registerExtension({
@@ -112,7 +137,6 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const r = onNodeCreated?.apply(this, arguments);
             this._gsaId = `gsa_${Date.now()}`;
-            
             this.properties = this.properties || {};
             this.properties.groups = this.properties.groups || [];
             this.properties.groupOrder = this.properties.groupOrder || [];
@@ -122,11 +146,9 @@ app.registerExtension({
             this.properties.titleKeywords = this.properties.titleKeywords || '';
             this.properties.toggleRestriction = this.properties.toggleRestriction || 'unlimited';
             this.properties.showNavigate = this.properties.showNavigate !== false;
-            
             this.groupReferences = new WeakMap();
             this.size = [300, 400];
             this.createMinimalUI();
-            
             this._evtHandler = (e) => {
                 if (e.detail && e.detail.sourceId !== this._gsaId) this.refreshWidgets();
             };
@@ -155,38 +177,30 @@ app.registerExtension({
                     .gsa-container { width: 100%; height: 100%; display: flex; flex-direction: column; font-family: sans-serif; font-size: 12px; color: #333; background: #f8f9fa; overflow: hidden; }
                     .gsa-header { display: flex; gap: 5px; padding: 5px; border-bottom: 2px solid #dee2e6; align-items: center; }
                     .gsa-list { flex: 1; overflow-y: auto; padding: 2px 5px; }
-                    
                     .gsa-item { display: flex; align-items: center; gap: 4px; padding: 3px 2px; border-bottom: 1px solid #e9ecef; }
-                    
                     .gsa-item button, .gsa-header button, .gsa-dialog button { background: #ffffff; color: #495057; border: 1px solid #ced4da; padding: 0 6px; cursor: pointer; border-radius: 3px; font-size: 11px; transition: all 0.15s ease-in-out; height: 24px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; }
                     .gsa-item button:hover, .gsa-header button:hover, .gsa-dialog button:hover { background: #e9ecef; border-color: #adb5bd; }
                     .gsa-item.active button.gsa-toggle { background: #4caf50; border-color: #388e3c; color: #fff; }
                     .gsa-item button.gsa-link-active { background: #4caf50; border-color: #388e3c; color: #fff; }
-                    
                     .gsa-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #ffffff; border: 1px solid #ced4da; padding: 16px 20px; z-index: 10000; color: #333; min-width: 420px; max-width: 500px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); border-radius: 8px; display: flex; flex-direction: column; }
                     .gsa-dialog h3 { margin: 0 0 16px 0; font-size: 15px; border-bottom: 2px solid #e9ecef; padding-bottom: 10px; color: #212529; font-weight: 600; }
                     .gsa-dialog label { display: block; margin: 10px 0 4px; font-size: 11px; color: #6c757d; font-weight: 500; }
                     .gsa-dialog select, .gsa-dialog input { width: 100%; background: #ffffff; color: #212529; border: 1px solid #ced4da; padding: 4px 8px; height: 28px; box-sizing: border-box; margin-bottom: 5px; border-radius: 3px; outline: none; font-size: 11px; }
                     .gsa-dialog select:focus, .gsa-dialog input:focus { border-color: #80bdff; box-shadow: 0 0 0 2px rgba(0,123,255,.25); }
-                    
                     .gsa-section-header { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 6px 0; }
                     .gsa-section-header span { font-size: 12px; font-weight: 600; color: #495057; }
                     .gsa-add-rule { width: 22px; height: 22px; border-radius: 4px; background: #4caf50; border: 1px solid #388e3c; color: white; font-size: 14px; font-weight: bold; line-height: 20px; text-align: center; cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease; }
                     .gsa-add-rule:hover { background: #43a047; border-color: #2e7d32; }
-                    
                     .gsa-rules-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
-                    
                     .gsa-dialog-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; padding-top: 14px; border-top: 1px solid #e9ecef; }
                     .gsa-btn-primary { background: #4caf50 !important; border-color: #388e3c !important; color: #fff !important; }
                     .gsa-btn-primary:hover { background: #43a047 !important; border-color: #2e7d32 !important; }
-                    
                     .gsa-rule { 
                         display: flex; 
                         gap: 5px; 
                         margin: 0; 
                         align-items: center;
                     }
-
                     .gsa-rule .gsa-search-input, 
                     .gsa-rule select.r-action, 
                     .gsa-rule button.r-del, 
@@ -201,7 +215,6 @@ app.registerExtension({
                         outline: none !important;
                         vertical-align: middle !important;
                     }
-
                     .gsa-rule .gsa-search-input {
                         width: 100%;
                         padding: 0 8px !important;
@@ -215,7 +228,6 @@ app.registerExtension({
                         border-color: #80bdff !important; 
                         box-shadow: 0 0 0 2px rgba(0,123,255,.25) !important; 
                     }
-
                     .gsa-rule select.r-action {
                         flex: 1;
                         padding: 0 28px 0 8px !important;
@@ -229,7 +241,6 @@ app.registerExtension({
                         appearance: none !important;
                         -webkit-appearance: none !important;
                     }
-
                     .gsa-rule button.r-del, 
                     .gsa-rule button.r-mirror-add {
                         width: 26px !important;
@@ -241,7 +252,6 @@ app.registerExtension({
                         flex-shrink: 0 !important;
                         cursor: pointer !important;
                     }
-
                     .gsa-rule button.r-del {
                         background: #fff !important;
                         color: #dc3545 !important;
@@ -252,7 +262,6 @@ app.registerExtension({
                         background: #f8d7da !important;
                         border-color: #f5c2c7 !important;
                     }
-
                     .gsa-rule button.r-mirror-add {
                         background: #f8f9fa !important;
                         color: #495057 !important;
@@ -275,9 +284,7 @@ app.registerExtension({
                         font-weight: 900 !important;
                         line-height: 22px !important;
                     }
-                    
                     .gsa-search-dropdown { position: relative; flex: 2; min-width: 140px; }
-                    
                     .gsa-search-menu { display: none; position: absolute; top: 100%; left: 0; right: 0; background: #fff; border: 1px solid #ced4da; border-top: none; border-radius: 0 0 3px 3px; max-height: 160px; overflow-y: auto; z-index: 10001; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
                     .gsa-search-dropdown.open .gsa-search-menu { display: block; }
                     .gsa-search-option { padding: 6px 8px; cursor: pointer; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #333; border-bottom: 1px solid #f1f3f5; line-height: 1.4; }
@@ -287,7 +294,6 @@ app.registerExtension({
                 `;
                 document.head.appendChild(style);
             }
-
             const container = document.createElement('div');
             container.className = 'gsa-container';
             container.innerHTML = `
@@ -300,10 +306,8 @@ app.registerExtension({
             `;
             this.addDOMWidget("gsa_ui", "div", container);
             this.ui = container;
-            
             this.ui.querySelector('#gsa-btn-set').onclick = () => this.showSettings();
             this.ui.querySelector('#gsa-btn-ref').onclick = () => this.refreshWidgets();
-            
             this.updateModeText();
             this.refreshWidgets();
         };
@@ -313,25 +317,65 @@ app.registerExtension({
             if (el) el.textContent = this.properties.switchMode === 'bypass' ? t('modeBypass') : t('modeDisable');
         };
 
-        nodeType.prototype.getWorkflowGroups = function () {
-            if (!app.graph || !app.graph._groups) return [];
-            return app.graph._groups.filter(g => g && g.title);
+        /**
+         * 【子图支持核心】递归获取主图及所有子图中的组
+         * 返回带有 _pwUniqueId (唯一标识) 和 _pwDisplayName (显示名称) 的组信息对象
+         */
+        nodeType.prototype.getAllGroupsFlat = function () {
+            const result = [];
+            const collectGroups = (graph, pathParts, topSubgraphNode) => {
+                if (!graph || !graph._groups) return;
+                for (const group of graph._groups) {
+                    if (group && group.title) {
+                        const path = pathParts.join(' > ');
+                        const uniqueId = path ? `${path}::${group.title}` : group.title;
+                        const displayName = path ? `[${path}] ${group.title}` : group.title;
+                        result.push({
+                            title: group.title,
+                            color: group.color,
+                            _pwUniqueId: uniqueId,
+                            _pwDisplayName: displayName,
+                            _pwGraph: graph,
+                            _pwPath: path,
+                            _pwOriginalGroup: group,
+                            _pwTopSubgraphNode: topSubgraphNode,
+                        });
+                    }
+                }
+                if (graph.nodes) {
+                    for (const node of graph.nodes) {
+                        if (node.isSubgraphNode?.() && node.subgraph) {
+                            const subName = node.title || 'Subgraph';
+                            const newTopNode = topSubgraphNode || node;
+                            collectGroups(node.subgraph, [...pathParts, subName], newTopNode);
+                        }
+                    }
+                }
+            };
+            if (app.graph) collectGroups(app.graph, [], null);
+            return result;
+        };
+
+        nodeType.prototype._getGroupDisplayName = function (uniqueId) {
+            if (!uniqueId) return '';
+            const group = this.getAllGroupsFlat().find(g => g._pwUniqueId === uniqueId);
+            return group ? group._pwDisplayName : uniqueId;
         };
 
         nodeType.prototype.sortGroups = function (groups) {
-            if (!this.properties.groupOrder.length) return groups.slice().sort((a, b) => a.title.localeCompare(b.title));
+            if (!this.properties.groupOrder.length) return groups.slice().sort((a, b) => a._pwDisplayName.localeCompare(b._pwDisplayName));
             const map = new Map(this.properties.groupOrder.map((n, i) => [n, i]));
             const ordered = [], unordered = [];
-            groups.forEach(g => (map.has(g.title) ? ordered : unordered).push(g));
-            ordered.sort((a, b) => map.get(a.title) - map.get(b.title));
-            unordered.sort((a, b) => a.title.localeCompare(b.title));
+            groups.forEach(g => (map.has(g._pwUniqueId) ? ordered : unordered).push(g));
+            ordered.sort((a, b) => map.get(a._pwUniqueId) - map.get(b._pwUniqueId));
+            unordered.sort((a, b) => a._pwDisplayName.localeCompare(b._pwDisplayName));
             return [...ordered, ...unordered];
         };
 
         nodeType.prototype.filterGroups = function (groups) {
             if (this.properties.matchMode === 'title' && this.properties.titleKeywords) {
                 const kws = this.properties.titleKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
-                if (kws.length) groups = groups.filter(g => kws.some(k => (g.title || '').toLowerCase().includes(k)));
+                if (kws.length) groups = groups.filter(g => kws.some(k => (g._pwDisplayName || g.title || '').toLowerCase().includes(k)));
             } else if (this.properties.matchMode === 'colors' && this.properties.selectedColorFilter) {
                 let targetHex = this.getHexColor(this.properties.selectedColorFilter);
                 if (targetHex) groups = groups.filter(g => this.getHexColor(g.color) === targetHex);
@@ -350,8 +394,8 @@ app.registerExtension({
             return null;
         };
 
-        nodeType.prototype.isGroupEnabled = function (group) {
-            const nodes = getNodesInGroupGlobal(group);
+        nodeType.prototype.isGroupEnabled = function (groupInfo) {
+            const nodes = getNodesInGroupGlobal(groupInfo);
             if (!nodes.length) return false;
             let active = false;
             reduceNodesDepthFirst(nodes, (n) => { if (n.mode === 0) active = true; });
@@ -361,40 +405,38 @@ app.registerExtension({
         nodeType.prototype.refreshWidgets = function () {
             const list = this.ui?.querySelector('#gsa-list');
             if (!list) return;
-
-            let groups = this.getWorkflowGroups();
+            let groups = this.getAllGroupsFlat();
             groups = this.filterGroups(groups);
             groups = this.sortGroups(groups);
 
             groups.forEach(group => {
-                let cfg = this.properties.groups.find(g => g.group_name === group.title);
+                let cfg = this.properties.groups.find(g => g.group_name === group._pwUniqueId);
                 const isEnabled = this.isGroupEnabled(group);
                 if (!cfg) {
-                    cfg = { group_name: group.title, enabled: isEnabled, linkage: { on_enable: [], on_disable: [] } };
+                    cfg = { group_name: group._pwUniqueId, enabled: isEnabled, linkage: { on_enable: [], on_disable: [] } };
                     this.properties.groups.push(cfg);
                 } else {
                     cfg.enabled = isEnabled;
                 }
             });
-            this.properties.groups = this.properties.groups.filter(c => groups.some(g => g.title === c.group_name));
+
+            const validIds = new Set(groups.map(g => g._pwUniqueId));
+            this.properties.groups = this.properties.groups.filter(c => validIds.has(c.group_name));
 
             let index = 0;
             for (const group of groups) {
-                const cfg = this.properties.groups.find(g => g.group_name === group.title);
+                const cfg = this.properties.groups.find(g => g.group_name === group._pwUniqueId);
                 const isEnabled = cfg ? cfg.enabled : false;
                 const hasLinkage = cfg && cfg.linkage && ((cfg.linkage.on_enable && cfg.linkage.on_enable.length > 0) || (cfg.linkage.on_disable && cfg.linkage.on_disable.length > 0));
                 const colorHex = this.getHexColor(group.color) || '#adb5bd';
-
                 let item = list.children[index];
-                const expectedName = group.title;
-
-                if (!item || item.dataset.name !== expectedName) {
+                const expectedId = group._pwUniqueId;
+                if (!item || item.dataset.uid !== expectedId) {
                     const newItem = this.createGroupItem(cfg, group);
                     if (item) list.insertBefore(newItem, item);
                     else list.appendChild(newItem);
                     item = newItem;
                 }
-
                 const toggleBtn = item.querySelector('.gsa-toggle');
                 if (toggleBtn) {
                     const isActive = toggleBtn.classList.contains('active');
@@ -404,26 +446,26 @@ app.registerExtension({
                         item.classList.toggle('active', isEnabled);
                     }
                 }
-
                 const linkBtn = item.querySelector('.gsa-link');
                 if (linkBtn) {
                     const isLinkActive = linkBtn.classList.contains('gsa-link-active');
                     if (isLinkActive !== hasLinkage) linkBtn.classList.toggle('gsa-link-active', hasLinkage);
                 }
-                
                 const navBtn = item.querySelector('.gsa-nav');
                 if (navBtn) {
                     const shouldShow = this.properties.showNavigate;
                     const isShown = navBtn.style.display !== 'none';
                     if (isShown !== shouldShow) navBtn.style.display = shouldShow ? '' : 'none';
                 }
-                
                 const colorSpan = item.querySelector('.gsa-color-indicator');
                 if (colorSpan) colorSpan.style.backgroundColor = colorHex;
-
+                const titleSpan = item.querySelector('.gsa-title');
+                if (titleSpan && titleSpan.textContent !== group._pwDisplayName) {
+                    titleSpan.textContent = group._pwDisplayName;
+                    titleSpan.title = group._pwDisplayName;
+                }
                 index++;
             }
-
             while (list.children[index]) list.removeChild(list.children[index]);
         };
 
@@ -431,57 +473,50 @@ app.registerExtension({
             const item = document.createElement('div');
             item.className = 'gsa-item' + (cfg.enabled ? ' active' : '');
             item.draggable = true;
-            item.dataset.name = group.title;
-            
+            item.dataset.uid = group._pwUniqueId;
             const colorHex = this.getHexColor(group.color) || '#adb5bd';
             const hasLinkage = cfg.linkage && ((cfg.linkage.on_enable && cfg.linkage.on_enable.length > 0) || (cfg.linkage.on_disable && cfg.linkage.on_disable.length > 0));
-
             item.innerHTML = `
                 <span class="gsa-drag-handle" style="cursor:grab; color:#adb5bd;">⠿</span>
                 <span class="gsa-color-indicator" style="width:10px; height:10px; background:${colorHex}; border:1px solid #adb5bd; border-radius:2px; display:inline-block;"></span>
-                <span class="gsa-title" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${group.title}">${group.title}</span>
+                <span class="gsa-title" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${group._pwDisplayName}">${group._pwDisplayName}</span>
                 <button class="gsa-toggle ${cfg.enabled ? 'active' : ''}">${cfg.enabled ? 'ON' : 'OFF'}</button>
                 <button class="gsa-link ${hasLinkage ? 'gsa-link-active' : ''}" title="Linkage">🔗</button>
                 <button class="gsa-nav" title="Navigate" style="display: ${this.properties.showNavigate ? '' : 'none'}">→</button>
             `;
-
-            item.querySelector('.gsa-toggle').onclick = (e) => { e.stopPropagation(); this.toggleGroup(group.title, !cfg.enabled); };
+            item.querySelector('.gsa-toggle').onclick = (e) => { e.stopPropagation(); this.toggleGroup(group._pwUniqueId, !cfg.enabled); };
             item.querySelector('.gsa-link').onclick = (e) => { e.stopPropagation(); this.showLinkage(cfg); };
             item.querySelector('.gsa-nav').onclick = (e) => { e.stopPropagation(); this.navigateTo(group); };
-
-            item.ondragstart = (e) => { this._dragName = group.title; e.dataTransfer.effectAllowed = 'move'; item.style.opacity = '0.5'; };
-            item.ondragend = () => { item.style.opacity = '1'; this._dragName = null; };
+            item.ondragstart = (e) => { this._dragUid = group._pwUniqueId; e.dataTransfer.effectAllowed = 'move'; item.style.opacity = '0.5'; };
+            item.ondragend = () => { item.style.opacity = '1'; this._dragUid = null; };
             item.ondragover = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; };
             item.ondrop = (e) => {
                 e.preventDefault();
-                if (this._dragName && this._dragName !== group.title) {
-                    const order = this.sortGroups(this.getWorkflowGroups()).map(g => g.title);
-                    const fromIdx = order.indexOf(this._dragName);
-                    const toIdx = order.indexOf(group.title);
+                if (this._dragUid && this._dragUid !== group._pwUniqueId) {
+                    const order = this.sortGroups(this.getAllGroupsFlat()).map(g => g._pwUniqueId);
+                    const fromIdx = order.indexOf(this._dragUid);
+                    const toIdx = order.indexOf(group._pwUniqueId);
                     if (fromIdx > -1 && toIdx > -1) {
                         order.splice(fromIdx, 1);
-                        order.splice(toIdx, 0, this._dragName);
+                        order.splice(toIdx, 0, this._dragUid);
                         this.properties.groupOrder = order;
                         this.refreshWidgets();
                         app.graph.setDirtyCanvas(true, true);
                     }
                 }
             };
-
             return item;
         };
 
-        nodeType.prototype.toggleGroup = function (groupName, enable, opts = {}) {
-            const group = app.graph._groups.find(g => g.title === groupName);
-            if (!group) return;
-            const nodes = getNodesInGroupGlobal(group);
+        nodeType.prototype.toggleGroup = function (uniqueId, enable, opts = {}) {
+            const groupInfo = this.getAllGroupsFlat().find(g => g._pwUniqueId === uniqueId);
+            if (!groupInfo) return;
+            const nodes = getNodesInGroupGlobal(groupInfo);
             if (nodes.length === 0) return;
 
             if (enable && this.properties.toggleRestriction === 'always_one' && !opts.skipAlwaysOne) {
-                const filteredNames = this.filterGroups(this.getWorkflowGroups()).map(g => g.title);
-                const enabledOthers = this.properties.groups.filter(g => g.enabled && g.group_name !== groupName && filteredNames.includes(g.group_name));
-                
-                // 【核心修复】通过正常流程关闭其他组，以触发它们的 When Group OFF 联动规则
+                const filteredIds = this.filterGroups(this.getAllGroupsFlat()).map(g => g._pwUniqueId);
+                const enabledOthers = this.properties.groups.filter(g => g.enabled && g.group_name !== uniqueId && filteredIds.includes(g.group_name));
                 enabledOthers.forEach(g => {
                     this.toggleGroup(g.group_name, false, { skipAlwaysOne: true, skipUIUpdate: true });
                 });
@@ -490,14 +525,28 @@ app.registerExtension({
             const switchMode = this.properties.switchMode || 'bypass';
             const mode = enable ? 0 : (switchMode === 'bypass' ? 4 : 2);
             changeModeOfNodes(nodes, mode);
-            
-            const config = this.properties.groups.find(g => g.group_name === groupName);
+
+            const config = this.properties.groups.find(g => g.group_name === uniqueId);
             if (config) config.enabled = enable;
 
             if (!opts.skipLinkage) {
-                const allAdvNodes = app.graph._nodes.filter(n => n.type === "GroupSwitchADV" || n.comfyClass === "GroupSwitchADV");
+                const collectAdvNodes = (graph) => {
+                    let result = [];
+                    if (!graph || !graph.nodes) return result;
+                    for (const node of graph.nodes) {
+                        if (node.type === "GroupSwitchADV" || node.comfyClass === "GroupSwitchADV") {
+                            result.push(node);
+                        }
+                        if (node.isSubgraphNode?.() && node.subgraph) {
+                            result = result.concat(collectAdvNodes(node.subgraph));
+                        }
+                    }
+                    return result;
+                };
+                const allAdvNodesGlobal = collectAdvNodes(app.graph);
+
                 const globalRules = {};
-                for (const node of allAdvNodes) {
+                for (const node of allAdvNodesGlobal) {
                     if (!node.properties || !node.properties.groups) continue;
                     for (const cfg of node.properties.groups) {
                         if (!globalRules[cfg.group_name]) globalRules[cfg.group_name] = { on_enable: [], on_disable: [] };
@@ -507,17 +556,15 @@ app.registerExtension({
                         }
                     }
                 }
-
                 const finalStates = {};
                 const pendingActions = [];
-                const sourceRules = globalRules[groupName];
+                const sourceRules = globalRules[uniqueId];
                 if (sourceRules) {
                     const rules = enable ? sourceRules.on_enable : sourceRules.on_disable;
                     for (const rule of rules) pendingActions.push({ name: rule.target_group, action: rule.action || 'active', depth: 1 });
                 }
-                
                 let head = 0;
-                while(head < pendingActions.length) {
+                while (head < pendingActions.length) {
                     const act = pendingActions[head++];
                     const { name, action, depth } = act;
                     if (finalStates[name] && finalStates[name].depth <= depth) continue;
@@ -528,19 +575,18 @@ app.registerExtension({
                         for (const rule of nextRules) pendingActions.push({ name: rule.target_group, action: rule.action || 'active', depth: depth + 1 });
                     }
                 }
-                
+                const allGroupsFlat = this.getAllGroupsFlat();
                 for (const [name, state] of Object.entries(finalStates)) {
-                    const targetGroup = app.graph._groups.find(g => g.title === name);
-                    if (targetGroup) {
-                        const targetNodes = getNodesInGroupGlobal(targetGroup);
+                    const targetGroupInfo = allGroupsFlat.find(g => g._pwUniqueId === name);
+                    if (targetGroupInfo) {
+                        const targetNodes = getNodesInGroupGlobal(targetGroupInfo);
                         if (targetNodes.length > 0) {
                             let targetMode = 0;
                             if (state.action === 'active') targetMode = 0;
                             else if (state.action === 'mute') targetMode = 2;
                             else if (state.action === 'bypass') targetMode = 4;
-                            
                             changeModeOfNodes(targetNodes, targetMode);
-                            for (const node of allAdvNodes) {
+                            for (const node of allAdvNodesGlobal) {
                                 const cfg = node.properties.groups.find(g => g.group_name === name);
                                 if (cfg) cfg.enabled = (targetMode === 0);
                             }
@@ -548,17 +594,31 @@ app.registerExtension({
                     }
                 }
             }
-            
+
             if (!opts.skipUIUpdate) {
-                const allAdvNodes = app.graph._nodes.filter(n => n.type === "GroupSwitchADV" || n.comfyClass === "GroupSwitchADV");
-                for (const node of allAdvNodes) node.refreshWidgets();
+                const refreshAll = (graph) => {
+                    if (!graph || !graph.nodes) return;
+                    for (const node of graph.nodes) {
+                        if (node.type === "GroupSwitchADV" || node.comfyClass === "GroupSwitchADV") {
+                            node.refreshWidgets?.();
+                        }
+                        if (node.isSubgraphNode?.() && node.subgraph) {
+                            refreshAll(node.subgraph);
+                        }
+                    }
+                };
+                refreshAll(app.graph);
                 app.graph.setDirtyCanvas(true, true);
                 window.dispatchEvent(new CustomEvent('group-mute-changed', { detail: { sourceId: this._gsaId } }));
             }
         };
 
-        nodeType.prototype.navigateTo = function (group) {
-            app.canvas.centerOnNode(group);
+        nodeType.prototype.navigateTo = function (groupInfo) {
+            if (groupInfo._pwTopSubgraphNode) {
+                app.canvas.centerOnNode(groupInfo._pwTopSubgraphNode);
+            } else {
+                app.canvas.centerOnNode(groupInfo._pwOriginalGroup);
+            }
             app.canvas.setDirty(true, true);
         };
 
@@ -568,7 +628,6 @@ app.registerExtension({
             const colors = ['red', 'brown', 'green', 'blue', 'pale blue', 'cyan', 'purple', 'yellow', 'black'];
             const colorKeys = { 'red': 'colorRed', 'brown': 'colorBrown', 'green': 'colorGreen', 'blue': 'colorBlue', 'pale blue': 'colorPaleBlue', 'cyan': 'colorCyan', 'purple': 'colorPurple', 'yellow': 'colorYellow', 'black': 'colorBlack' };
             const colorOpts = `<option value="">${t('allColors')}</option>` + colors.map(c => `<option value="${c}" ${this.properties.selectedColorFilter === c ? 'selected' : ''}>${t(colorKeys[c]) || c}</option>`).join('');
-            
             dlg.innerHTML = `
                 <h3>${t('settings')}</h3>
                 <label>${t('modeLabel')}</label>
@@ -594,11 +653,10 @@ app.registerExtension({
                 this.properties.titleKeywords = dlg.querySelector('#s-title').value;
                 this.properties.toggleRestriction = dlg.querySelector('#s-rest').value;
                 this.properties.showNavigate = dlg.querySelector('#s-nav').value === 'true';
-                this.updateModeText(); this.refreshWidgets(); 
+                this.updateModeText(); this.refreshWidgets();
                 app.graph.setDirtyCanvas(true, true);
                 close();
             };
-            
             setTimeout(() => {
                 const closeOnOutsideClick = (e) => {
                     const path = e.composedPath ? e.composedPath() : [];
@@ -616,68 +674,58 @@ app.registerExtension({
             const dlg = document.createElement('div');
             dlg.className = 'gsa-dialog';
             const temp = JSON.parse(JSON.stringify(cfg));
-            
             const renderRules = (type) => {
                 const list = dlg.querySelector(`#l-${type}`);
                 list.innerHTML = '';
                 (temp.linkage[type] || []).forEach((rule, idx) => list.appendChild(this.createRuleItem(dlg, temp, type, rule, idx)));
             };
-
             dlg.innerHTML = `
-                <h3>${t('linkageConfig')} ${cfg.group_name}</h3>
+                <h3>${t('linkageConfig')} ${this._getGroupDisplayName(cfg.group_name)}</h3>
                 <div class="gsa-section-header">
                     <span>${t('whenGroupOn')}</span>
                     <button class="gsa-add-rule" id="l-add-on" title="Add Rule">+</button>
                 </div>
                 <div id="l-on_enable" class="gsa-rules-list"></div>
-                
                 <div class="gsa-section-header">
                     <span>${t('whenGroupOff')}</span>
                     <button class="gsa-add-rule" id="l-add-off" title="Add Rule">+</button>
                 </div>
                 <div id="l-on_disable" class="gsa-rules-list"></div>
-                
                 <div class="gsa-dialog-footer">
                     <button id="l-cancel">${t('cancel')}</button>
                     <button id="l-save" class="gsa-btn-primary">${t('confirm')}</button>
                 </div>
             `;
             document.body.appendChild(dlg);
-
             renderRules('on_enable');
             renderRules('on_disable');
-
-            dlg.querySelector('#l-add-on').onclick = () => { 
-                const allGroups = this.getWorkflowGroups().filter(g => g.title !== cfg.group_name);
-                if(allGroups.length) { temp.linkage.on_enable.push({target_group: allGroups[0].title, action: 'active'}); renderRules('on_enable'); } 
+            dlg.querySelector('#l-add-on').onclick = () => {
+                const allGroups = this.getAllGroupsFlat().filter(g => g._pwUniqueId !== cfg.group_name);
+                if (allGroups.length) { temp.linkage.on_enable.push({ target_group: allGroups[0]._pwUniqueId, action: 'active' }); renderRules('on_enable'); }
             };
-            dlg.querySelector('#l-add-off').onclick = () => { 
-                const allGroups = this.getWorkflowGroups().filter(g => g.title !== cfg.group_name);
-                if(allGroups.length) { temp.linkage.on_disable.push({target_group: allGroups[0].title, action: 'active'}); renderRules('on_disable'); } 
+            dlg.querySelector('#l-add-off').onclick = () => {
+                const allGroups = this.getAllGroupsFlat().filter(g => g._pwUniqueId !== cfg.group_name);
+                if (allGroups.length) { temp.linkage.on_disable.push({ target_group: allGroups[0]._pwUniqueId, action: 'active' }); renderRules('on_disable'); }
             };
-            
             const close = () => dlg.remove();
             dlg.querySelector('#l-cancel').onclick = close;
-            dlg.querySelector('#l-save').onclick = () => { 
-                cfg.linkage = temp.linkage; 
-                this.refreshWidgets(); 
+            dlg.querySelector('#l-save').onclick = () => {
+                cfg.linkage = temp.linkage;
+                this.refreshWidgets();
                 app.graph.setDirtyCanvas(true, true);
-                close(); 
+                close();
             };
-
             setTimeout(() => {
                 const closeOnOutsideClick = (e) => {
                     const path = e.composedPath ? e.composedPath() : [];
                     const isInsideDialog = path.includes(dlg) || dlg.contains(e.target);
                     const isInsideDropdown = path.some(el => el.classList && el.classList.contains('gsa-search-dropdown')) || (e.target && e.target.closest && e.target.closest('.gsa-search-dropdown'));
-
                     if (!isInsideDialog && !isInsideDropdown) {
                         if (document.body.contains(dlg)) {
                             close();
                             document.removeEventListener('click', closeOnOutsideClick);
                         }
                     }
-                    
                     if (!isInsideDropdown) {
                         dlg.querySelectorAll('.gsa-search-dropdown.open').forEach(d => d.classList.remove('open'));
                     }
@@ -689,16 +737,14 @@ app.registerExtension({
         nodeType.prototype.createRuleItem = function (dialog, config, type, rule, index) {
             const item = document.createElement('div');
             item.className = 'gsa-rule';
-            
-            const allGroups = this.getWorkflowGroups()
-                .filter(g => g.title !== config.group_name)
-                .map(g => g.title)
-                .sort((a, b) => a.localeCompare(b));
+            const allGroups = this.getAllGroupsFlat()
+                .filter(g => g._pwUniqueId !== config.group_name)
+                .sort((a, b) => a._pwDisplayName.localeCompare(b._pwDisplayName));
 
             item.innerHTML = `
                 <button class="r-mirror-add" title="Add reverse rule">+</button>
                 <div class="gsa-search-dropdown">
-                    <input type="text" class="gsa-search-input" placeholder="${t('searchGroup')}" value="${rule.target_group || ''}">
+                    <input type="text" class="gsa-search-input" placeholder="${t('searchGroup')}" value="${this._getGroupDisplayName(rule.target_group) || ''}">
                     <div class="gsa-search-menu"></div>
                 </div>
                 <select class="r-action">
@@ -708,14 +754,11 @@ app.registerExtension({
                 </select>
                 <button class="r-del">X</button>
             `;
-
             const searchDropdown = item.querySelector('.gsa-search-dropdown');
             const searchInput = item.querySelector('.gsa-search-input');
             const searchMenu = item.querySelector('.gsa-search-menu');
-            
             const oppositeType = type === 'on_enable' ? 'on_disable' : 'on_enable';
             const mirrorBtn = item.querySelector('.r-mirror-add');
-
             const updateMirrorBtnState = () => {
                 const exists = (config.linkage[oppositeType] || []).some(r => r.target_group === rule.target_group);
                 if (exists) {
@@ -729,23 +772,18 @@ app.registerExtension({
                 }
             };
             updateMirrorBtnState();
-
             mirrorBtn.onclick = (e) => {
                 e.stopPropagation();
                 if (mirrorBtn.classList.contains('added')) return;
-                
                 let oppositeAction = 'mute';
                 if (rule.action === 'active') oppositeAction = 'mute';
                 else if (rule.action === 'mute') oppositeAction = 'active';
                 else if (rule.action === 'bypass') oppositeAction = 'active';
-
                 if (!config.linkage[oppositeType]) config.linkage[oppositeType] = [];
-                
                 config.linkage[oppositeType].push({
                     target_group: rule.target_group,
                     action: oppositeAction
                 });
-                
                 const oppositeListId = oppositeType === 'on_enable' ? 'l-on_enable' : 'l-on_disable';
                 const oppositeList = dialog.querySelector(`#${oppositeListId}`);
                 if (oppositeList) {
@@ -754,59 +792,50 @@ app.registerExtension({
                         oppositeList.appendChild(this.createRuleItem(dialog, config, oppositeType, r, idx));
                     });
                 }
-                
                 updateMirrorBtnState();
             };
-
             const renderOptions = (filterText = '') => {
                 const lowerFilter = filterText.toLowerCase();
-                const filtered = allGroups.filter(g => g.toLowerCase().includes(lowerFilter));
-                searchMenu.innerHTML = filtered.map(g => 
-                    `<div class="gsa-search-option ${g === rule.target_group ? 'selected' : ''}" data-value="${g}" title="${g}">${g}</div>`
+                const filtered = allGroups.filter(g => g._pwDisplayName.toLowerCase().includes(lowerFilter));
+                searchMenu.innerHTML = filtered.map(g =>
+                    `<div class="gsa-search-option ${g._pwUniqueId === rule.target_group ? 'selected' : ''}" data-value="${g._pwUniqueId}" title="${g._pwDisplayName}">${g._pwDisplayName}</div>`
                 ).join('');
-                
                 searchMenu.querySelectorAll('.gsa-search-option').forEach(opt => {
                     opt.addEventListener('mousedown', (e) => { e.preventDefault(); });
                     opt.addEventListener('click', (e) => {
-                        e.stopPropagation(); 
+                        e.stopPropagation();
                         const val = opt.dataset.value;
                         rule.target_group = val;
-                        searchInput.value = val;
+                        searchInput.value = this._getGroupDisplayName(val) || val;
                         searchDropdown.classList.remove('open');
                         updateMirrorBtnState();
                     });
                 });
             };
-
             searchInput.onfocus = () => {
                 dialog.querySelectorAll('.gsa-search-dropdown.open').forEach(d => {
                     if (d !== searchDropdown) d.classList.remove('open');
                 });
                 searchDropdown.classList.add('open');
-                searchInput.value = ''; 
-                renderOptions(''); 
+                searchInput.value = '';
+                renderOptions('');
             };
-
             searchInput.oninput = () => {
                 renderOptions(searchInput.value);
                 searchDropdown.classList.add('open');
             };
-            
             searchInput.onblur = () => {
                 setTimeout(() => {
                     if (!searchDropdown.contains(document.activeElement)) {
-                        searchInput.value = rule.target_group || '';
+                        searchInput.value = this._getGroupDisplayName(rule.target_group) || rule.target_group || '';
                         searchDropdown.classList.remove('open');
                     }
                 }, 100);
             };
-
             item.querySelector('.r-action').onchange = (e) => rule.action = e.target.value;
-            
-            item.querySelector('.r-del').onclick = (e) => { 
+            item.querySelector('.r-del').onclick = (e) => {
                 e.stopPropagation();
-                config.linkage[type].splice(index, 1); 
-                
+                config.linkage[type].splice(index, 1);
                 const currentListId = type === 'on_enable' ? 'l-on_enable' : 'l-on_disable';
                 const currentList = dialog.querySelector(`#${currentListId}`);
                 if (currentList) {
@@ -815,7 +844,6 @@ app.registerExtension({
                         currentList.appendChild(this.createRuleItem(dialog, config, type, r, idx));
                     });
                 }
-                
                 const oppositeListId = oppositeType === 'on_enable' ? 'l-on_enable' : 'l-on_disable';
                 const oppositeList = dialog.querySelector(`#${oppositeListId}`);
                 if (oppositeList) {
@@ -825,7 +853,6 @@ app.registerExtension({
                     });
                 }
             };
-
             return item;
         };
 
@@ -854,6 +881,40 @@ app.registerExtension({
             if (info.titleKeywords !== undefined) this.properties.titleKeywords = info.titleKeywords;
             if (info.toggleRestriction !== undefined) this.properties.toggleRestriction = info.toggleRestriction;
             if (info.showNavigate !== undefined) this.properties.showNavigate = info.showNavigate;
+
+            // 【子图支持】迁移旧版工作流数据：将纯组名转换为唯一标识符
+            if (this.properties.groups && Array.isArray(this.properties.groups)) {
+                const allGroups = this.getAllGroupsFlat();
+                for (const cfg of this.properties.groups) {
+                    if (cfg.group_name && !cfg.group_name.includes('::')) {
+                        const match = allGroups.find(g => g.title === cfg.group_name && !g._pwPath);
+                        if (match) cfg.group_name = match._pwUniqueId;
+                    }
+                    // 迁移联动规则中的旧组名
+                    if (cfg.linkage) {
+                        for (const type of ['on_enable', 'on_disable']) {
+                            if (cfg.linkage[type]) {
+                                for (const rule of cfg.linkage[type]) {
+                                    if (rule.target_group && !rule.target_group.includes('::')) {
+                                        const match = allGroups.find(g => g.title === rule.target_group && !g._pwPath);
+                                        if (match) rule.target_group = match._pwUniqueId;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (this.properties.groupOrder && Array.isArray(this.properties.groupOrder)) {
+                const allGroups = this.getAllGroupsFlat();
+                this.properties.groupOrder = this.properties.groupOrder.map(name => {
+                    if (name && !name.includes('::')) {
+                        const match = allGroups.find(g => g.title === name && !g._pwPath);
+                        return match ? match._pwUniqueId : name;
+                    }
+                    return name;
+                });
+            }
 
             if (this.ui) {
                 setTimeout(() => {
