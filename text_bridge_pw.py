@@ -1,58 +1,90 @@
-class TextBridgePW:
-    # 类级别字典，用于存储每个节点的历史输入状态，以 unique_id 为键
-    node_states = {}
+from server import PromptServer
 
+# 参考 C_viewIO.py 中的 updateTextWidget 实现，用于实时同步前端 Widget
+def updateTextWidget(node, widget, text):
+    PromptServer.instance.send_sync("view_Data_text_processed", {"node": node, "widget": widget, "text": text})
+
+class TextBridgePW:
     @classmethod
     def INPUT_TYPES(cls):
         return {
-            "required": {
-                # 这是一个可编辑的 Widget，用于展示和手动修改文本
-                "text": ("STRING", {
-                    "multiline": True, 
-                    "default": "", 
-                    "dynamicPrompts": False
-                }),
-            },
             "optional": {
-                # 输入端口，用于接收外部连线
-                "input_text": ("STRING", {"forceInput": True}),
+                # 连线输入端口
+                "text": ("STRING", {"forceInput": True}),
+                # UI 上的多行文本框，用于展示和手动编辑
+                "display": ("STRING", {"default": "", "multiline": True}),
             },
             "hidden": {
-                # ComfyUI 官方支持的隐藏参数，用于获取节点在前端的唯一 ID
-                "unique_id": "UNIQUE_ID"
-            }
+                "unique_id": "UNIQUE_ID",
+            },
         }
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("text",)
-    FUNCTION = "bridge_text"
+    OUTPUT_NODE = True
+    FUNCTION = "process"
     CATEGORY = "🔮PWUtility/Utility"
 
-    def bridge_text(self, text, unique_id=None, **kwargs):
-        # 获取可选的输入端口数据，如果没有连线则为 None
-        input_text = kwargs.get('input_text', None)
-        
-        if unique_id is None:
-            unique_id = "default"
-            
-        # 获取当前节点的历史状态
-        state = self.node_states.get(unique_id, {"last_input": None})
-        last_input = state.get("last_input")
-        
-        # 核心逻辑：只有当有数据输入，且输入的数据与上一次不同时，才覆盖当前文本
-        if input_text is not None:
-            if last_input != input_text:
-                text = input_text
-            # 更新历史记录为当前输入
-            state["last_input"] = input_text
+    def __init__(self):
+        self.last_text = None
+        # 标记是否是首次执行（解决第一次无显示问题）
+        self.is_first_run = True
+
+    def process(self, text=None, display="", unique_id=None):
+        # 兼容 ComfyUI 有时会将 optional 参数作为 list 传入的情况
+        if isinstance(text, list):
+            current_text = text[0] if text else None
         else:
-            # 如果没有数据输入（断开连线），则什么都不做，保留当前的 text 和 last_input
-            pass
-            
-        # 保存状态
-        self.node_states[unique_id] = state
+            current_text = text
+
+        # 【核心逻辑】判断是否有实际的连线输入 
+        # (在 ComfyUI 中，optional 且无 default 的参数未连线时通常传入 None)
+        has_input = current_text is not None
+
+        if self.is_first_run:
+            self.is_first_run = False
+            if has_input:
+                input_text = current_text
+                self.last_text = current_text
+            else:
+                # 首次运行且无输入，使用 display 的默认值或手动修改值
+                input_text = display if display else ""
+                self.last_text = None
+        else:
+            if not has_input:
+                # 【核心逻辑】无数据输入（断开连线），保留 display 的内容，不更新 last_text
+                input_text = display
+            else:
+                # 有数据输入
+                if current_text == self.last_text:
+                    # 输入没变化，使用 UI 上手动修改的 display
+                    input_text = display
+                else:
+                    # 输入有变化，使用新的输入
+                    input_text = current_text
+                    self.last_text = current_text
+
+        displayText = self.render(input_text)
         
-        return (text,)
+        # 同步前端 Widget (复用 view_Data_text_processed 事件，兼容现有前端 JS)
+        if unique_id is not None:
+            updateTextWidget(unique_id, "display", displayText)
+            
+        # 返回结果并更新 UI
+        return {"ui": {"display": displayText}, "result": (input_text,)}
+
+    def render(self, input_val):
+        if not isinstance(input_val, list):
+            return str(input_val) if input_val is not None else ""
+        listLen = len(input_val)
+        if listLen == 0:
+            return ""
+        if listLen == 1:
+            return str(input_val[0])
+        result = "List:\n"
+        for i, element in enumerate(input_val):
+            result += f">>{i}<< {element}\n"
+        return result
 
 # 节点映射
 NODE_CLASS_MAPPINGS = {
