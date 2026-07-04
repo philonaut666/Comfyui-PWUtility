@@ -9,10 +9,12 @@ app.registerExtension({
             const nodeId = parseInt(event.detail.node);
             const widgetName = event.detail.widget;
             const text = event.detail.text;
-            const node = app.graph.nodes.find(n => n.id === nodeId);
+            
+            // 使用 LiteGraph 标准 API 获取节点，比 find 更可靠
+            const node = app.graph?.getNodeById(nodeId);
             if (!node) return;
             
-            const widget = node.widgets.find(w => w.name === widgetName);
+            const widget = node.widgets?.find(w => w.name === widgetName);
             if (!widget) return;
             
             widget.value = text;
@@ -34,27 +36,20 @@ app.registerExtension({
                     }
                     
                     // 2. 触发局部执行 (Execute to selected output node)
+                    // 最新版 ComfyUI 签名: queuePrompt(number, batchCount, queueNodeIds)
                     const nodeIdStr = String(this.id);
                     
-                    // 兼容新旧版本 ComfyUI 前端 API
-                    // 新版签名: queuePrompt(number, batchCount, queueNodeIds)
-                    // 旧版签名: queuePrompt(number, output_nodes)
-                    const funcStr = app.queuePrompt.toString();
-                    // partialExecutionTargets 是对象属性名，不会被混淆压缩，是判断新版本的最可靠标志
-                    const isNewVersion = funcStr.includes("partialExecutionTargets") || funcStr.includes("batchCount");
-                    
-                    if (typeof app.queuePrompt === 'function') {
-                        try {
-                            if (isNewVersion) {
-                                // 新版：运行 1 次 (batchCount=1)，目标为当前节点
-                                app.queuePrompt(0, 1, [nodeIdStr]);
-                            } else {
-                                // 旧版
-                                app.queuePrompt(0, [nodeIdStr]);
-                            }
-                        } catch (e) {
-                            console.error("PWUtility: Failed to queue prompt", e);
+                    try {
+                        if (typeof app.queuePrompt === 'function') {
+                            // number: 0 (正常队列)
+                            // batchCount: 1 (严格限制只执行 1 次！)
+                            // queueNodeIds: [nodeIdStr] (局部执行目标节点)
+                            app.queuePrompt(0, 1, [nodeIdStr]);
+                        } else if (app.api && typeof app.api.queuePrompt === 'function') {
+                            app.api.queuePrompt(0, 1, [nodeIdStr]);
                         }
+                    } catch (e) {
+                        console.error("PWUtility: Failed to queue prompt", e);
                     }
                 }, { serialize: false });
                 
