@@ -4,13 +4,11 @@ import { api } from "../../../scripts/api.js";
 app.registerExtension({
     name: "PWUtility.TextBridge",
     async setup() {
-        // 监听后端发来的 WebSocket 消息，动态更新文本框的值
         api.addEventListener("pw_text_bridge_processed", function (event) {
             const nodeId = parseInt(event.detail.node);
             const widgetName = event.detail.widget;
             const text = event.detail.text;
             
-            // 使用 LiteGraph 标准 API 获取节点，比 find 更可靠
             const node = app.graph?.getNodeById(nodeId);
             if (!node) return;
             
@@ -27,23 +25,29 @@ app.registerExtension({
             nodeType.prototype.onNodeCreated = function () {
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
                 
-                // 添加 Update from Input 按钮
+                // 1. 找到 update_trigger 并在 UI 上将其隐藏
+                const triggerWidget = this.widgets.find(w => w.name === "update_trigger");
+                if (triggerWidget) {
+                    triggerWidget.hidden = true;
+                    triggerWidget.type = "hidden";
+                    // 覆盖尺寸计算方法，使其在节点上不占任何高度
+                    triggerWidget.computeSize = function() { return [0, -4]; };
+                }
+
+                // 2. 添加 Update from Input 按钮
                 const widget = this.addWidget("button", "Update from Input", null, () => {
-                    // 1. 增加隐藏 trigger 值，使 ComfyUI 认为节点输入已改变，从而强制执行
-                    const triggerWidget = this.widgets.find(w => w.name === "update_trigger");
                     if (triggerWidget) {
                         triggerWidget.value = (triggerWidget.value || 0) + 1;
+                        // 核心修复：强制触发 callback，确保 ComfyUI 前端感知到值的变化并收集它
+                        if (triggerWidget.callback) {
+                            triggerWidget.callback(triggerWidget.value);
+                        }
                     }
                     
-                    // 2. 触发局部执行 (Execute to selected output node)
-                    // 最新版 ComfyUI 签名: queuePrompt(number, batchCount, queueNodeIds)
                     const nodeIdStr = String(this.id);
-                    
                     try {
                         if (typeof app.queuePrompt === 'function') {
-                            // number: 0 (正常队列)
-                            // batchCount: 1 (严格限制只执行 1 次！)
-                            // queueNodeIds: [nodeIdStr] (局部执行目标节点)
+                            // 局部执行：只运行当前节点及上游依赖，严格只执行 1 次
                             app.queuePrompt(0, 1, [nodeIdStr]);
                         } else if (app.api && typeof app.api.queuePrompt === 'function') {
                             app.api.queuePrompt(0, 1, [nodeIdStr]);
@@ -53,9 +57,7 @@ app.registerExtension({
                     }
                 }, { serialize: false });
                 
-                // 调整节点高度以容纳按钮
                 this.size[1] = Math.max(this.size[1], 120);
-                
                 return r;
             };
         }
