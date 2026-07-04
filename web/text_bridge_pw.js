@@ -34,16 +34,27 @@ app.registerExtension({
                     }
                     
                     // 2. 触发局部执行 (Execute to selected output node)
+                    const nodeIdStr = String(this.id);
+                    
                     // 兼容新旧版本 ComfyUI 前端 API
-                    const output_nodes = [this.id];
+                    // 新版签名: queuePrompt(number, batchCount, queueNodeIds)
+                    // 旧版签名: queuePrompt(number, output_nodes)
+                    const funcStr = app.queuePrompt.toString();
+                    // partialExecutionTargets 是对象属性名，不会被混淆压缩，是判断新版本的最可靠标志
+                    const isNewVersion = funcStr.includes("partialExecutionTargets") || funcStr.includes("batchCount");
+                    
                     if (typeof app.queuePrompt === 'function') {
                         try {
-                            app.queuePrompt(0, output_nodes);
+                            if (isNewVersion) {
+                                // 新版：运行 1 次 (batchCount=1)，目标为当前节点
+                                app.queuePrompt(0, 1, [nodeIdStr]);
+                            } else {
+                                // 旧版
+                                app.queuePrompt(0, [nodeIdStr]);
+                            }
                         } catch (e) {
-                            app.queuePrompt(0); // Fallback
+                            console.error("PWUtility: Failed to queue prompt", e);
                         }
-                    } else if (app.api && typeof app.api.queuePrompt === 'function') {
-                        app.api.queuePrompt(0, output_nodes);
                     }
                 }, { serialize: false });
                 
