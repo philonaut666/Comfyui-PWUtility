@@ -13,6 +13,12 @@ class TextBridgePW:
                 "text": ("STRING", {"forceInput": True}),
                 # UI 上的多行文本框，用于展示和手动编辑
                 "display": ("STRING", {"default": "", "multiline": True}),
+                # 【新增】强制更新开关（充当按钮）
+                "force_update": ("BOOLEAN", {
+                    "default": False, 
+                    "label_on": "Force Update", 
+                    "label_off": " "
+                }),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -30,15 +36,14 @@ class TextBridgePW:
         # 标记是否是首次执行（解决第一次无显示问题）
         self.is_first_run = True
 
-    def process(self, text=None, display="", unique_id=None):
+    def process(self, text=None, display="", force_update=False, unique_id=None):
         # 兼容 ComfyUI 有时会将 optional 参数作为 list 传入的情况
         if isinstance(text, list):
             current_text = text[0] if text else None
         else:
             current_text = text
 
-        # 【核心逻辑】判断是否有实际的连线输入 
-        # (在 ComfyUI 中，optional 且无 default 的参数未连线时通常传入 None)
+        # 判断是否有实际的连线输入 
         has_input = current_text is not None
 
         if self.is_first_run:
@@ -51,18 +56,28 @@ class TextBridgePW:
                 input_text = display if display else ""
                 self.last_text = None
         else:
-            if not has_input:
-                # 【核心逻辑】无数据输入（断开连线），保留 display 的内容，不更新 last_text
-                input_text = display
-            else:
-                # 有数据输入
-                if current_text == self.last_text:
-                    # 输入没变化，使用 UI 上手动修改的 display
-                    input_text = display
-                else:
-                    # 输入有变化，使用新的输入
+            # 【核心逻辑】如果强制更新开关被打开
+            if force_update:
+                if has_input:
+                    # 强制使用输入端的最新文本，并更新历史记录
                     input_text = current_text
                     self.last_text = current_text
+                else:
+                    # 如果没连线，强制更新无意义，保留当前 display
+                    input_text = display
+            else:
+                # 正常模式：无数据输入时保留 display
+                if not has_input:
+                    input_text = display
+                else:
+                    # 有数据输入时，判断是否变化
+                    if current_text == self.last_text:
+                        # 输入没变化，使用 UI 上手动修改的 display
+                        input_text = display
+                    else:
+                        # 输入有变化，使用新的输入
+                        input_text = current_text
+                        self.last_text = current_text
 
         displayText = self.render(input_text)
         
