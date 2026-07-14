@@ -36,9 +36,7 @@ function getLocale() {
     return comfyLocale === 'zh-CN' || comfyLocale === 'zh' ? 'zh' : 'en';
 }
 
-function t(key) {
-    return i18n[getLocale()][key] || i18n['en'][key] || key;
-}
+function t(key) { return i18n[getLocale()][key] || i18n['en'][key] || key; }
 
 function reduceNodesDepthFirst(nodeOrNodes, reduceFn, reduceTo) {
     const nodes = Array.isArray(nodeOrNodes) ? nodeOrNodes : [nodeOrNodes];
@@ -70,9 +68,7 @@ function getNodesInGroupGlobal(groupInfo) {
     if (groupInfo?._pwGraph && group.graph !== groupInfo._pwGraph) {
         group.graph = groupInfo._pwGraph;
     }
-    try {
-        if (typeof group.recomputeInsideNodes === "function") group.recomputeInsideNodes();
-    } catch (e) {}
+    try { if (typeof group.recomputeInsideNodes === "function") group.recomputeInsideNodes(); } catch (e) {}
     return Array.from(group._children || []).filter((c) => c instanceof LGraphNode);
 }
 
@@ -105,25 +101,21 @@ class GroupSwitchService {
             }
         }, 2000);
     }
-
     addNode(node) {
         this.nodes.push(node);
         this.scheduleRun(300);
     }
-
     removeNode(node) {
         const i = this.nodes.indexOf(node);
         if (i > -1) this.nodes.splice(i, 1);
         if (!this.nodes.length) this.clearScheduledRun();
     }
-
     run() {
         if (!this.runScheduledForMs) return;
         for (const node of this.nodes) node.refreshWidgets();
         this.clearScheduledRun();
         this.scheduleRun(300);
     }
-
     scheduleRun(ms = 300) {
         if (this.runScheduledForMs && ms < this.runScheduledForMs) this.clearScheduledRun();
         if (!this.runScheduledForMs && this.nodes.length) {
@@ -133,7 +125,6 @@ class GroupSwitchService {
             }, ms);
         }
     }
-
     clearScheduledRun() {
         if (this.runScheduleTimeout) clearTimeout(this.runScheduleTimeout);
         if (this.runScheduleAnimation) cancelAnimationFrame(this.runScheduleAnimation);
@@ -149,7 +140,6 @@ app.registerExtension({
     name: "comfyui-pwutility.group.switch.adv",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name !== NODE_NAME) return;
-
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = onNodeCreated?.apply(this, arguments);
@@ -163,10 +153,8 @@ app.registerExtension({
             this.properties.titleKeywords = this.properties.titleKeywords || '';
             this.properties.toggleRestriction = this.properties.toggleRestriction || 'unlimited';
             this.properties.showNavigate = this.properties.showNavigate !== false;
-            
-            // 【核心】用于追踪 config 对象与 LiteGraph Group 内存引用的映射
-            this._cfgToGroupMap = new Map(); 
-            
+            this.groupReferences = new WeakMap();
+            this._cfgToGroupMap = new Map(); // 【核心新增】用于追踪 config 对象与 LiteGraph Group 内存引用的映射
             this.size = [300, 400];
             this.createMinimalUI();
             this._evtHandler = (e) => {
@@ -175,20 +163,17 @@ app.registerExtension({
             window.addEventListener('group-mute-changed', this._evtHandler);
             return r;
         };
-
         const onAdded = nodeType.prototype.onAdded;
         nodeType.prototype.onAdded = function (graph) {
             onAdded?.apply(this, arguments);
             GSA_SERVICE.addNode(this);
         };
-
         const onRemoved = nodeType.prototype.onRemoved;
         nodeType.prototype.onRemoved = function () {
             GSA_SERVICE.removeNode(this);
             if (this._evtHandler) window.removeEventListener('group-mute-changed', this._evtHandler);
             onRemoved?.apply(this, arguments);
         };
-
         nodeType.prototype.createMinimalUI = function () {
             if (!document.querySelector('#gsa-styles')) {
                 const style = document.createElement('style');
@@ -236,7 +221,6 @@ app.registerExtension({
                 `;
                 document.head.appendChild(style);
             }
-
             const container = document.createElement('div');
             container.className = 'gsa-container';
             container.innerHTML = `
@@ -254,12 +238,10 @@ app.registerExtension({
             this.updateModeText();
             this.refreshWidgets();
         };
-
         nodeType.prototype.updateModeText = function () {
             const el = this.ui?.querySelector('#gsa-mode');
             if (el) el.textContent = this.properties.switchMode === 'bypass' ? t('modeBypass') : t('modeDisable');
         };
-
         nodeType.prototype.getAllGroupsFlat = function () {
             const result = [];
             const collectGroups = (graph, pathParts, topSubgraphNode) => {
@@ -294,13 +276,11 @@ app.registerExtension({
             if (app.graph) collectGroups(app.graph, [], null);
             return result;
         };
-
         nodeType.prototype._getGroupDisplayName = function (uniqueId) {
             if (!uniqueId) return '';
             const group = this.getAllGroupsFlat().find(g => g._pwUniqueId === uniqueId);
             return group ? group._pwDisplayName : uniqueId;
         };
-
         nodeType.prototype.sortGroups = function (groups) {
             if (!this.properties.groupOrder.length) return groups.slice().sort((a, b) => a._pwDisplayName.localeCompare(b._pwDisplayName));
             const map = new Map(this.properties.groupOrder.map((n, i) => [n, i]));
@@ -310,7 +290,6 @@ app.registerExtension({
             unordered.sort((a, b) => a._pwDisplayName.localeCompare(b._pwDisplayName));
             return [...ordered, ...unordered];
         };
-
         nodeType.prototype.filterGroups = function (groups) {
             if (this.properties.matchMode === 'title' && this.properties.titleKeywords) {
                 const kws = this.properties.titleKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
@@ -321,7 +300,6 @@ app.registerExtension({
             }
             return groups;
         };
-
         nodeType.prototype.getHexColor = function (colorName) {
             if (!colorName) return null;
             if (colorName.startsWith('#')) return colorName.toLowerCase();
@@ -332,7 +310,6 @@ app.registerExtension({
             }
             return null;
         };
-
         nodeType.prototype.isGroupEnabled = function (groupInfo) {
             const nodes = getNodesInGroupGlobal(groupInfo);
             if (!nodes.length) return false;
@@ -340,7 +317,7 @@ app.registerExtension({
             reduceNodesDepthFirst(nodes, (n) => { if (n.mode === 0) active = true; });
             return active;
         };
-
+        
         // 【核心辅助】全局同步更新所有管理器节点中的 Linkage 目标
         nodeType.prototype._globalUpdateLinkageTarget = function (oldId, newId) {
             const collectAdvNodes = (graph) => {
@@ -381,8 +358,9 @@ app.registerExtension({
             if (!list) return;
             
             const allGroups = this.getAllGroupsFlat();
+            // 【致命 Bug 修复】必须使用 allGroups 生成 validIds，否则过滤会导致配置丢失！
             const validIds = new Set(allGroups.map(g => g._pwUniqueId));
-            
+
             if (!this._cfgToGroupMap) this._cfgToGroupMap = new Map();
 
             // ================= 核心：重命名追踪与全局 Linkage 更新 =================
@@ -400,7 +378,7 @@ app.registerExtension({
                 }
             }
 
-            // 2. Fallback: 特征匹配 (处理 Map 丢失的情况)
+            // 2. Fallback: 特征匹配 (处理 Map 丢失的情况，如刚加载工作流)
             const orphanConfigs = this.properties.groups.filter(c => !validIds.has(c.group_name));
             const orphanGroups = allGroups.filter(g => !this.properties.groups.some(c => c.group_name === g._pwUniqueId));
             
@@ -421,7 +399,7 @@ app.registerExtension({
             }
             // =======================================================================
 
-            // 【致命 Bug 修复】必须使用 allGroups 生成 validIds，否则过滤会导致配置丢失！
+            // 清理真正被删除的组
             this.properties.groups = this.properties.groups.filter(c => validIds.has(c.group_name));
 
             let groups = this.filterGroups(allGroups);
@@ -438,8 +416,6 @@ app.registerExtension({
                 }
                 
                 // 记录特征用于 Fallback
-                const nodes = getNodesInGroupGlobal(group);
-                cfg._pwLastNodeIds = nodes.map(n => n.id).sort().join(',');
                 cfg._pwLastPath = group._pwPath;
                 cfg._pwLastColor = group.color;
             });
@@ -496,7 +472,6 @@ app.registerExtension({
             }
             while (list.children[index]) list.removeChild(list.children[index]);
         };
-
         nodeType.prototype.createGroupItem = function (cfg, group) {
             const item = document.createElement('div');
             item.className = 'gsa-item' + (cfg.enabled ? ' active' : '');
@@ -535,7 +510,6 @@ app.registerExtension({
             };
             return item;
         };
-
         nodeType.prototype.toggleGroup = function (uniqueId, enable, opts = {}) {
             const groupInfo = this.getAllGroupsFlat().find(g => g._pwUniqueId === uniqueId);
             if (!groupInfo) return;
@@ -634,7 +608,6 @@ app.registerExtension({
                 window.dispatchEvent(new CustomEvent('group-mute-changed', { detail: { sourceId: this._gsaId } }));
             }
         };
-
         nodeType.prototype.navigateTo = function (groupInfo) {
             if (groupInfo._pwTopSubgraphNode) {
                 app.canvas.centerOnNode(groupInfo._pwTopSubgraphNode);
@@ -643,7 +616,6 @@ app.registerExtension({
             }
             app.canvas.setDirty(true, true);
         };
-
         nodeType.prototype.showSettings = function () {
             const dlg = document.createElement('div');
             dlg.className = 'gsa-dialog';
@@ -691,7 +663,6 @@ app.registerExtension({
                 document.addEventListener('click', closeOnOutsideClick);
             }, 100);
         };
-
         nodeType.prototype.showLinkage = function (cfg) {
             const dlg = document.createElement('div');
             dlg.className = 'gsa-dialog';
@@ -755,7 +726,6 @@ app.registerExtension({
                 document.addEventListener('click', closeOnOutsideClick);
             }, 100);
         };
-
         nodeType.prototype.createRuleItem = function (dialog, config, type, rule, index) {
             const item = document.createElement('div');
             item.className = 'gsa-rule';
@@ -876,7 +846,6 @@ app.registerExtension({
             };
             return item;
         };
-
         const origOnSerialize = nodeType.prototype.onSerialize;
         nodeType.prototype.onSerialize = function (info) {
             const data = origOnSerialize?.apply?.(this, arguments);
@@ -890,7 +859,6 @@ app.registerExtension({
             info.showNavigate = this.properties.showNavigate !== false;
             return data;
         };
-
         const origOnConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (info) {
             origOnConfigure?.apply?.(this, arguments);
@@ -934,7 +902,7 @@ app.registerExtension({
                 });
             }
             
-            // 【核心】在加载工作流后，立刻重建内存引用 Map，确保重命名追踪不失效
+            // 【核心新增】在加载工作流后，立刻重建内存引用 Map，确保重命名追踪不失效
             if (!this._cfgToGroupMap) this._cfgToGroupMap = new Map();
             this._cfgToGroupMap.clear();
             const allGroups = this.getAllGroupsFlat();
