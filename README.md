@@ -22,6 +22,8 @@ Linkage Config中，通过点击右侧加号添加组并设置组的状态。组
 一个组(Group1)可以联动另一个组（Group2)并进而联动Group2联动的Group3。但是当Group1中也设置Group3并且与Group2中的状态矛盾时，以Group1也就是主动切换的那个为准。
 
 <img width="419" height="318" alt="GroupSwitchADV2" src="https://github.com/user-attachments/assets/146a684a-89d1-4042-8bea-92d7b8964e19" />
+该节点也支持子图。子图中的组会用"子图名：组名"这样的方式显示在面版中。
+当组的名字发生改变，该组会继承原组的linkage，并且其它组的linkage中如果有涉及到该组的也会自动改变组名。这是通过给予唯一的组ID并进行追踪实现，同时添加了title+path的快照备份，使得及时将该节点和相关组复制到其它工作流时，ID发生改变，可由title和path来重新与新ID进行连接，使得跨工作流复制不存在问题。
 
 ## Image Loader PW：
 本地上传图片(可多图），并调整尺寸。
