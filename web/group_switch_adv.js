@@ -344,7 +344,7 @@ app.registerExtension({
             
             let allGroups = this.getAllGroupsFlat();
             
-            // ================= 新增：重命名继承逻辑 =================
+            // ================= 核心：重命名继承与联动目标更新逻辑 =================
             const currentIds = new Set(allGroups.map(g => g._pwUniqueId));
             const savedIds = new Set(this.properties.groups.map(c => c.group_name));
             
@@ -379,16 +379,36 @@ app.registerExtension({
                     }
                     
                     if (matchedNewGroup) {
-                        oldCfg.group_name = matchedNewGroup._pwUniqueId;
-                        const feat = newFeatures.get(matchedNewGroup._pwUniqueId);
+                        const oldName = oldCfg.group_name;
+                        const newName = matchedNewGroup._pwUniqueId;
+                        
+                        // 1. 继承自身的 group_name 和特征
+                        oldCfg.group_name = newName;
+                        const feat = newFeatures.get(newName);
                         oldCfg._pwLastNodeIds = feat.nodeIds;
                         oldCfg._pwLastPath = feat.path;
                         oldCfg._pwLastColor = feat.color;
-                        matchedNewIds.add(matchedNewGroup._pwUniqueId);
+                        
+                        // 2. 【新增】遍历当前节点的所有 linkage，将指向旧组名的 target_group 更新为新组名
+                        for (const otherCfg of this.properties.groups) {
+                            if (otherCfg.linkage) {
+                                for (const type of ['on_enable', 'on_disable']) {
+                                    if (otherCfg.linkage[type]) {
+                                        for (const rule of otherCfg.linkage[type]) {
+                                            if (rule.target_group === oldName) {
+                                                rule.target_group = newName;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        matchedNewIds.add(newName);
                     }
                 }
             }
-            // =======================================================
+            // =======================================================================
 
             let groups = this.filterGroups(allGroups);
             groups = this.sortGroups(groups);
@@ -885,7 +905,6 @@ app.registerExtension({
                         }
                     }
                     
-                    // 【新增】初始化特征记录，以支持旧配置的重命名继承
                     if (!cfg._pwLastNodeIds) {
                         const group = allGroups.find(g => g._pwUniqueId === cfg.group_name);
                         if (group) {
