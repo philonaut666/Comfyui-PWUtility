@@ -164,6 +164,8 @@ app.registerExtension({
             this.properties.toggleRestriction = this.properties.toggleRestriction || 'unlimited';
             this.properties.showNavigate = this.properties.showNavigate !== false;
             this.groupReferences = new WeakMap();
+            // 【核心新增】用于追踪组对象内存引用，实现100%准确的重命名检测
+            this.configToGroupMap = new WeakMap(); 
             this.size = [300, 400];
             this.createMinimalUI();
             this._evtHandler = (e) => {
@@ -344,71 +346,85 @@ app.registerExtension({
             
             let allGroups = this.getAllGroupsFlat();
             
-            // ================= 核心：重命名继承与联动目标更新逻辑 =================
-            const currentIds = new Set(allGroups.map(g => g._pwUniqueId));
-            const savedIds = new Set(this.properties.groups.map(c => c.group_name));
+            // ================= 核心：基于 WeakMap 的重命名追踪与 Linkage 全局更新 =================
+            const objToNewId = new Map();
+            for (const g of allGroups) {
+                objToNewId.set(g._pwOriginalGroup, g._pwUniqueId);
+            }
+
+            if (!this.configToGroupMap) this.configToGroupMap = new WeakMap();
             
-            const orphanConfigs = this.properties.groups.filter(c => !currentIds.has(c.group_name));
-            const orphanGroups = allGroups.filter(g => !savedIds.has(g._pwUniqueId));
-            
-            if (orphanConfigs.length > 0 && orphanGroups.length > 0) {
-                const newFeatures = new Map();
-                for (const g of orphanGroups) {
-                    const nodes = getNodesInGroupGlobal(g);
-                    const nodeIds = nodes.map(n => n.id).sort().join(',');
-                    newFeatures.set(g._pwUniqueId, {
-                        path: g._pwPath,
-                        nodeIds: nodeIds,
-                        color: g.color
-                    });
-                }
-                
-                const matchedNewIds = new Set();
-                
-                for (const oldCfg of orphanConfigs) {
-                    if (!oldCfg._pwLastNodeIds) continue; 
-                    
-                    let matchedNewGroup = null;
-                    for (const newG of orphanGroups) {
-                        if (matchedNewIds.has(newG._pwUniqueId)) continue;
-                        const feat = newFeatures.get(newG._pwUniqueId);
-                        if (feat && feat.path === oldCfg._pwLastPath && feat.nodeIds === oldCfg._pwLastNodeIds && feat.color === oldCfg._pwLastColor) {
-                            matchedNewGroup = newG;
-                            break;
-                        }
-                    }
-                    
-                    if (matchedNewGroup) {
-                        const oldName = oldCfg.group_name;
-                        const newName = matchedNewGroup._pwUniqueId;
+            // 1. 实时重命名检测 (通过内存引用追踪)
+            for (const cfg of this.properties.groups) {
+                const groupObj = this.configToGroupMap.get(cfg);
+                if (groupObj) {
+                    const newId = objToNewId.get(groupObj);
+                    if (newId && newId !== cfg.group_name) {
+                        const oldName = cfg.group_name;
+                        cfg.group_name = newId;
                         
-                        // 1. 继承自身的 group_name 和特征
-                        oldCfg.group_name = newName;
-                        const feat = newFeatures.get(newName);
-                        oldCfg._pwLastNodeIds = feat.nodeIds;
-                        oldCfg._pwLastPath = feat.path;
-                        oldCfg._pwLastColor = feat.color;
-                        
-                        // 2. 【新增】遍历当前节点的所有 linkage，将指向旧组名的 target_group 更新为新组名
+                        // 全局更新当前节点内所有 linkage 中的 target_group
                         for (const otherCfg of this.properties.groups) {
                             if (otherCfg.linkage) {
                                 for (const type of ['on_enable', 'on_disable']) {
                                     if (otherCfg.linkage[type]) {
                                         for (const rule of otherCfg.linkage[type]) {
                                             if (rule.target_group === oldName) {
-                                                rule.target_group = newName;
+                                                rule.target_group = newId;
                                             }
                                         }
                                     }
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // 2. Fallback: 处理 WeakMap 丢失的情况 (如刚加载工作流，或外部修改)
+            const validIds = new Set(allGroups.map(g => g._pwUniqueId));
+            const orphanConfigs = this.properties.groups.filter(c => !validIds.has(c.group_name));
+            const orphanGroups = allGroups.filter(g => !this.properties.groups.some(c => c.group_name === g._pwUniqueId));
+
+            if (orphanConfigs.length > 0 && orphanGroups.length > 0) {
+                for (const oldCfg of orphanConfigs) {
+                    let matched = orphanGroups.find(g => g.title === oldCfg.group_name || g._pwDisplayName === oldCfg.group_name);
+                    
+                    if (!matched && oldCfg._pwLastNodeIds) {
+                        for (const newG of orphanGroups) {
+                            const nodes = getNodesInGroupGlobal(newG);
+                            const nodeIds = nodes.map(n => n.id).sort().join(',');
+                            if (nodeIds === oldCfg._pwLastNodeIds && newG._pwPath === oldCfg._pwLastPath && newG.color === oldCfg._pwLastColor) {
+                                matched = newG;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (matched) {
+                        const oldName = oldCfg.group_name;
+                        oldCfg.group_name = matched._pwUniqueId;
                         
-                        matchedNewIds.add(newName);
+                        for (const otherCfg of this.properties.groups) {
+                            if (otherCfg.linkage) {
+                                for (const type of ['on_enable', 'on_disable']) {
+                                    if (otherCfg.linkage[type]) {
+                                        for (const rule of otherCfg.linkage[type]) {
+                                            if (rule.target_group === oldName) {
+                                                rule.target_group = matched._pwUniqueId;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
             // =======================================================================
+
+            // 3. 清理真正被删除的组
+            this.properties.groups = this.properties.groups.filter(c => validIds.has(c.group_name));
 
             let groups = this.filterGroups(allGroups);
             groups = this.sortGroups(groups);
@@ -423,16 +439,15 @@ app.registerExtension({
                     cfg.enabled = isEnabled;
                 }
                 
-                // 更新特征记录，用于未来的重命名匹配
+                // 记录特征用于 Fallback
                 const nodes = getNodesInGroupGlobal(group);
                 cfg._pwLastNodeIds = nodes.map(n => n.id).sort().join(',');
                 cfg._pwLastPath = group._pwPath;
                 cfg._pwLastColor = group.color;
+                
+                // 建立/更新 WeakMap 映射，为下一次重命名做准备
+                this.configToGroupMap.set(cfg, group._pwOriginalGroup);
             });
-            
-            // 【修复】使用 allGroups 而不是 groups，防止过滤时丢失被隐藏组的配置
-            const validIds = new Set(allGroups.map(g => g._pwUniqueId));
-            this.properties.groups = this.properties.groups.filter(c => validIds.has(c.group_name));
             
             let index = 0;
             for (const group of groups) {
@@ -902,16 +917,6 @@ app.registerExtension({
                                     }
                                 }
                             }
-                        }
-                    }
-                    
-                    if (!cfg._pwLastNodeIds) {
-                        const group = allGroups.find(g => g._pwUniqueId === cfg.group_name);
-                        if (group) {
-                            const nodes = getNodesInGroupGlobal(group);
-                            cfg._pwLastNodeIds = nodes.map(n => n.id).sort().join(',');
-                            cfg._pwLastPath = group._pwPath;
-                            cfg._pwLastColor = group.color;
                         }
                     }
                 }
