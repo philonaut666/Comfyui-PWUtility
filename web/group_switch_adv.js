@@ -11,7 +11,7 @@ const i18n = {
         colorCyan: "青色", colorPurple: "紫色", colorYellow: "黄色", colorBlack: "黑色",
         matchMode: "匹配模式", matchColors: "按颜色", matchTitle: "按标题", matchNone: "无(显示全部)",
         colorFilter: "颜色过滤", matchTitleLabel: "标题关键词(逗号分隔)", toggleRestriction: "切换限制",
-        restrictionUnlimited: "无限制", restrictionAlwaysOne: "始终仅开启一个", navigateIndicator: "定位按钮",
+        restrictionUnlimited: "无限制", restrictionAlwaysOne: "始终仅开启一个", restrictionMaxOne: "最多开启一个", navigateIndicator: "定位按钮",
         show: "显示", hide: "隐藏", linkageConfig: "联动配置：", whenGroupOn: "组开启时", whenGroupOff: "组关闭时",
         searchGroup: "搜索组...",
         helpTitle: "Group Switch ADV", helpDesc: "极简版组管理器。支持跨节点全局联动、拖拽排序、条件过滤及子图组控制。"
@@ -24,7 +24,7 @@ const i18n = {
         colorCyan: "Cyan", colorPurple: "Purple", colorYellow: "Yellow", colorBlack: "Black",
         matchMode: "Match Mode", matchColors: "By Color", matchTitle: "By Title", matchNone: "None(Show All)",
         colorFilter: "Color Filter", matchTitleLabel: "Title Keywords(comma separated)", toggleRestriction: "Toggle Restriction",
-        restrictionUnlimited: "Unlimited", restrictionAlwaysOne: "Always One Active", navigateIndicator: "Navigate Button",
+        restrictionUnlimited: "Unlimited", restrictionAlwaysOne: "Always One Active", restrictionMaxOne: "Max One Active", navigateIndicator: "Navigate Button",
         show: "Show", hide: "Hide", linkageConfig: "Linkage Config:", whenGroupOn: "When Group ON", whenGroupOff: "When Group OFF",
         searchGroup: "Search group...",
         helpTitle: "Group Switch ADV", helpDesc: "Minimalist Group Manager. Supports global cross-node linkage, drag-sort, filtering, and subgraph group control."
@@ -374,31 +374,26 @@ app.registerExtension({
             return active;
         };
 
-        // 【核心新增】自动修复因复制粘贴/ID冲突导致的断链
         nodeType.prototype.repairBrokenLinks = function() {
             if (!this.properties.groups || !Array.isArray(this.properties.groups)) return;
             const allGroups = this.getAllGroupsFlat();
             const idMap = new Map(allGroups.map(g => [g._pwUniqueId, g]));
             
-            // 辅助函数：通过 title 和 path 寻找组（快照匹配）
             const findBySnapshot = (title, path) => allGroups.find(g => g.title === title && (g._pwPath || '') === (path || ''));
 
             for (const cfg of this.properties.groups) {
-                // 1. 修复主组 ID
                 if (cfg.group_name && !idMap.has(cfg.group_name)) {
                     const match = findBySnapshot(cfg.group_title, cfg.group_path);
                     if (match) {
-                        cfg.group_name = match._pwUniqueId; // 自动认亲，更新为新 ID
+                        cfg.group_name = match._pwUniqueId; 
                     }
                 }
-                // 同步主组快照（确保快照始终是最新的）
                 const currentGroup = idMap.get(cfg.group_name);
                 if (currentGroup) {
                     cfg.group_title = currentGroup.title;
                     cfg.group_path = currentGroup._pwPath;
                 }
 
-                // 2. 修复 Linkage 中的 target_group
                 if (cfg.linkage) {
                     for (const type of ['on_enable', 'on_disable']) {
                         if (cfg.linkage[type]) {
@@ -406,10 +401,9 @@ app.registerExtension({
                                 if (rule.target_group && !idMap.has(rule.target_group)) {
                                     const match = findBySnapshot(rule.target_title, rule.target_path);
                                     if (match) {
-                                        rule.target_group = match._pwUniqueId; // 自动认亲
+                                        rule.target_group = match._pwUniqueId; 
                                     }
                                 }
-                                // 同步 linkage 快照
                                 const targetGroup = idMap.get(rule.target_group);
                                 if (targetGroup) {
                                     rule.target_title = targetGroup.title;
@@ -421,7 +415,6 @@ app.registerExtension({
                 }
             }
             
-            // 清理 groupOrder 中失效的 ID
             if (this.properties.groupOrder && Array.isArray(this.properties.groupOrder)) {
                 this.properties.groupOrder = this.properties.groupOrder.filter(id => idMap.has(id));
             }
@@ -431,7 +424,6 @@ app.registerExtension({
             const list = this.ui?.querySelector('#gsa-list');
             if (!list) return;
             
-            // 【关键调用】每次刷新前自动修复断链
             this.repairBrokenLinks();
 
             let groups = this.getAllGroupsFlat();
@@ -443,15 +435,15 @@ app.registerExtension({
                 if (!cfg) {
                     cfg = { 
                         group_name: group._pwUniqueId, 
-                        group_title: group.title, // 保存快照
-                        group_path: group._pwPath, // 保存快照
+                        group_title: group.title, 
+                        group_path: group._pwPath, 
                         enabled: isEnabled, 
                         linkage: { on_enable: [], on_disable: [] } 
                     };
                     this.properties.groups.push(cfg);
                 } else {
                     cfg.enabled = isEnabled;
-                    cfg.group_title = group.title; // 更新快照
+                    cfg.group_title = group.title; 
                     cfg.group_path = group._pwPath;
                 }
             });
@@ -547,18 +539,40 @@ app.registerExtension({
             if (!groupInfo) return;
             const nodes = getNodesInGroupGlobal(groupInfo);
             if (nodes.length === 0) return;
-            if (enable && this.properties.toggleRestriction === 'always_one' && !opts.skipAlwaysOne) {
+            
+            const restriction = this.properties.toggleRestriction;
+            const isRestricted = restriction === 'always_one' || restriction === 'max_one';
+
+            // 【新增逻辑】处理 Max One 和 Always One 的互斥关闭逻辑
+            if (enable && isRestricted && !opts.skipRestriction) {
                 const filteredIds = this.filterGroups(this.getAllGroupsFlat()).map(g => g._pwUniqueId);
                 const enabledOthers = this.properties.groups.filter(g => g.enabled && g.group_name !== uniqueId && filteredIds.includes(g.group_name));
                 enabledOthers.forEach(g => {
-                    this.toggleGroup(g.group_name, false, { skipAlwaysOne: true, skipUIUpdate: true });
+                    this.toggleGroup(g.group_name, false, { skipRestriction: true, skipUIUpdate: true });
                 });
             }
+
             const switchMode = this.properties.switchMode || 'bypass';
             const mode = enable ? 0 : (switchMode === 'bypass' ? 4 : 2);
             changeModeOfNodes(nodes, mode);
+            
             const config = this.properties.groups.find(g => g.group_name === uniqueId);
             if (config) config.enabled = enable;
+
+            // 【新增逻辑】处理 Always One 在全部关闭时的“保底”开启逻辑
+            if (!enable && restriction === 'always_one' && !opts.skipRestriction) {
+                const filteredGroups = this.filterGroups(this.getAllGroupsFlat());
+                const filteredIds = filteredGroups.map(g => g._pwUniqueId);
+                const anyEnabled = this.properties.groups.some(g => g.enabled && g.group_name !== uniqueId && filteredIds.includes(g.group_name));
+                if (!anyEnabled && filteredGroups.length > 0) {
+                    let targetGroup = filteredGroups.find(g => g._pwUniqueId !== uniqueId);
+                    if (!targetGroup) targetGroup = filteredGroups[0];
+                    if (targetGroup) {
+                        this.toggleGroup(targetGroup._pwUniqueId, true, { skipRestriction: true, skipUIUpdate: true });
+                    }
+                }
+            }
+
             if (!opts.skipLinkage) {
                 const collectAdvNodes = (graph) => {
                     let result = [];
@@ -665,7 +679,11 @@ app.registerExtension({
                 <div id="s-color-wrap" style="display:${this.properties.matchMode === 'colors' ? 'block' : 'none'}"><label>${t('colorFilter')}</label><select id="s-color">${colorOpts}</select></div>
                 <div id="s-title-wrap" style="display:${this.properties.matchMode === 'title' ? 'block' : 'none'}"><label>${t('matchTitleLabel')}</label><input type="text" id="s-title" value="${this.properties.titleKeywords || ''}"></div>
                 <label>${t('toggleRestriction')}</label>
-                <select id="s-rest"><option value="unlimited" ${this.properties.toggleRestriction === 'unlimited' ? 'selected' : ''}>${t('restrictionUnlimited')}</option><option value="always_one" ${this.properties.toggleRestriction === 'always_one' ? 'selected' : ''}>${t('restrictionAlwaysOne')}</option></select>
+                <select id="s-rest">
+                    <option value="unlimited" ${this.properties.toggleRestriction === 'unlimited' ? 'selected' : ''}>${t('restrictionUnlimited')}</option>
+                    <option value="always_one" ${this.properties.toggleRestriction === 'always_one' ? 'selected' : ''}>${t('restrictionAlwaysOne')}</option>
+                    <option value="max_one" ${this.properties.toggleRestriction === 'max_one' ? 'selected' : ''}>${t('restrictionMaxOne')}</option>
+                </select>
                 <label>${t('navigateIndicator')}</label>
                 <select id="s-nav"><option value="true" ${this.properties.showNavigate ? 'selected' : ''}>${t('show')}</option><option value="false" ${!this.properties.showNavigate ? 'selected' : ''}>${t('hide')}</option></select>
                 <div class="gsa-dialog-footer"><button id="s-cancel">${t('cancel')}</button><button id="s-save" class="gsa-btn-primary">${t('confirm')}</button></div>
@@ -934,7 +952,6 @@ app.registerExtension({
             if (info.toggleRestriction !== undefined) this.properties.toggleRestriction = info.toggleRestriction;
             if (info.showNavigate !== undefined) this.properties.showNavigate = info.showNavigate;
             
-            // 旧版本 Workflow 数据迁移逻辑 (兼容没有 pw_g_ 前缀的远古版本)
             const migrateId = (oldId, allGroups) => {
                 if (!oldId) return oldId;
                 if (oldId.startsWith('pw_g_')) return oldId; 
@@ -982,7 +999,7 @@ app.registerExtension({
             if (this.ui) {
                 setTimeout(() => {
                     this.updateModeText();
-                    this.refreshWidgets(); // 触发 repairBrokenLinks
+                    this.refreshWidgets(); 
                 }, 100);
             }
         };
