@@ -79,12 +79,12 @@ class GroupSwitchService {
         this.runScheduleTimeout = null;
         this.runScheduleAnimation = null;
         this._lastGroupCount = -1;
-        this._lastGroupSignature = ""; // 【新增】用于检测组名修改
+        this._lastGroupSignature = ""; 
         
         this._checkInterval = setInterval(() => {
             if (this.nodes.length > 0 && app.graph) {
                 let count = 0;
-                let signature = ""; // 【新增】收集所有组的 StableId 和 Title 签名
+                let signature = ""; 
                 const countGroups = (graph) => {
                     if (!graph) return;
                     const groups = (graph._groups || []).filter(g => g && g.title);
@@ -102,7 +102,6 @@ class GroupSwitchService {
                 };
                 countGroups(app.graph);
                 
-                // 【修复】当组数量变化，或者组名发生变化时，触发UI刷新
                 if (count !== this._lastGroupCount || signature !== this._lastGroupSignature) {
                     this._lastGroupCount = count;
                     this._lastGroupSignature = signature;
@@ -154,7 +153,6 @@ const GSA_SERVICE = new GroupSwitchService();
 app.registerExtension({
     name: "comfyui-pwutility.group.switch.adv",
     
-    // 【核心新增】Hook LGraphGroup 的序列化，确保 _pwStableId 能被保存到 Workflow 中
     async setup() {
         const LGraphGroupClass = window.LGraphGroup || (window.LiteGraph && window.LiteGraph.LGraphGroup);
         if (LGraphGroupClass && !LGraphGroupClass.prototype._pwHooked) {
@@ -218,7 +216,6 @@ app.registerExtension({
         };
         
         nodeType.prototype.createMinimalUI = function () {
-            // (此处省略 DOM 样式创建代码，与原版完全一致，保持原样)
             if (!document.querySelector('#gsa-styles')) {
                 const style = document.createElement('style');
                 style.id = 'gsa-styles';
@@ -290,13 +287,12 @@ app.registerExtension({
         
         nodeType.prototype.getAllGroupsFlat = function () {
             const result = [];
-            const usedIds = new Set(); // 【新增】防止复制粘贴导致的 StableId 重复
+            const usedIds = new Set(); 
             
             const collectGroups = (graph, pathParts, topSubgraphNode) => {
                 if (!graph || !graph._groups) return;
                 for (const group of graph._groups) {
                     if (group && group.title) {
-                        // 【核心修复 2】分配并验证稳定ID，脱离对 title 的依赖
                         if (!group._pwStableId || usedIds.has(group._pwStableId)) {
                             group._pwStableId = 'pw_g_' + Math.random().toString(36).substr(2, 9) + Date.now().toString(36);
                         }
@@ -377,10 +373,67 @@ app.registerExtension({
             reduceNodesDepthFirst(nodes, (n) => { if (n.mode === 0) active = true; });
             return active;
         };
+
+        // 【核心新增】自动修复因复制粘贴/ID冲突导致的断链
+        nodeType.prototype.repairBrokenLinks = function() {
+            if (!this.properties.groups || !Array.isArray(this.properties.groups)) return;
+            const allGroups = this.getAllGroupsFlat();
+            const idMap = new Map(allGroups.map(g => [g._pwUniqueId, g]));
+            
+            // 辅助函数：通过 title 和 path 寻找组（快照匹配）
+            const findBySnapshot = (title, path) => allGroups.find(g => g.title === title && (g._pwPath || '') === (path || ''));
+
+            for (const cfg of this.properties.groups) {
+                // 1. 修复主组 ID
+                if (cfg.group_name && !idMap.has(cfg.group_name)) {
+                    const match = findBySnapshot(cfg.group_title, cfg.group_path);
+                    if (match) {
+                        cfg.group_name = match._pwUniqueId; // 自动认亲，更新为新 ID
+                    }
+                }
+                // 同步主组快照（确保快照始终是最新的）
+                const currentGroup = idMap.get(cfg.group_name);
+                if (currentGroup) {
+                    cfg.group_title = currentGroup.title;
+                    cfg.group_path = currentGroup._pwPath;
+                }
+
+                // 2. 修复 Linkage 中的 target_group
+                if (cfg.linkage) {
+                    for (const type of ['on_enable', 'on_disable']) {
+                        if (cfg.linkage[type]) {
+                            for (const rule of cfg.linkage[type]) {
+                                if (rule.target_group && !idMap.has(rule.target_group)) {
+                                    const match = findBySnapshot(rule.target_title, rule.target_path);
+                                    if (match) {
+                                        rule.target_group = match._pwUniqueId; // 自动认亲
+                                    }
+                                }
+                                // 同步 linkage 快照
+                                const targetGroup = idMap.get(rule.target_group);
+                                if (targetGroup) {
+                                    rule.target_title = targetGroup.title;
+                                    rule.target_path = targetGroup._pwPath;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 清理 groupOrder 中失效的 ID
+            if (this.properties.groupOrder && Array.isArray(this.properties.groupOrder)) {
+                this.properties.groupOrder = this.properties.groupOrder.filter(id => idMap.has(id));
+            }
+        };
         
         nodeType.prototype.refreshWidgets = function () {
             const list = this.ui?.querySelector('#gsa-list');
             if (!list) return;
+            
+            // 【关键调用】每次刷新前自动修复断链
+            this.repairBrokenLinks();
+
             let groups = this.getAllGroupsFlat();
             groups = this.filterGroups(groups);
             groups = this.sortGroups(groups);
@@ -388,10 +441,18 @@ app.registerExtension({
                 let cfg = this.properties.groups.find(g => g.group_name === group._pwUniqueId);
                 const isEnabled = this.isGroupEnabled(group);
                 if (!cfg) {
-                    cfg = { group_name: group._pwUniqueId, enabled: isEnabled, linkage: { on_enable: [], on_disable: [] } };
+                    cfg = { 
+                        group_name: group._pwUniqueId, 
+                        group_title: group.title, // 保存快照
+                        group_path: group._pwPath, // 保存快照
+                        enabled: isEnabled, 
+                        linkage: { on_enable: [], on_disable: [] } 
+                    };
                     this.properties.groups.push(cfg);
                 } else {
                     cfg.enabled = isEnabled;
+                    cfg.group_title = group.title; // 更新快照
+                    cfg.group_path = group._pwPath;
                 }
             });
             const validIds = new Set(groups.map(g => g._pwUniqueId));
@@ -668,11 +729,29 @@ app.registerExtension({
             renderRules('on_disable');
             dlg.querySelector('#l-add-on').onclick = () => {
                 const allGroups = this.getAllGroupsFlat().filter(g => g._pwUniqueId !== cfg.group_name);
-                if (allGroups.length) { temp.linkage.on_enable.push({ target_group: allGroups[0]._pwUniqueId, action: 'active' }); renderRules('on_enable'); }
+                if (allGroups.length) { 
+                    const target = allGroups[0];
+                    temp.linkage.on_enable.push({ 
+                        target_group: target._pwUniqueId, 
+                        target_title: target.title, 
+                        target_path: target._pwPath,
+                        action: 'active' 
+                    }); 
+                    renderRules('on_enable'); 
+                }
             };
             dlg.querySelector('#l-add-off').onclick = () => {
                 const allGroups = this.getAllGroupsFlat().filter(g => g._pwUniqueId !== cfg.group_name);
-                if (allGroups.length) { temp.linkage.on_disable.push({ target_group: allGroups[0]._pwUniqueId, action: 'active' }); renderRules('on_disable'); }
+                if (allGroups.length) { 
+                    const target = allGroups[0];
+                    temp.linkage.on_disable.push({ 
+                        target_group: target._pwUniqueId, 
+                        target_title: target.title, 
+                        target_path: target._pwPath,
+                        action: 'active' 
+                    }); 
+                    renderRules('on_disable'); 
+                }
             };
             const close = () => dlg.remove();
             dlg.querySelector('#l-cancel').onclick = close;
@@ -748,6 +827,8 @@ app.registerExtension({
                 if (!config.linkage[oppositeType]) config.linkage[oppositeType] = [];
                 config.linkage[oppositeType].push({
                     target_group: rule.target_group,
+                    target_title: rule.target_title,
+                    target_path: rule.target_path,
                     action: oppositeAction
                 });
                 const oppositeListId = oppositeType === 'on_enable' ? 'l-on_enable' : 'l-on_disable';
@@ -772,6 +853,11 @@ app.registerExtension({
                         e.stopPropagation();
                         const val = opt.dataset.value;
                         rule.target_group = val;
+                        const selectedGroup = allGroups.find(g => g._pwUniqueId === val);
+                        if (selectedGroup) {
+                            rule.target_title = selectedGroup.title;
+                            rule.target_path = selectedGroup._pwPath;
+                        }
                         searchInput.value = this._getGroupDisplayName(val) || val;
                         searchDropdown.classList.remove('open');
                         updateMirrorBtnState();
@@ -848,10 +934,10 @@ app.registerExtension({
             if (info.toggleRestriction !== undefined) this.properties.toggleRestriction = info.toggleRestriction;
             if (info.showNavigate !== undefined) this.properties.showNavigate = info.showNavigate;
             
-            // 【核心修复 3】旧版本 Workflow 数据迁移逻辑
+            // 旧版本 Workflow 数据迁移逻辑 (兼容没有 pw_g_ 前缀的远古版本)
             const migrateId = (oldId, allGroups) => {
                 if (!oldId) return oldId;
-                if (oldId.startsWith('pw_g_')) return oldId; // 已经是新格式 StableId
+                if (oldId.startsWith('pw_g_')) return oldId; 
                 
                 let searchTitle = oldId;
                 let searchPath = '';
@@ -861,11 +947,9 @@ app.registerExtension({
                     searchPath = parts.join('::');
                 }
                 
-                // 优先精确匹配 路径 + 标题
                 let match = allGroups.find(g => g.title === searchTitle && g._pwPath === searchPath);
                 if (match) return match._pwUniqueId;
                 
-                // 兜底匹配 标题
                 match = allGroups.find(g => g.title === searchTitle);
                 if (match) return match._pwUniqueId;
                 
@@ -898,7 +982,7 @@ app.registerExtension({
             if (this.ui) {
                 setTimeout(() => {
                     this.updateModeText();
-                    this.refreshWidgets();
+                    this.refreshWidgets(); // 触发 repairBrokenLinks
                 }, 100);
             }
         };
