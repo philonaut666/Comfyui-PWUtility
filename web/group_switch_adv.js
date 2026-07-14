@@ -11,7 +11,9 @@ const i18n = {
         colorCyan: "青色", colorPurple: "紫色", colorYellow: "黄色", colorBlack: "黑色",
         matchMode: "匹配模式", matchColors: "按颜色", matchTitle: "按标题", matchNone: "无(显示全部)",
         colorFilter: "颜色过滤", matchTitleLabel: "标题关键词(逗号分隔)", toggleRestriction: "切换限制",
-        restrictionUnlimited: "无限制", restrictionAlwaysOne: "始终仅开启一个", restrictionMaxOne: "最多开启一个", navigateIndicator: "定位按钮",
+        restrictionUnlimited: "无限制", restrictionAlwaysOne: "始终仅开启一个", restrictionMaxOne: "最多开启一个", 
+        defaultGroup: "默认保底组", defaultGroupNone: "无 (自动选择首个)",
+        navigateIndicator: "定位按钮",
         show: "显示", hide: "隐藏", linkageConfig: "联动配置：", whenGroupOn: "组开启时", whenGroupOff: "组关闭时",
         searchGroup: "搜索组...",
         helpTitle: "Group Switch ADV", helpDesc: "极简版组管理器。支持跨节点全局联动、拖拽排序、条件过滤及子图组控制。"
@@ -24,7 +26,9 @@ const i18n = {
         colorCyan: "Cyan", colorPurple: "Purple", colorYellow: "Yellow", colorBlack: "Black",
         matchMode: "Match Mode", matchColors: "By Color", matchTitle: "By Title", matchNone: "None(Show All)",
         colorFilter: "Color Filter", matchTitleLabel: "Title Keywords(comma separated)", toggleRestriction: "Toggle Restriction",
-        restrictionUnlimited: "Unlimited", restrictionAlwaysOne: "Always One Active", restrictionMaxOne: "Max One Active", navigateIndicator: "Navigate Button",
+        restrictionUnlimited: "Unlimited", restrictionAlwaysOne: "Always One Active", restrictionMaxOne: "Max One Active", 
+        defaultGroup: "Default Fallback Group", defaultGroupNone: "None (Auto select first)",
+        navigateIndicator: "Navigate Button",
         show: "Show", hide: "Hide", linkageConfig: "Linkage Config:", whenGroupOn: "When Group ON", whenGroupOff: "When Group OFF",
         searchGroup: "Search group...",
         helpTitle: "Group Switch ADV", helpDesc: "Minimalist Group Manager. Supports global cross-node linkage, drag-sort, filtering, and subgraph group control."
@@ -191,6 +195,7 @@ app.registerExtension({
             this.properties.selectedColorFilter = this.properties.selectedColorFilter || '';
             this.properties.titleKeywords = this.properties.titleKeywords || '';
             this.properties.toggleRestriction = this.properties.toggleRestriction || 'unlimited';
+            this.properties.defaultGroup = this.properties.defaultGroup || '';
             this.properties.showNavigate = this.properties.showNavigate !== false;
             this.groupReferences = new WeakMap();
             this.size = [300, 400];
@@ -543,7 +548,6 @@ app.registerExtension({
             const restriction = this.properties.toggleRestriction;
             const isRestricted = restriction === 'always_one' || restriction === 'max_one';
 
-            // 【新增逻辑】处理 Max One 和 Always One 的互斥关闭逻辑
             if (enable && isRestricted && !opts.skipRestriction) {
                 const filteredIds = this.filterGroups(this.getAllGroupsFlat()).map(g => g._pwUniqueId);
                 const enabledOthers = this.properties.groups.filter(g => g.enabled && g.group_name !== uniqueId && filteredIds.includes(g.group_name));
@@ -559,14 +563,25 @@ app.registerExtension({
             const config = this.properties.groups.find(g => g.group_name === uniqueId);
             if (config) config.enabled = enable;
 
-            // 【新增逻辑】处理 Always One 在全部关闭时的“保底”开启逻辑
+            // 【核心修改】处理 Always One 在全部关闭时的“保底”开启逻辑
             if (!enable && restriction === 'always_one' && !opts.skipRestriction) {
                 const filteredGroups = this.filterGroups(this.getAllGroupsFlat());
                 const filteredIds = filteredGroups.map(g => g._pwUniqueId);
                 const anyEnabled = this.properties.groups.some(g => g.enabled && g.group_name !== uniqueId && filteredIds.includes(g.group_name));
                 if (!anyEnabled && filteredGroups.length > 0) {
-                    let targetGroup = filteredGroups.find(g => g._pwUniqueId !== uniqueId);
-                    if (!targetGroup) targetGroup = filteredGroups[0];
+                    // 优先寻找用户设置的 defaultGroup
+                    let targetGroup = filteredGroups.find(g => g._pwUniqueId === this.properties.defaultGroup);
+                    
+                    // 如果未设置，或设置的组不在当前过滤列表中，则寻找第一个非当前关闭的组
+                    if (!targetGroup) {
+                        targetGroup = filteredGroups.find(g => g._pwUniqueId !== uniqueId);
+                    }
+                    
+                    // 极端情况：列表中只有一个组，且正在关闭它，则只能保底开启它自己
+                    if (!targetGroup) {
+                        targetGroup = filteredGroups[0];
+                    }
+                    
                     if (targetGroup) {
                         this.toggleGroup(targetGroup._pwUniqueId, true, { skipRestriction: true, skipUIUpdate: true });
                     }
@@ -670,6 +685,13 @@ app.registerExtension({
             const colors = ['red', 'brown', 'green', 'blue', 'pale blue', 'cyan', 'purple', 'yellow', 'black'];
             const colorKeys = { 'red': 'colorRed', 'brown': 'colorBrown', 'green': 'colorGreen', 'blue': 'colorBlue', 'pale blue': 'colorPaleBlue', 'cyan': 'colorCyan', 'purple': 'colorPurple', 'yellow': 'colorYellow', 'black': 'colorBlack' };
             const colorOpts = `<option value="">${t('allColors')}</option>` + colors.map(c => `<option value="${c}" ${this.properties.selectedColorFilter === c ? 'selected' : ''}>${t(colorKeys[c]) || c}</option>`).join('');
+            
+            // 生成 Default Group 选项
+            const filteredGroups = this.filterGroups(this.getAllGroupsFlat());
+            const defaultGroupOpts = `<option value="">${t('defaultGroupNone')}</option>` + filteredGroups.map(g => 
+                `<option value="${g._pwUniqueId}" ${this.properties.defaultGroup === g._pwUniqueId ? 'selected' : ''}>${g._pwDisplayName}</option>`
+            ).join('');
+
             dlg.innerHTML = `
                 <h3>${t('settings')}</h3>
                 <label>${t('modeLabel')}</label>
@@ -684,12 +706,28 @@ app.registerExtension({
                     <option value="always_one" ${this.properties.toggleRestriction === 'always_one' ? 'selected' : ''}>${t('restrictionAlwaysOne')}</option>
                     <option value="max_one" ${this.properties.toggleRestriction === 'max_one' ? 'selected' : ''}>${t('restrictionMaxOne')}</option>
                 </select>
+                <label id="s-default-group-label" style="display:${this.properties.toggleRestriction === 'always_one' ? 'block' : 'none'}">${t('defaultGroup')}</label>
+                <select id="s-default-group" style="display:${this.properties.toggleRestriction === 'always_one' ? 'block' : 'none'}">
+                    ${defaultGroupOpts}
+                </select>
                 <label>${t('navigateIndicator')}</label>
                 <select id="s-nav"><option value="true" ${this.properties.showNavigate ? 'selected' : ''}>${t('show')}</option><option value="false" ${!this.properties.showNavigate ? 'selected' : ''}>${t('hide')}</option></select>
                 <div class="gsa-dialog-footer"><button id="s-cancel">${t('cancel')}</button><button id="s-save" class="gsa-btn-primary">${t('confirm')}</button></div>
             `;
             document.body.appendChild(dlg);
-            dlg.querySelector('#s-match').onchange = (e) => { dlg.querySelector('#s-color-wrap').style.display = e.target.value === 'colors' ? 'block' : 'none'; dlg.querySelector('#s-title-wrap').style.display = e.target.value === 'title' ? 'block' : 'none'; };
+            
+            dlg.querySelector('#s-match').onchange = (e) => { 
+                dlg.querySelector('#s-color-wrap').style.display = e.target.value === 'colors' ? 'block' : 'none'; 
+                dlg.querySelector('#s-title-wrap').style.display = e.target.value === 'title' ? 'block' : 'none'; 
+            };
+            
+            // 监听 Toggle Restriction 变化，动态显示/隐藏 Default Group
+            dlg.querySelector('#s-rest').onchange = (e) => {
+                const isAlwaysOne = e.target.value === 'always_one';
+                dlg.querySelector('#s-default-group-label').style.display = isAlwaysOne ? 'block' : 'none';
+                dlg.querySelector('#s-default-group').style.display = isAlwaysOne ? 'block' : 'none';
+            };
+
             const close = () => dlg.remove();
             dlg.querySelector('#s-cancel').onclick = close;
             dlg.querySelector('#s-save').onclick = () => {
@@ -698,6 +736,7 @@ app.registerExtension({
                 this.properties.selectedColorFilter = dlg.querySelector('#s-color').value;
                 this.properties.titleKeywords = dlg.querySelector('#s-title').value;
                 this.properties.toggleRestriction = dlg.querySelector('#s-rest').value;
+                this.properties.defaultGroup = dlg.querySelector('#s-default-group').value;
                 this.properties.showNavigate = dlg.querySelector('#s-nav').value === 'true';
                 this.updateModeText(); this.refreshWidgets();
                 app.graph.setDirtyCanvas(true, true);
@@ -936,6 +975,7 @@ app.registerExtension({
             info.selectedColorFilter = this.properties.selectedColorFilter || '';
             info.titleKeywords = this.properties.titleKeywords || '';
             info.toggleRestriction = this.properties.toggleRestriction || 'unlimited';
+            info.defaultGroup = this.properties.defaultGroup || '';
             info.showNavigate = this.properties.showNavigate !== false;
             return data;
         };
@@ -950,6 +990,7 @@ app.registerExtension({
             if (info.selectedColorFilter !== undefined) this.properties.selectedColorFilter = info.selectedColorFilter;
             if (info.titleKeywords !== undefined) this.properties.titleKeywords = info.titleKeywords;
             if (info.toggleRestriction !== undefined) this.properties.toggleRestriction = info.toggleRestriction;
+            if (info.defaultGroup !== undefined) this.properties.defaultGroup = info.defaultGroup;
             if (info.showNavigate !== undefined) this.properties.showNavigate = info.showNavigate;
             
             const migrateId = (oldId, allGroups) => {
