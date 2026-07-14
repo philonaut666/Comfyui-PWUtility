@@ -4,30 +4,30 @@ const NODE_NAME = "GroupSwitchADV";
 
 const i18n = {
     zh: {
-        title: "组开关管理器 ", allColors: "所有 ", refresh: "刷新 ", settings: "设置 ", cancel: "取消 ", confirm: "确定 ",
-        enable: "开启 ", disable: "关闭 ", active: "Active ", bypass: "Bypass ", mute: "Mute ",
-        modeLabel: "运行模式 ", modeDisable: "Mute ", modeBypass: "Bypass ",
-        colorRed: "红色 ", colorBrown: "棕色 ", colorGreen: "绿色 ", colorBlue: "蓝色 ", colorPaleBlue: "浅蓝色 ",
-        colorCyan: "青色 ", colorPurple: "紫色 ", colorYellow: "黄色 ", colorBlack: "黑色 ",
-        matchMode: "匹配模式 ", matchColors: "按颜色 ", matchTitle: "按标题 ", matchNone: "无(显示全部) ",
-        colorFilter: "颜色过滤 ", matchTitleLabel: "标题关键词(逗号分隔) ", toggleRestriction: "切换限制 ",
-        restrictionUnlimited: "无限制 ", restrictionAlwaysOne: "始终仅开启一个 ", navigateIndicator: "定位按钮 ",
-        show: "显示 ", hide: "隐藏 ", linkageConfig: "联动配置： ", whenGroupOn: "组开启时 ", whenGroupOff: "组关闭时 ",
-        searchGroup: "搜索组... ",
-        helpTitle: "Group Switch ADV ", helpDesc: "极简版组管理器。支持跨节点全局联动、拖拽排序、条件过滤及子图组控制。 "
+        title: "组开关管理器", allColors: "所有", refresh: "刷新", settings: "设置", cancel: "取消", confirm: "确定",
+        enable: "开启", disable: "关闭", active: "Active", bypass: "Bypass", mute: "Mute",
+        modeLabel: "运行模式", modeDisable: "Mute", modeBypass: "Bypass",
+        colorRed: "红色", colorBrown: "棕色", colorGreen: "绿色", colorBlue: "蓝色", colorPaleBlue: "浅蓝色",
+        colorCyan: "青色", colorPurple: "紫色", colorYellow: "黄色", colorBlack: "黑色",
+        matchMode: "匹配模式", matchColors: "按颜色", matchTitle: "按标题", matchNone: "无(显示全部)",
+        colorFilter: "颜色过滤", matchTitleLabel: "标题关键词(逗号分隔)", toggleRestriction: "切换限制",
+        restrictionUnlimited: "无限制", restrictionAlwaysOne: "始终仅开启一个", navigateIndicator: "定位按钮",
+        show: "显示", hide: "隐藏", linkageConfig: "联动配置：", whenGroupOn: "组开启时", whenGroupOff: "组关闭时",
+        searchGroup: "搜索组...",
+        helpTitle: "Group Switch ADV", helpDesc: "极简版组管理器。支持跨节点全局联动、拖拽排序、条件过滤及子图组控制。"
     },
     en: {
-        title: "Group Switch ADV ", allColors: "All ", refresh: "Refresh ", settings: "Settings ", cancel: "Cancel ", confirm: "Confirm ",
-        enable: "Enable ", disable: "Disable ", active: "Active ", bypass: "Bypass ", mute: "Mute ",
-        modeLabel: "Execution Mode ", modeDisable: "Mute ", modeBypass: "Bypass ",
-        colorRed: "Red ", colorBrown: "Brown ", colorGreen: "Green ", colorBlue: "Blue ", colorPaleBlue: "Pale Blue ",
-        colorCyan: "Cyan ", colorPurple: "Purple ", colorYellow: "Yellow ", colorBlack: "Black ",
-        matchMode: "Match Mode ", matchColors: "By Color ", matchTitle: "By Title ", matchNone: "None(Show All) ",
-        colorFilter: "Color Filter ", matchTitleLabel: "Title Keywords(comma separated) ", toggleRestriction: "Toggle Restriction ",
-        restrictionUnlimited: "Unlimited ", restrictionAlwaysOne: "Always One Active ", navigateIndicator: "Navigate Button ",
-        show: "Show ", hide: "Hide ", linkageConfig: "Linkage Config:  ", whenGroupOn: "When Group ON ", whenGroupOff: "When Group OFF ",
-        searchGroup: "Search group... ",
-        helpTitle: "Group Switch ADV ", helpDesc: "Minimalist Group Manager. Supports global cross-node linkage, drag-sort, filtering, and subgraph group control. "
+        title: "Group Switch ADV", allColors: "All", refresh: "Refresh", settings: "Settings", cancel: "Cancel", confirm: "Confirm",
+        enable: "Enable", disable: "Disable", active: "Active", bypass: "Bypass", mute: "Mute",
+        modeLabel: "Execution Mode", modeDisable: "Mute", modeBypass: "Bypass",
+        colorRed: "Red", colorBrown: "Brown", colorGreen: "Green", colorBlue: "Blue", colorPaleBlue: "Pale Blue",
+        colorCyan: "Cyan", colorPurple: "Purple", colorYellow: "Yellow", colorBlack: "Black",
+        matchMode: "Match Mode", matchColors: "By Color", matchTitle: "By Title", matchNone: "None(Show All)",
+        colorFilter: "Color Filter", matchTitleLabel: "Title Keywords(comma separated)", toggleRestriction: "Toggle Restriction",
+        restrictionUnlimited: "Unlimited", restrictionAlwaysOne: "Always One Active", navigateIndicator: "Navigate Button",
+        show: "Show", hide: "Hide", linkageConfig: "Linkage Config:", whenGroupOn: "When Group ON", whenGroupOff: "When Group OFF",
+        searchGroup: "Search group...",
+        helpTitle: "Group Switch ADV", helpDesc: "Minimalist Group Manager. Supports global cross-node linkage, drag-sort, filtering, and subgraph group control."
     }
 };
 
@@ -79,12 +79,19 @@ class GroupSwitchService {
         this.runScheduleTimeout = null;
         this.runScheduleAnimation = null;
         this._lastGroupCount = -1;
+        this._lastGroupSignature = ""; // 【新增】用于检测组名修改
+        
         this._checkInterval = setInterval(() => {
             if (this.nodes.length > 0 && app.graph) {
                 let count = 0;
+                let signature = ""; // 【新增】收集所有组的 StableId 和 Title 签名
                 const countGroups = (graph) => {
                     if (!graph) return;
-                    count += (graph._groups || []).filter(g => g && g.title).length;
+                    const groups = (graph._groups || []).filter(g => g && g.title);
+                    count += groups.length;
+                    for (const g of groups) {
+                        signature += (g._pwStableId || g.title) + ":" + g.title + "|";
+                    }
                     if (graph.nodes) {
                         for (const node of graph.nodes) {
                             if (node.subgraph && node.subgraph._groups !== undefined) {
@@ -94,28 +101,35 @@ class GroupSwitchService {
                     }
                 };
                 countGroups(app.graph);
-                if (count !== this._lastGroupCount) {
+                
+                // 【修复】当组数量变化，或者组名发生变化时，触发UI刷新
+                if (count !== this._lastGroupCount || signature !== this._lastGroupSignature) {
                     this._lastGroupCount = count;
+                    this._lastGroupSignature = signature;
                     this.scheduleRun(300);
                 }
             }
         }, 2000);
     }
+
     addNode(node) {
         this.nodes.push(node);
         this.scheduleRun(300);
     }
+
     removeNode(node) {
         const i = this.nodes.indexOf(node);
         if (i > -1) this.nodes.splice(i, 1);
         if (!this.nodes.length) this.clearScheduledRun();
     }
+
     run() {
         if (!this.runScheduledForMs) return;
         for (const node of this.nodes) node.refreshWidgets();
         this.clearScheduledRun();
         this.scheduleRun(300);
     }
+
     scheduleRun(ms = 300) {
         if (this.runScheduledForMs && ms < this.runScheduledForMs) this.clearScheduledRun();
         if (!this.runScheduledForMs && this.nodes.length) {
@@ -125,6 +139,7 @@ class GroupSwitchService {
             }, ms);
         }
     }
+
     clearScheduledRun() {
         if (this.runScheduleTimeout) clearTimeout(this.runScheduleTimeout);
         if (this.runScheduleAnimation) cancelAnimationFrame(this.runScheduleAnimation);
@@ -138,8 +153,34 @@ const GSA_SERVICE = new GroupSwitchService();
 
 app.registerExtension({
     name: "comfyui-pwutility.group.switch.adv",
+    
+    // 【核心新增】Hook LGraphGroup 的序列化，确保 _pwStableId 能被保存到 Workflow 中
+    async setup() {
+        const LGraphGroupClass = window.LGraphGroup || (window.LiteGraph && window.LiteGraph.LGraphGroup);
+        if (LGraphGroupClass && !LGraphGroupClass.prototype._pwHooked) {
+            const origSerialize = LGraphGroupClass.prototype.serialize;
+            LGraphGroupClass.prototype.serialize = function() {
+                const info = origSerialize ? origSerialize.apply(this, arguments) : { title: this.title, bounding: this.bounding, color: this.color, font_size: this.font_size };
+                if (this._pwStableId) info._pwStableId = this._pwStableId;
+                return info;
+            };
+            
+            const origConfigure = LGraphGroupClass.prototype.configure;
+            LGraphGroupClass.prototype.configure = function(info) {
+                if (origConfigure) origConfigure.apply(this, arguments);
+                if (info && info._pwStableId) {
+                    this._pwStableId = info._pwStableId;
+                } else if (!this._pwStableId) {
+                    this._pwStableId = 'pw_g_' + Math.random().toString(36).substr(2, 9) + Date.now().toString(36);
+                }
+            };
+            LGraphGroupClass.prototype._pwHooked = true;
+        }
+    },
+
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name !== NODE_NAME) return;
+        
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = onNodeCreated?.apply(this, arguments);
@@ -154,7 +195,6 @@ app.registerExtension({
             this.properties.toggleRestriction = this.properties.toggleRestriction || 'unlimited';
             this.properties.showNavigate = this.properties.showNavigate !== false;
             this.groupReferences = new WeakMap();
-            this._cfgToGroupMap = new Map(); // 【核心新增】用于追踪 config 对象与 LiteGraph Group 内存引用的映射
             this.size = [300, 400];
             this.createMinimalUI();
             this._evtHandler = (e) => {
@@ -163,18 +203,22 @@ app.registerExtension({
             window.addEventListener('group-mute-changed', this._evtHandler);
             return r;
         };
+        
         const onAdded = nodeType.prototype.onAdded;
         nodeType.prototype.onAdded = function (graph) {
             onAdded?.apply(this, arguments);
             GSA_SERVICE.addNode(this);
         };
+        
         const onRemoved = nodeType.prototype.onRemoved;
         nodeType.prototype.onRemoved = function () {
             GSA_SERVICE.removeNode(this);
             if (this._evtHandler) window.removeEventListener('group-mute-changed', this._evtHandler);
             onRemoved?.apply(this, arguments);
         };
+        
         nodeType.prototype.createMinimalUI = function () {
+            // (此处省略 DOM 样式创建代码，与原版完全一致，保持原样)
             if (!document.querySelector('#gsa-styles')) {
                 const style = document.createElement('style');
                 style.id = 'gsa-styles';
@@ -238,19 +282,30 @@ app.registerExtension({
             this.updateModeText();
             this.refreshWidgets();
         };
+        
         nodeType.prototype.updateModeText = function () {
             const el = this.ui?.querySelector('#gsa-mode');
             if (el) el.textContent = this.properties.switchMode === 'bypass' ? t('modeBypass') : t('modeDisable');
         };
+        
         nodeType.prototype.getAllGroupsFlat = function () {
             const result = [];
+            const usedIds = new Set(); // 【新增】防止复制粘贴导致的 StableId 重复
+            
             const collectGroups = (graph, pathParts, topSubgraphNode) => {
                 if (!graph || !graph._groups) return;
                 for (const group of graph._groups) {
                     if (group && group.title) {
+                        // 【核心修复 2】分配并验证稳定ID，脱离对 title 的依赖
+                        if (!group._pwStableId || usedIds.has(group._pwStableId)) {
+                            group._pwStableId = 'pw_g_' + Math.random().toString(36).substr(2, 9) + Date.now().toString(36);
+                        }
+                        usedIds.add(group._pwStableId);
+                        
                         const path = pathParts.join(' > ');
-                        const uniqueId = path ? `${path}::${group.title}` : group.title;
+                        const uniqueId = group._pwStableId; 
                         const displayName = path ? `[${path}] ${group.title}` : group.title;
+                        
                         result.push({
                             title: group.title,
                             color: group.color,
@@ -276,11 +331,13 @@ app.registerExtension({
             if (app.graph) collectGroups(app.graph, [], null);
             return result;
         };
+        
         nodeType.prototype._getGroupDisplayName = function (uniqueId) {
             if (!uniqueId) return '';
             const group = this.getAllGroupsFlat().find(g => g._pwUniqueId === uniqueId);
             return group ? group._pwDisplayName : uniqueId;
         };
+        
         nodeType.prototype.sortGroups = function (groups) {
             if (!this.properties.groupOrder.length) return groups.slice().sort((a, b) => a._pwDisplayName.localeCompare(b._pwDisplayName));
             const map = new Map(this.properties.groupOrder.map((n, i) => [n, i]));
@@ -290,6 +347,7 @@ app.registerExtension({
             unordered.sort((a, b) => a._pwDisplayName.localeCompare(b._pwDisplayName));
             return [...ordered, ...unordered];
         };
+        
         nodeType.prototype.filterGroups = function (groups) {
             if (this.properties.matchMode === 'title' && this.properties.titleKeywords) {
                 const kws = this.properties.titleKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
@@ -300,6 +358,7 @@ app.registerExtension({
             }
             return groups;
         };
+        
         nodeType.prototype.getHexColor = function (colorName) {
             if (!colorName) return null;
             if (colorName.startsWith('#')) return colorName.toLowerCase();
@@ -310,6 +369,7 @@ app.registerExtension({
             }
             return null;
         };
+        
         nodeType.prototype.isGroupEnabled = function (groupInfo) {
             const nodes = getNodesInGroupGlobal(groupInfo);
             if (!nodes.length) return false;
@@ -318,93 +378,12 @@ app.registerExtension({
             return active;
         };
         
-        // 【核心辅助】全局同步更新所有管理器节点中的 Linkage 目标
-        nodeType.prototype._globalUpdateLinkageTarget = function (oldId, newId) {
-            const collectAdvNodes = (graph) => {
-                let result = [];
-                if (!graph || !graph.nodes) return result;
-                for (const node of graph.nodes) {
-                    if (node.type === "GroupSwitchADV" || node.comfyClass === "GroupSwitchADV") result.push(node);
-                    if (node.subgraph && node.subgraph.nodes) result = result.concat(collectAdvNodes(node.subgraph));
-                }
-                return result;
-            };
-            const allNodes = collectAdvNodes(app.graph);
-            for (const node of allNodes) {
-                if (!node.properties || !node.properties.groups) continue;
-                let changed = false;
-                for (const cfg of node.properties.groups) {
-                    if (cfg.linkage) {
-                        for (const type of ['on_enable', 'on_disable']) {
-                            if (cfg.linkage[type]) {
-                                for (const rule of cfg.linkage[type]) {
-                                    if (rule.target_group === oldId) {
-                                        rule.target_group = newId;
-                                        changed = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if (changed && node !== this) {
-                    node.refreshWidgets?.();
-                }
-            }
-        };
-
         nodeType.prototype.refreshWidgets = function () {
             const list = this.ui?.querySelector('#gsa-list');
             if (!list) return;
-            
-            const allGroups = this.getAllGroupsFlat();
-            // 【致命 Bug 修复】必须使用 allGroups 生成 validIds，否则过滤会导致配置丢失！
-            const validIds = new Set(allGroups.map(g => g._pwUniqueId));
-
-            if (!this._cfgToGroupMap) this._cfgToGroupMap = new Map();
-
-            // ================= 核心：重命名追踪与全局 Linkage 更新 =================
-            // 1. 内存引用追踪 (最准确)
-            for (const cfg of this.properties.groups) {
-                const groupObj = this._cfgToGroupMap.get(cfg);
-                if (groupObj) {
-                    const newG = allGroups.find(g => g._pwOriginalGroup === groupObj);
-                    if (newG && newG._pwUniqueId !== cfg.group_name) {
-                        const oldId = cfg.group_name;
-                        const newId = newG._pwUniqueId;
-                        cfg.group_name = newId;
-                        this._globalUpdateLinkageTarget(oldId, newId);
-                    }
-                }
-            }
-
-            // 2. Fallback: 特征匹配 (处理 Map 丢失的情况，如刚加载工作流)
-            const orphanConfigs = this.properties.groups.filter(c => !validIds.has(c.group_name));
-            const orphanGroups = allGroups.filter(g => !this.properties.groups.some(c => c.group_name === g._pwUniqueId));
-            
-            if (orphanConfigs.length > 0 && orphanGroups.length > 0) {
-                for (const oldCfg of orphanConfigs) {
-                    let matched = orphanGroups.find(g => 
-                        g._pwPath === oldCfg._pwLastPath && 
-                        g.color === oldCfg._pwLastColor
-                    );
-                    
-                    if (matched) {
-                        const oldId = oldCfg.group_name;
-                        const newId = matched._pwUniqueId;
-                        oldCfg.group_name = newId;
-                        this._globalUpdateLinkageTarget(oldId, newId);
-                    }
-                }
-            }
-            // =======================================================================
-
-            // 清理真正被删除的组
-            this.properties.groups = this.properties.groups.filter(c => validIds.has(c.group_name));
-
-            let groups = this.filterGroups(allGroups);
+            let groups = this.getAllGroupsFlat();
+            groups = this.filterGroups(groups);
             groups = this.sortGroups(groups);
-            
             groups.forEach(group => {
                 let cfg = this.properties.groups.find(g => g.group_name === group._pwUniqueId);
                 const isEnabled = this.isGroupEnabled(group);
@@ -414,19 +393,9 @@ app.registerExtension({
                 } else {
                     cfg.enabled = isEnabled;
                 }
-                
-                // 记录特征用于 Fallback
-                cfg._pwLastPath = group._pwPath;
-                cfg._pwLastColor = group.color;
             });
-            
-            // 更新 Map，为下一次刷新做准备
-            this._cfgToGroupMap.clear();
-            for (const cfg of this.properties.groups) {
-                const g = allGroups.find(x => x._pwUniqueId === cfg.group_name);
-                if (g) this._cfgToGroupMap.set(cfg, g._pwOriginalGroup);
-            }
-            
+            const validIds = new Set(groups.map(g => g._pwUniqueId));
+            this.properties.groups = this.properties.groups.filter(c => validIds.has(c.group_name));
             let index = 0;
             for (const group of groups) {
                 const cfg = this.properties.groups.find(g => g.group_name === group._pwUniqueId);
@@ -472,6 +441,7 @@ app.registerExtension({
             }
             while (list.children[index]) list.removeChild(list.children[index]);
         };
+        
         nodeType.prototype.createGroupItem = function (cfg, group) {
             const item = document.createElement('div');
             item.className = 'gsa-item' + (cfg.enabled ? ' active' : '');
@@ -510,6 +480,7 @@ app.registerExtension({
             };
             return item;
         };
+        
         nodeType.prototype.toggleGroup = function (uniqueId, enable, opts = {}) {
             const groupInfo = this.getAllGroupsFlat().find(g => g._pwUniqueId === uniqueId);
             if (!groupInfo) return;
@@ -608,6 +579,7 @@ app.registerExtension({
                 window.dispatchEvent(new CustomEvent('group-mute-changed', { detail: { sourceId: this._gsaId } }));
             }
         };
+        
         nodeType.prototype.navigateTo = function (groupInfo) {
             if (groupInfo._pwTopSubgraphNode) {
                 app.canvas.centerOnNode(groupInfo._pwTopSubgraphNode);
@@ -616,6 +588,7 @@ app.registerExtension({
             }
             app.canvas.setDirty(true, true);
         };
+        
         nodeType.prototype.showSettings = function () {
             const dlg = document.createElement('div');
             dlg.className = 'gsa-dialog';
@@ -663,6 +636,7 @@ app.registerExtension({
                 document.addEventListener('click', closeOnOutsideClick);
             }, 100);
         };
+        
         nodeType.prototype.showLinkage = function (cfg) {
             const dlg = document.createElement('div');
             dlg.className = 'gsa-dialog';
@@ -726,6 +700,7 @@ app.registerExtension({
                 document.addEventListener('click', closeOnOutsideClick);
             }, 100);
         };
+        
         nodeType.prototype.createRuleItem = function (dialog, config, type, rule, index) {
             const item = document.createElement('div');
             item.className = 'gsa-rule';
@@ -846,6 +821,7 @@ app.registerExtension({
             };
             return item;
         };
+        
         const origOnSerialize = nodeType.prototype.onSerialize;
         nodeType.prototype.onSerialize = function (info) {
             const data = origOnSerialize?.apply?.(this, arguments);
@@ -859,6 +835,7 @@ app.registerExtension({
             info.showNavigate = this.properties.showNavigate !== false;
             return data;
         };
+        
         const origOnConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (info) {
             origOnConfigure?.apply?.(this, arguments);
@@ -870,21 +847,43 @@ app.registerExtension({
             if (info.titleKeywords !== undefined) this.properties.titleKeywords = info.titleKeywords;
             if (info.toggleRestriction !== undefined) this.properties.toggleRestriction = info.toggleRestriction;
             if (info.showNavigate !== undefined) this.properties.showNavigate = info.showNavigate;
+            
+            // 【核心修复 3】旧版本 Workflow 数据迁移逻辑
+            const migrateId = (oldId, allGroups) => {
+                if (!oldId) return oldId;
+                if (oldId.startsWith('pw_g_')) return oldId; // 已经是新格式 StableId
+                
+                let searchTitle = oldId;
+                let searchPath = '';
+                if (oldId.includes('::')) {
+                    const parts = oldId.split('::');
+                    searchTitle = parts.pop();
+                    searchPath = parts.join('::');
+                }
+                
+                // 优先精确匹配 路径 + 标题
+                let match = allGroups.find(g => g.title === searchTitle && g._pwPath === searchPath);
+                if (match) return match._pwUniqueId;
+                
+                // 兜底匹配 标题
+                match = allGroups.find(g => g.title === searchTitle);
+                if (match) return match._pwUniqueId;
+                
+                match = allGroups.find(g => g.title === oldId);
+                if (match) return match._pwUniqueId;
+
+                return oldId;
+            };
+
             if (this.properties.groups && Array.isArray(this.properties.groups)) {
                 const allGroups = this.getAllGroupsFlat();
                 for (const cfg of this.properties.groups) {
-                    if (cfg.group_name && !cfg.group_name.includes('::')) {
-                        const match = allGroups.find(g => g.title === cfg.group_name && !g._pwPath);
-                        if (match) cfg.group_name = match._pwUniqueId;
-                    }
+                    cfg.group_name = migrateId(cfg.group_name, allGroups);
                     if (cfg.linkage) {
                         for (const type of ['on_enable', 'on_disable']) {
                             if (cfg.linkage[type]) {
                                 for (const rule of cfg.linkage[type]) {
-                                    if (rule.target_group && !rule.target_group.includes('::')) {
-                                        const match = allGroups.find(g => g.title === rule.target_group && !g._pwPath);
-                                        if (match) rule.target_group = match._pwUniqueId;
-                                    }
+                                    rule.target_group = migrateId(rule.target_group, allGroups);
                                 }
                             }
                         }
@@ -893,24 +892,9 @@ app.registerExtension({
             }
             if (this.properties.groupOrder && Array.isArray(this.properties.groupOrder)) {
                 const allGroups = this.getAllGroupsFlat();
-                this.properties.groupOrder = this.properties.groupOrder.map(name => {
-                    if (name && !name.includes('::')) {
-                        const match = allGroups.find(g => g.title === name && !g._pwPath);
-                        return match ? match._pwUniqueId : name;
-                    }
-                    return name;
-                });
+                this.properties.groupOrder = this.properties.groupOrder.map(id => migrateId(id, allGroups));
             }
             
-            // 【核心新增】在加载工作流后，立刻重建内存引用 Map，确保重命名追踪不失效
-            if (!this._cfgToGroupMap) this._cfgToGroupMap = new Map();
-            this._cfgToGroupMap.clear();
-            const allGroups = this.getAllGroupsFlat();
-            for (const cfg of this.properties.groups) {
-                const g = allGroups.find(x => x._pwUniqueId === cfg.group_name);
-                if (g) this._cfgToGroupMap.set(cfg, g._pwOriginalGroup);
-            }
-
             if (this.ui) {
                 setTimeout(() => {
                     this.updateModeText();
