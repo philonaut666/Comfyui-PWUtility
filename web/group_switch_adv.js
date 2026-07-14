@@ -66,14 +66,54 @@ function changeModeOfNodes(nodeOrNodes, mode) {
     });
 }
 
+// 【核心修复】重写子图组节点获取逻辑，彻底解决引用失效问题
 function getNodesInGroupGlobal(groupInfo) {
     const group = groupInfo?._pwOriginalGroup || groupInfo;
     if (!group) return [];
-    if (groupInfo?._pwGraph && group.graph !== groupInfo._pwGraph) {
-        group.graph = groupInfo._pwGraph;
+    
+    // 1. 动态获取最新的 graph 引用，防止子图重建导致的引用失效
+    let targetGraph = group.graph;
+    if (groupInfo._pwTopSubgraphNode && groupInfo._pwTopSubgraphNode.subgraph) {
+        targetGraph = groupInfo._pwTopSubgraphNode.subgraph;
+    } else if (groupInfo._pwGraph) {
+        targetGraph = groupInfo._pwGraph;
     }
-    try { if (typeof group.recomputeInsideNodes === "function") group.recomputeInsideNodes(); } catch (e) {}
-    return Array.from(group._children || []).filter((c) => c instanceof LGraphNode);
+
+    // 强制同步 graph 引用
+    if (targetGraph && group.graph !== targetGraph) {
+        group.graph = targetGraph;
+    }
+
+    // 2. 尝试调用原生方法
+    try { 
+        if (typeof group.recomputeInsideNodes === "function") {
+            group.recomputeInsideNodes(); 
+        }
+    } catch (e) {
+        console.warn("GSA: recomputeInsideNodes failed", e);
+    }
+
+    // 3. 【兜底方案】如果原生方法失败或 _children 为空，手动通过坐标计算
+    let children = Array.from(group._children || []);
+    if (children.length === 0 && targetGraph && targetGraph.nodes) {
+        const groupBounds = group.bounding; // [x, y, width, height]
+        if (groupBounds && groupBounds.length >= 4) {
+            const gx = groupBounds[0], gy = groupBounds[1];
+            const gw = groupBounds[2], gh = groupBounds[3];
+            children = targetGraph.nodes.filter(n => {
+                if (!n.pos) return false;
+                const nx = n.pos[0], ny = n.pos[1];
+                const nw = n.size ? n.size[0] : 100;
+                const nh = n.size ? n.size[1] : 50;
+                // 判断节点中心点是否在组内
+                const centerX = nx + nw / 2;
+                const centerY = ny + nh / 2;
+                return centerX >= gx && centerX <= gx + gw && centerY >= gy && centerY <= gy + gh;
+            });
+        }
+    }
+
+    return children.filter((c) => c instanceof LGraphNode);
 }
 
 class GroupSwitchService {
@@ -560,28 +600,26 @@ app.registerExtension({
             const mode = enable ? 0 : (switchMode === 'bypass' ? 4 : 2);
             changeModeOfNodes(nodes, mode);
             
+            // 【核心修复】强制外层子图节点重绘，确保 UI 立即更新
+            if (groupInfo._pwTopSubgraphNode && groupInfo._pwTopSubgraphNode.setDirtyCanvas) {
+                groupInfo._pwTopSubgraphNode.setDirtyCanvas(true, true);
+            }
+
             const config = this.properties.groups.find(g => g.group_name === uniqueId);
             if (config) config.enabled = enable;
 
-            // 【核心修改】处理 Always One 在全部关闭时的“保底”开启逻辑
             if (!enable && restriction === 'always_one' && !opts.skipRestriction) {
                 const filteredGroups = this.filterGroups(this.getAllGroupsFlat());
                 const filteredIds = filteredGroups.map(g => g._pwUniqueId);
                 const anyEnabled = this.properties.groups.some(g => g.enabled && g.group_name !== uniqueId && filteredIds.includes(g.group_name));
                 if (!anyEnabled && filteredGroups.length > 0) {
-                    // 优先寻找用户设置的 defaultGroup
                     let targetGroup = filteredGroups.find(g => g._pwUniqueId === this.properties.defaultGroup);
-                    
-                    // 如果未设置，或设置的组不在当前过滤列表中，则寻找第一个非当前关闭的组
                     if (!targetGroup) {
                         targetGroup = filteredGroups.find(g => g._pwUniqueId !== uniqueId);
                     }
-                    
-                    // 极端情况：列表中只有一个组，且正在关闭它，则只能保底开启它自己
                     if (!targetGroup) {
                         targetGroup = filteredGroups[0];
                     }
-                    
                     if (targetGroup) {
                         this.toggleGroup(targetGroup._pwUniqueId, true, { skipRestriction: true, skipUIUpdate: true });
                     }
@@ -644,6 +682,12 @@ app.registerExtension({
                             else if (state.action === 'mute') targetMode = 2;
                             else if (state.action === 'bypass') targetMode = 4;
                             changeModeOfNodes(targetNodes, targetMode);
+                            
+                            // 联动触发时同样需要强制外层子图节点重绘
+                            if (targetGroupInfo._pwTopSubgraphNode && targetGroupInfo._pwTopSubgraphNode.setDirtyCanvas) {
+                                targetGroupInfo._pwTopSubgraphNode.setDirtyCanvas(true, true);
+                            }
+
                             for (const node of allAdvNodesGlobal) {
                                 const cfg = node.properties.groups.find(g => g.group_name === name);
                                 if (cfg) cfg.enabled = (targetMode === 0);
@@ -686,7 +730,6 @@ app.registerExtension({
             const colorKeys = { 'red': 'colorRed', 'brown': 'colorBrown', 'green': 'colorGreen', 'blue': 'colorBlue', 'pale blue': 'colorPaleBlue', 'cyan': 'colorCyan', 'purple': 'colorPurple', 'yellow': 'colorYellow', 'black': 'colorBlack' };
             const colorOpts = `<option value="">${t('allColors')}</option>` + colors.map(c => `<option value="${c}" ${this.properties.selectedColorFilter === c ? 'selected' : ''}>${t(colorKeys[c]) || c}</option>`).join('');
             
-            // 生成 Default Group 选项
             const filteredGroups = this.filterGroups(this.getAllGroupsFlat());
             const defaultGroupOpts = `<option value="">${t('defaultGroupNone')}</option>` + filteredGroups.map(g => 
                 `<option value="${g._pwUniqueId}" ${this.properties.defaultGroup === g._pwUniqueId ? 'selected' : ''}>${g._pwDisplayName}</option>`
@@ -721,7 +764,6 @@ app.registerExtension({
                 dlg.querySelector('#s-title-wrap').style.display = e.target.value === 'title' ? 'block' : 'none'; 
             };
             
-            // 监听 Toggle Restriction 变化，动态显示/隐藏 Default Group
             dlg.querySelector('#s-rest').onchange = (e) => {
                 const isAlwaysOne = e.target.value === 'always_one';
                 dlg.querySelector('#s-default-group-label').style.display = isAlwaysOne ? 'block' : 'none';
