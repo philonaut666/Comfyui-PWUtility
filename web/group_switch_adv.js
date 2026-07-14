@@ -4,30 +4,30 @@ const NODE_NAME = "GroupSwitchADV";
 
 const i18n = {
     zh: {
-        title: "组开关管理器", allColors: "所有", refresh: "刷新", settings: "设置", cancel: "取消", confirm: "确定",
-        enable: "开启", disable: "关闭", active: "Active", bypass: "Bypass", mute: "Mute",
-        modeLabel: "运行模式", modeDisable: "Mute", modeBypass: "Bypass",
-        colorRed: "红色", colorBrown: "棕色", colorGreen: "绿色", colorBlue: "蓝色", colorPaleBlue: "浅蓝色",
-        colorCyan: "青色", colorPurple: "紫色", colorYellow: "黄色", colorBlack: "黑色",
-        matchMode: "匹配模式", matchColors: "按颜色", matchTitle: "按标题", matchNone: "无(显示全部)",
-        colorFilter: "颜色过滤", matchTitleLabel: "标题关键词(逗号分隔)", toggleRestriction: "切换限制",
-        restrictionUnlimited: "无限制", restrictionAlwaysOne: "始终仅开启一个", navigateIndicator: "定位按钮",
-        show: "显示", hide: "隐藏", linkageConfig: "联动配置：", whenGroupOn: "组开启时", whenGroupOff: "组关闭时",
-        searchGroup: "搜索组...",
-        helpTitle: "Group Switch ADV", helpDesc: "极简版组管理器。支持跨节点全局联动、拖拽排序、条件过滤及子图组控制。"
+        title: "组开关管理器 ", allColors: "所有 ", refresh: "刷新 ", settings: "设置 ", cancel: "取消 ", confirm: "确定 ",
+        enable: "开启 ", disable: "关闭 ", active: "Active ", bypass: "Bypass ", mute: "Mute ",
+        modeLabel: "运行模式 ", modeDisable: "Mute ", modeBypass: "Bypass ",
+        colorRed: "红色 ", colorBrown: "棕色 ", colorGreen: "绿色 ", colorBlue: "蓝色 ", colorPaleBlue: "浅蓝色 ",
+        colorCyan: "青色 ", colorPurple: "紫色 ", colorYellow: "黄色 ", colorBlack: "黑色 ",
+        matchMode: "匹配模式 ", matchColors: "按颜色 ", matchTitle: "按标题 ", matchNone: "无(显示全部) ",
+        colorFilter: "颜色过滤 ", matchTitleLabel: "标题关键词(逗号分隔) ", toggleRestriction: "切换限制 ",
+        restrictionUnlimited: "无限制 ", restrictionAlwaysOne: "始终仅开启一个 ", navigateIndicator: "定位按钮 ",
+        show: "显示 ", hide: "隐藏 ", linkageConfig: "联动配置： ", whenGroupOn: "组开启时 ", whenGroupOff: "组关闭时 ",
+        searchGroup: "搜索组... ",
+        helpTitle: "Group Switch ADV ", helpDesc: "极简版组管理器。支持跨节点全局联动、拖拽排序、条件过滤及子图组控制。 "
     },
     en: {
-        title: "Group Switch ADV", allColors: "All", refresh: "Refresh", settings: "Settings", cancel: "Cancel", confirm: "Confirm",
-        enable: "Enable", disable: "Disable", active: "Active", bypass: "Bypass", mute: "Mute",
-        modeLabel: "Execution Mode", modeDisable: "Mute", modeBypass: "Bypass",
-        colorRed: "Red", colorBrown: "Brown", colorGreen: "Green", colorBlue: "Blue", colorPaleBlue: "Pale Blue",
-        colorCyan: "Cyan", colorPurple: "Purple", colorYellow: "Yellow", colorBlack: "Black",
-        matchMode: "Match Mode", matchColors: "By Color", matchTitle: "By Title", matchNone: "None(Show All)",
-        colorFilter: "Color Filter", matchTitleLabel: "Title Keywords(comma separated)", toggleRestriction: "Toggle Restriction",
-        restrictionUnlimited: "Unlimited", restrictionAlwaysOne: "Always One Active", navigateIndicator: "Navigate Button",
-        show: "Show", hide: "Hide", linkageConfig: "Linkage Config: ", whenGroupOn: "When Group ON", whenGroupOff: "When Group OFF",
-        searchGroup: "Search group...",
-        helpTitle: "Group Switch ADV", helpDesc: "Minimalist Group Manager. Supports global cross-node linkage, drag-sort, filtering, and subgraph group control."
+        title: "Group Switch ADV ", allColors: "All ", refresh: "Refresh ", settings: "Settings ", cancel: "Cancel ", confirm: "Confirm ",
+        enable: "Enable ", disable: "Disable ", active: "Active ", bypass: "Bypass ", mute: "Mute ",
+        modeLabel: "Execution Mode ", modeDisable: "Mute ", modeBypass: "Bypass ",
+        colorRed: "Red ", colorBrown: "Brown ", colorGreen: "Green ", colorBlue: "Blue ", colorPaleBlue: "Pale Blue ",
+        colorCyan: "Cyan ", colorPurple: "Purple ", colorYellow: "Yellow ", colorBlack: "Black ",
+        matchMode: "Match Mode ", matchColors: "By Color ", matchTitle: "By Title ", matchNone: "None(Show All) ",
+        colorFilter: "Color Filter ", matchTitleLabel: "Title Keywords(comma separated) ", toggleRestriction: "Toggle Restriction ",
+        restrictionUnlimited: "Unlimited ", restrictionAlwaysOne: "Always One Active ", navigateIndicator: "Navigate Button ",
+        show: "Show ", hide: "Hide ", linkageConfig: "Linkage Config:  ", whenGroupOn: "When Group ON ", whenGroupOff: "When Group OFF ",
+        searchGroup: "Search group... ",
+        helpTitle: "Group Switch ADV ", helpDesc: "Minimalist Group Manager. Supports global cross-node linkage, drag-sort, filtering, and subgraph group control. "
     }
 };
 
@@ -36,7 +36,9 @@ function getLocale() {
     return comfyLocale === 'zh-CN' || comfyLocale === 'zh' ? 'zh' : 'en';
 }
 
-function t(key) { return i18n[getLocale()][key] || i18n['en'][key] || key; }
+function t(key) {
+    return i18n[getLocale()][key] || i18n['en'][key] || key;
+}
 
 function reduceNodesDepthFirst(nodeOrNodes, reduceFn, reduceTo) {
     const nodes = Array.isArray(nodeOrNodes) ? nodeOrNodes : [nodeOrNodes];
@@ -45,7 +47,6 @@ function reduceNodesDepthFirst(nodeOrNodes, reduceFn, reduceTo) {
         const { node } = stack.pop();
         const result = reduceFn(node, reduceTo);
         if (result !== undefined && result !== reduceTo) reduceTo = result;
-        // 【修复】使用 node.subgraph 检测子图节点
         if (node.subgraph && node.subgraph.nodes) {
             const children = node.subgraph.nodes;
             for (let i = children.length - 1; i >= 0; i--) stack.push({ node: children[i] });
@@ -55,10 +56,9 @@ function reduceNodesDepthFirst(nodeOrNodes, reduceFn, reduceTo) {
 }
 
 function changeModeOfNodes(nodeOrNodes, mode) {
-    reduceNodesDepthFirst(nodeOrNodes, (n) => { 
+    reduceNodesDepthFirst(nodeOrNodes, (n) => {
         if (n.mode !== mode) {
             n.mode = mode;
-            // 确保节点状态变更被画布感知
             if (n.setDirtyCanvas) n.setDirtyCanvas(true, true);
         }
     });
@@ -67,13 +67,12 @@ function changeModeOfNodes(nodeOrNodes, mode) {
 function getNodesInGroupGlobal(groupInfo) {
     const group = groupInfo?._pwOriginalGroup || groupInfo;
     if (!group) return [];
-    
-    // 【修复】确保 group.graph 指向正确的子图，否则 recomputeInsideNodes 会失败
     if (groupInfo?._pwGraph && group.graph !== groupInfo._pwGraph) {
         group.graph = groupInfo._pwGraph;
     }
-    
-    try { if (typeof group.recomputeInsideNodes === "function") group.recomputeInsideNodes(); } catch (e) {}
+    try {
+        if (typeof group.recomputeInsideNodes === "function") group.recomputeInsideNodes();
+    } catch (e) {}
     return Array.from(group._children || []).filter((c) => c instanceof LGraphNode);
 }
 
@@ -92,7 +91,6 @@ class GroupSwitchService {
                     count += (graph._groups || []).filter(g => g && g.title).length;
                     if (graph.nodes) {
                         for (const node of graph.nodes) {
-                            // 【修复】使用 node.subgraph 检测子图节点
                             if (node.subgraph && node.subgraph._groups !== undefined) {
                                 countGroups(node.subgraph);
                             }
@@ -107,21 +105,25 @@ class GroupSwitchService {
             }
         }, 2000);
     }
+
     addNode(node) {
         this.nodes.push(node);
         this.scheduleRun(300);
     }
+
     removeNode(node) {
         const i = this.nodes.indexOf(node);
         if (i > -1) this.nodes.splice(i, 1);
         if (!this.nodes.length) this.clearScheduledRun();
     }
+
     run() {
         if (!this.runScheduledForMs) return;
         for (const node of this.nodes) node.refreshWidgets();
         this.clearScheduledRun();
         this.scheduleRun(300);
     }
+
     scheduleRun(ms = 300) {
         if (this.runScheduledForMs && ms < this.runScheduledForMs) this.clearScheduledRun();
         if (!this.runScheduledForMs && this.nodes.length) {
@@ -131,6 +133,7 @@ class GroupSwitchService {
             }, ms);
         }
     }
+
     clearScheduledRun() {
         if (this.runScheduleTimeout) clearTimeout(this.runScheduleTimeout);
         if (this.runScheduleAnimation) cancelAnimationFrame(this.runScheduleAnimation);
@@ -209,95 +212,17 @@ app.registerExtension({
                     .gsa-dialog-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; padding-top: 14px; border-top: 1px solid #e9ecef; }
                     .gsa-btn-primary { background: #4caf50 !important; border-color: #388e3c !important; color: #fff !important; }
                     .gsa-btn-primary:hover { background: #43a047 !important; border-color: #2e7d32 !important; }
-                    .gsa-rule { 
-                        display: flex; 
-                        gap: 5px; 
-                        margin: 0; 
-                        align-items: center;
-                    }
-                    .gsa-rule .gsa-search-input, 
-                    .gsa-rule select.r-action, 
-                    .gsa-rule button.r-del, 
-                    .gsa-rule button.r-mirror-add {
-                        height: 26px !important;
-                        box-sizing: border-box !important;
-                        margin: 0 !important;
-                        border-radius: 3px !important;
-                        border: 1px solid #ced4da !important;
-                        font-family: sans-serif !important;
-                        font-size: 11px !important;
-                        outline: none !important;
-                        vertical-align: middle !important;
-                    }
-                    .gsa-rule .gsa-search-input {
-                        width: 100%;
-                        padding: 0 8px !important;
-                        background: #fff !important;
-                        color: #212529 !important;
-                        line-height: 24px !important;
-                        appearance: none !important;
-                        -webkit-appearance: none !important;
-                    }
-                    .gsa-rule .gsa-search-input:focus { 
-                        border-color: #80bdff !important; 
-                        box-shadow: 0 0 0 2px rgba(0,123,255,.25) !important; 
-                    }
-                    .gsa-rule select.r-action {
-                        flex: 1;
-                        padding: 0 28px 0 8px !important;
-                        background-color: #fff !important;
-                        background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") !important;
-                        background-repeat: no-repeat !important;
-                        background-position: right 8px center !important;
-                        background-size: 12px 12px !important;
-                        color: #212529 !important;
-                        line-height: 24px !important;
-                        appearance: none !important;
-                        -webkit-appearance: none !important;
-                    }
-                    .gsa-rule button.r-del, 
-                    .gsa-rule button.r-mirror-add {
-                        width: 26px !important;
-                        padding: 0 !important;
-                        display: inline-flex !important;
-                        align-items: center !important;
-                        justify-content: center !important;
-                        line-height: 1 !important;
-                        flex-shrink: 0 !important;
-                        cursor: pointer !important;
-                    }
-                    .gsa-rule button.r-del {
-                        background: #fff !important;
-                        color: #dc3545 !important;
-                        font-size: 16px !important;
-                        font-weight: bold !important;
-                    }
-                    .gsa-rule button.r-del:hover {
-                        background: #f8d7da !important;
-                        border-color: #f5c2c7 !important;
-                    }
-                    .gsa-rule button.r-mirror-add {
-                        background: #f8f9fa !important;
-                        color: #495057 !important;
-                        font-size: 18px !important;
-                        font-weight: bold !important;
-                        transition: all 0.15s ease !important;
-                    }
-                    .gsa-rule button.r-mirror-add:hover:not(.added) { 
-                        background: #4caf50 !important; 
-                        color: white !important; 
-                        border-color: #388e3c !important; 
-                    }
-                    .gsa-rule button.r-mirror-add.added { 
-                        background: #e9ecef !important; 
-                        color: #4caf50 !important; 
-                        border-color: #e9ecef !important; 
-                        cursor: default !important; 
-                        pointer-events: none !important;
-                        font-size: 24px !important;
-                        font-weight: 900 !important;
-                        line-height: 22px !important;
-                    }
+                    .gsa-rule { display: flex; gap: 5px; margin: 0; align-items: center; }
+                    .gsa-rule .gsa-search-input, .gsa-rule select.r-action, .gsa-rule button.r-del, .gsa-rule button.r-mirror-add { height: 26px !important; box-sizing: border-box !important; margin: 0 !important; border-radius: 3px !important; border: 1px solid #ced4da !important; font-family: sans-serif !important; font-size: 11px !important; outline: none !important; vertical-align: middle !important; }
+                    .gsa-rule .gsa-search-input { width: 100%; padding: 0 8px !important; background: #fff !important; color: #212529 !important; line-height: 24px !important; appearance: none !important; -webkit-appearance: none !important; }
+                    .gsa-rule .gsa-search-input:focus { border-color: #80bdff !important; box-shadow: 0 0 0 2px rgba(0,123,255,.25) !important; }
+                    .gsa-rule select.r-action { flex: 1; padding: 0 28px 0 8px !important; background-color: #fff !important; background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") !important; background-repeat: no-repeat !important; background-position: right 8px center !important; background-size: 12px 12px !important; color: #212529 !important; line-height: 24px !important; appearance: none !important; -webkit-appearance: none !important; }
+                    .gsa-rule button.r-del, .gsa-rule button.r-mirror-add { width: 26px !important; padding: 0 !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; line-height: 1 !important; flex-shrink: 0 !important; cursor: pointer !important; }
+                    .gsa-rule button.r-del { background: #fff !important; color: #dc3545 !important; font-size: 16px !important; font-weight: bold !important; }
+                    .gsa-rule button.r-del:hover { background: #f8d7da !important; border-color: #f5c2c7 !important; }
+                    .gsa-rule button.r-mirror-add { background: #f8f9fa !important; color: #495057 !important; font-size: 18px !important; font-weight: bold !important; transition: all 0.15s ease !important; }
+                    .gsa-rule button.r-mirror-add:hover:not(.added) { background: #4caf50 !important; color: white !important; border-color: #388e3c !important; }
+                    .gsa-rule button.r-mirror-add.added { background: #e9ecef !important; color: #4caf50 !important; border-color: #e9ecef !important; cursor: default !important; pointer-events: none !important; font-size: 24px !important; font-weight: 900 !important; line-height: 22px !important; }
                     .gsa-search-dropdown { position: relative; flex: 2; min-width: 140px; }
                     .gsa-search-menu { display: none; position: absolute; top: 100%; left: 0; right: 0; background: #fff; border: 1px solid #ced4da; border-top: none; border-radius: 0 0 3px 3px; max-height: 160px; overflow-y: auto; z-index: 10001; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
                     .gsa-search-dropdown.open .gsa-search-menu { display: block; }
@@ -308,6 +233,7 @@ app.registerExtension({
                 `;
                 document.head.appendChild(style);
             }
+
             const container = document.createElement('div');
             container.className = 'gsa-container';
             container.innerHTML = `
@@ -354,7 +280,6 @@ app.registerExtension({
                 }
                 if (graph.nodes) {
                     for (const node of graph.nodes) {
-                        // 【修复】使用 node.subgraph 检测子图节点
                         if (node.subgraph && node.subgraph._groups !== undefined) {
                             const subName = node.title || node.type || 'Subgraph';
                             const newTopNode = topSubgraphNode || node;
@@ -416,10 +341,58 @@ app.registerExtension({
         nodeType.prototype.refreshWidgets = function () {
             const list = this.ui?.querySelector('#gsa-list');
             if (!list) return;
-            let groups = this.getAllGroupsFlat();
-            groups = this.filterGroups(groups);
-            groups = this.sortGroups(groups);
+            
+            let allGroups = this.getAllGroupsFlat();
+            
+            // ================= 新增：重命名继承逻辑 =================
+            const currentIds = new Set(allGroups.map(g => g._pwUniqueId));
+            const savedIds = new Set(this.properties.groups.map(c => c.group_name));
+            
+            const orphanConfigs = this.properties.groups.filter(c => !currentIds.has(c.group_name));
+            const orphanGroups = allGroups.filter(g => !savedIds.has(g._pwUniqueId));
+            
+            if (orphanConfigs.length > 0 && orphanGroups.length > 0) {
+                const newFeatures = new Map();
+                for (const g of orphanGroups) {
+                    const nodes = getNodesInGroupGlobal(g);
+                    const nodeIds = nodes.map(n => n.id).sort().join(',');
+                    newFeatures.set(g._pwUniqueId, {
+                        path: g._pwPath,
+                        nodeIds: nodeIds,
+                        color: g.color
+                    });
+                }
+                
+                const matchedNewIds = new Set();
+                
+                for (const oldCfg of orphanConfigs) {
+                    if (!oldCfg._pwLastNodeIds) continue; 
+                    
+                    let matchedNewGroup = null;
+                    for (const newG of orphanGroups) {
+                        if (matchedNewIds.has(newG._pwUniqueId)) continue;
+                        const feat = newFeatures.get(newG._pwUniqueId);
+                        if (feat && feat.path === oldCfg._pwLastPath && feat.nodeIds === oldCfg._pwLastNodeIds && feat.color === oldCfg._pwLastColor) {
+                            matchedNewGroup = newG;
+                            break;
+                        }
+                    }
+                    
+                    if (matchedNewGroup) {
+                        oldCfg.group_name = matchedNewGroup._pwUniqueId;
+                        const feat = newFeatures.get(matchedNewGroup._pwUniqueId);
+                        oldCfg._pwLastNodeIds = feat.nodeIds;
+                        oldCfg._pwLastPath = feat.path;
+                        oldCfg._pwLastColor = feat.color;
+                        matchedNewIds.add(matchedNewGroup._pwUniqueId);
+                    }
+                }
+            }
+            // =======================================================
 
+            let groups = this.filterGroups(allGroups);
+            groups = this.sortGroups(groups);
+            
             groups.forEach(group => {
                 let cfg = this.properties.groups.find(g => g.group_name === group._pwUniqueId);
                 const isEnabled = this.isGroupEnabled(group);
@@ -429,11 +402,18 @@ app.registerExtension({
                 } else {
                     cfg.enabled = isEnabled;
                 }
+                
+                // 更新特征记录，用于未来的重命名匹配
+                const nodes = getNodesInGroupGlobal(group);
+                cfg._pwLastNodeIds = nodes.map(n => n.id).sort().join(',');
+                cfg._pwLastPath = group._pwPath;
+                cfg._pwLastColor = group.color;
             });
-
-            const validIds = new Set(groups.map(g => g._pwUniqueId));
+            
+            // 【修复】使用 allGroups 而不是 groups，防止过滤时丢失被隐藏组的配置
+            const validIds = new Set(allGroups.map(g => g._pwUniqueId));
             this.properties.groups = this.properties.groups.filter(c => validIds.has(c.group_name));
-
+            
             let index = 0;
             for (const group of groups) {
                 const cfg = this.properties.groups.find(g => g.group_name === group._pwUniqueId);
@@ -524,7 +504,6 @@ app.registerExtension({
             if (!groupInfo) return;
             const nodes = getNodesInGroupGlobal(groupInfo);
             if (nodes.length === 0) return;
-
             if (enable && this.properties.toggleRestriction === 'always_one' && !opts.skipAlwaysOne) {
                 const filteredIds = this.filterGroups(this.getAllGroupsFlat()).map(g => g._pwUniqueId);
                 const enabledOthers = this.properties.groups.filter(g => g.enabled && g.group_name !== uniqueId && filteredIds.includes(g.group_name));
@@ -532,14 +511,11 @@ app.registerExtension({
                     this.toggleGroup(g.group_name, false, { skipAlwaysOne: true, skipUIUpdate: true });
                 });
             }
-
             const switchMode = this.properties.switchMode || 'bypass';
             const mode = enable ? 0 : (switchMode === 'bypass' ? 4 : 2);
             changeModeOfNodes(nodes, mode);
-
             const config = this.properties.groups.find(g => g.group_name === uniqueId);
             if (config) config.enabled = enable;
-
             if (!opts.skipLinkage) {
                 const collectAdvNodes = (graph) => {
                     let result = [];
@@ -548,7 +524,6 @@ app.registerExtension({
                         if (node.type === "GroupSwitchADV" || node.comfyClass === "GroupSwitchADV") {
                             result.push(node);
                         }
-                        // 【修复】使用 node.subgraph 检测子图节点
                         if (node.subgraph && node.subgraph.nodes) {
                             result = result.concat(collectAdvNodes(node.subgraph));
                         }
@@ -556,7 +531,6 @@ app.registerExtension({
                     return result;
                 };
                 const allAdvNodesGlobal = collectAdvNodes(app.graph);
-
                 const globalRules = {};
                 for (const node of allAdvNodesGlobal) {
                     if (!node.properties || !node.properties.groups) continue;
@@ -606,7 +580,6 @@ app.registerExtension({
                     }
                 }
             }
-
             if (!opts.skipUIUpdate) {
                 const refreshAll = (graph) => {
                     if (!graph || !graph.nodes) return;
@@ -614,7 +587,6 @@ app.registerExtension({
                         if (node.type === "GroupSwitchADV" || node.comfyClass === "GroupSwitchADV") {
                             node.refreshWidgets?.();
                         }
-                        // 【修复】使用 node.subgraph 检测子图节点
                         if (node.subgraph && node.subgraph.nodes) {
                             refreshAll(node.subgraph);
                         }
@@ -753,7 +725,6 @@ app.registerExtension({
             const allGroups = this.getAllGroupsFlat()
                 .filter(g => g._pwUniqueId !== config.group_name)
                 .sort((a, b) => a._pwDisplayName.localeCompare(b._pwDisplayName));
-
             item.innerHTML = `
                 <button class="r-mirror-add" title="Add reverse rule">+</button>
                 <div class="gsa-search-dropdown">
@@ -894,7 +865,6 @@ app.registerExtension({
             if (info.titleKeywords !== undefined) this.properties.titleKeywords = info.titleKeywords;
             if (info.toggleRestriction !== undefined) this.properties.toggleRestriction = info.toggleRestriction;
             if (info.showNavigate !== undefined) this.properties.showNavigate = info.showNavigate;
-
             if (this.properties.groups && Array.isArray(this.properties.groups)) {
                 const allGroups = this.getAllGroupsFlat();
                 for (const cfg of this.properties.groups) {
@@ -914,6 +884,17 @@ app.registerExtension({
                             }
                         }
                     }
+                    
+                    // 【新增】初始化特征记录，以支持旧配置的重命名继承
+                    if (!cfg._pwLastNodeIds) {
+                        const group = allGroups.find(g => g._pwUniqueId === cfg.group_name);
+                        if (group) {
+                            const nodes = getNodesInGroupGlobal(group);
+                            cfg._pwLastNodeIds = nodes.map(n => n.id).sort().join(',');
+                            cfg._pwLastPath = group._pwPath;
+                            cfg._pwLastColor = group.color;
+                        }
+                    }
                 }
             }
             if (this.properties.groupOrder && Array.isArray(this.properties.groupOrder)) {
@@ -926,7 +907,6 @@ app.registerExtension({
                     return name;
                 });
             }
-
             if (this.ui) {
                 setTimeout(() => {
                     this.updateModeText();
