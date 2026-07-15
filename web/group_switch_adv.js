@@ -66,12 +66,10 @@ function changeModeOfNodes(nodeOrNodes, mode) {
     });
 }
 
-// 【核心修复】重写子图组节点获取逻辑，彻底解决引用失效问题
 function getNodesInGroupGlobal(groupInfo) {
     const group = groupInfo?._pwOriginalGroup || groupInfo;
     if (!group) return [];
     
-    // 1. 动态获取最新的 graph 引用，防止子图重建导致的引用失效
     let targetGraph = group.graph;
     if (groupInfo._pwTopSubgraphNode && groupInfo._pwTopSubgraphNode.subgraph) {
         targetGraph = groupInfo._pwTopSubgraphNode.subgraph;
@@ -79,24 +77,19 @@ function getNodesInGroupGlobal(groupInfo) {
         targetGraph = groupInfo._pwGraph;
     }
 
-    // 强制同步 graph 引用
     if (targetGraph && group.graph !== targetGraph) {
         group.graph = targetGraph;
     }
 
-    // 2. 尝试调用原生方法
     try { 
         if (typeof group.recomputeInsideNodes === "function") {
             group.recomputeInsideNodes(); 
         }
-    } catch (e) {
-        console.warn("GSA: recomputeInsideNodes failed", e);
-    }
+    } catch (e) {}
 
-    // 3. 【兜底方案】如果原生方法失败或 _children 为空，手动通过坐标计算
     let children = Array.from(group._children || []);
     if (children.length === 0 && targetGraph && targetGraph.nodes) {
-        const groupBounds = group.bounding; // [x, y, width, height]
+        const groupBounds = group.bounding;
         if (groupBounds && groupBounds.length >= 4) {
             const gx = groupBounds[0], gy = groupBounds[1];
             const gw = groupBounds[2], gh = groupBounds[3];
@@ -105,7 +98,6 @@ function getNodesInGroupGlobal(groupInfo) {
                 const nx = n.pos[0], ny = n.pos[1];
                 const nw = n.size ? n.size[0] : 100;
                 const nh = n.size ? n.size[1] : 50;
-                // 判断节点中心点是否在组内
                 const centerX = nx + nw / 2;
                 const centerY = ny + nh / 2;
                 return centerX >= gx && centerX <= gx + gw && centerY >= gy && centerY <= gy + gh;
@@ -600,7 +592,6 @@ app.registerExtension({
             const mode = enable ? 0 : (switchMode === 'bypass' ? 4 : 2);
             changeModeOfNodes(nodes, mode);
             
-            // 【核心修复】强制外层子图节点重绘，确保 UI 立即更新
             if (groupInfo._pwTopSubgraphNode && groupInfo._pwTopSubgraphNode.setDirtyCanvas) {
                 groupInfo._pwTopSubgraphNode.setDirtyCanvas(true, true);
             }
@@ -672,6 +663,40 @@ app.registerExtension({
                     }
                 }
                 const allGroupsFlat = this.getAllGroupsFlat();
+                
+                // 【核心修复 1】处理 Linkage 触发开启时的互斥限制 (Max One / Always One)
+                for (const [name, state] of Object.entries(finalStates)) {
+                    if (state.action === 'active') {
+                        for (const advNode of allAdvNodesGlobal) {
+                            const restriction = advNode.properties.toggleRestriction;
+                            const isRestricted = restriction === 'always_one' || restriction === 'max_one';
+                            if (isRestricted) {
+                                const cfg = advNode.properties.groups.find(g => g.group_name === name);
+                                if (cfg) {
+                                    const filteredIds = advNode.filterGroups(advNode.getAllGroupsFlat()).map(g => g._pwUniqueId);
+                                    const enabledOthers = advNode.properties.groups.filter(g => g.enabled && g.group_name !== name && filteredIds.includes(g.group_name));
+                                    for (const otherCfg of enabledOthers) {
+                                        const otherGroupInfo = allGroupsFlat.find(g => g._pwUniqueId === otherCfg.group_name);
+                                        if (otherGroupInfo) {
+                                            const otherNodes = getNodesInGroupGlobal(otherGroupInfo);
+                                            const otherMode = (advNode.properties.switchMode === 'bypass') ? 4 : 2;
+                                            changeModeOfNodes(otherNodes, otherMode);
+                                            if (otherGroupInfo._pwTopSubgraphNode && otherGroupInfo._pwTopSubgraphNode.setDirtyCanvas) {
+                                                otherGroupInfo._pwTopSubgraphNode.setDirtyCanvas(true, true);
+                                            }
+                                            for (const syncNode of allAdvNodesGlobal) {
+                                                const syncCfg = syncNode.properties.groups.find(g => g.group_name === otherCfg.group_name);
+                                                if (syncCfg) syncCfg.enabled = false;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 应用 finalStates 到实际的节点 mode
                 for (const [name, state] of Object.entries(finalStates)) {
                     const targetGroupInfo = allGroupsFlat.find(g => g._pwUniqueId === name);
                     if (targetGroupInfo) {
@@ -683,14 +708,41 @@ app.registerExtension({
                             else if (state.action === 'bypass') targetMode = 4;
                             changeModeOfNodes(targetNodes, targetMode);
                             
-                            // 联动触发时同样需要强制外层子图节点重绘
                             if (targetGroupInfo._pwTopSubgraphNode && targetGroupInfo._pwTopSubgraphNode.setDirtyCanvas) {
                                 targetGroupInfo._pwTopSubgraphNode.setDirtyCanvas(true, true);
                             }
 
-                            for (const node of allAdvNodesGlobal) {
-                                const cfg = node.properties.groups.find(g => g.group_name === name);
-                                if (cfg) cfg.enabled = (targetMode === 0);
+                            const isEnabling = (state.action === 'active');
+                            for (const advNode of allAdvNodesGlobal) {
+                                const cfg = advNode.properties.groups.find(g => g.group_name === name);
+                                if (cfg) cfg.enabled = isEnabling;
+                            }
+                        }
+                    }
+                }
+                
+                // 【核心修复 2】处理 Linkage 触发关闭后的 Always One 保底逻辑
+                for (const advNode of allAdvNodesGlobal) {
+                    if (advNode.properties.toggleRestriction === 'always_one') {
+                        const filteredGroups = advNode.filterGroups(advNode.getAllGroupsFlat());
+                        const filteredIds = filteredGroups.map(g => g._pwUniqueId);
+                        const anyEnabled = advNode.properties.groups.some(g => g.enabled && filteredIds.includes(g.group_name));
+                        if (!anyEnabled && filteredGroups.length > 0) {
+                            let targetGroup = filteredGroups.find(g => g._pwUniqueId === advNode.properties.defaultGroup);
+                            if (!targetGroup) targetGroup = filteredGroups.find(g => g._pwUniqueId !== uniqueId);
+                            if (!targetGroup) targetGroup = filteredGroups[0];
+                            if (targetGroup) {
+                                const targetNodes = getNodesInGroupGlobal(targetGroup);
+                                if (targetNodes.length > 0) {
+                                    changeModeOfNodes(targetNodes, 0);
+                                    if (targetGroup._pwTopSubgraphNode && targetGroup._pwTopSubgraphNode.setDirtyCanvas) {
+                                        targetGroup._pwTopSubgraphNode.setDirtyCanvas(true, true);
+                                    }
+                                    for (const syncNode of allAdvNodesGlobal) {
+                                        const cfg = syncNode.properties.groups.find(g => g.group_name === targetGroup._pwUniqueId);
+                                        if (cfg) cfg.enabled = true;
+                                    }
+                                }
                             }
                         }
                     }
