@@ -11,6 +11,20 @@ from comfy.utils import common_upscale
 VAE_STRIDE = (4, 8, 8)
 PATCH_SIZE = (1, 2, 2)
 
+def parse_selection_and_get_item(selection_json_str: str, index: int, expected_type: str = None):
+    try:
+        selection_list = json.loads(selection_json_str)
+        if not isinstance(selection_list, list) or not (0 <= index < len(selection_list)):
+            return None
+
+        item = selection_list[index]
+        if expected_type is None or item.get("type") == expected_type:
+            return item
+        else:
+            return None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
 def extract_prompts_and_seed(metadata):
     positive_prompts, negative_prompts = [], []
     seed = 0
@@ -94,6 +108,7 @@ def extract_prompts_and_seed(metadata):
                             return True
             return False
 
+        # Extract seed from KSampler nodes
         for node in workflow['nodes']:
             node_type = node.get('type', '')
             if 'KSampler' in node_type:
@@ -243,61 +258,18 @@ class LMMSelectImagePW:
             "required": {
                 "paths": ("LMM_ALL_PATHS",),
                 "index": ("INT", {"default": 0, "min": 0, "step": 1}),
-                "批量": ("BOOLEAN", {"default": False}),
             },
         }
 
     RETURN_TYPES = ("IMAGE", "INT", "INT", "STRING", "STRING", "INT",)
-    RETURN_NAMES = ("image_list", "width", "height", "positive_prompt", "negative_prompt", "seed",)
-    OUTPUT_IS_LIST = (True, True, True, True, True, True)
+    RETURN_NAMES = ("image", "width", "height", "positive_prompt", "negative_prompt", "seed",)
     FUNCTION = "get_original_image"
     CATEGORY = "🔮PWUtility/Local Media"
 
-    def get_original_image(self, paths, index, 批量):
-        try:
-            selection_list = json.loads(paths)
-            if not isinstance(selection_list, list):
-                selection_list = []
-        except (json.JSONDecodeError, TypeError):
-            selection_list = []
-
-        image_items = [item for item in selection_list if item.get("type") == "image"]
-
-        if not 批量:
-            # 单张模式：返回长度为 1 的列表，ComfyUI 会自动为普通节点解包
-            if not (0 <= index < len(image_items)):
-                empty_img = torch.zeros(1, 64, 64, 3)
-                return ([empty_img], [0], [0], [""], [""], [0])
-            
-            selected_item = image_items[index]
-            img, w, h, pos, neg, seed = self._process_single_image(selected_item)
-            return ([img], [w], [h], [pos], [neg], [seed])
-        else:
-            # 批量模式：返回包含所有原图及其参数的完整列表
-            images_list = []
-            widths_list = []
-            heights_list = []
-            pos_prompts_list = []
-            neg_prompts_list = []
-            seeds_list = []
-
-            for item in image_items:
-                img, w, h, pos, neg, seed = self._process_single_image(item)
-                images_list.append(img)
-                widths_list.append(w)
-                heights_list.append(h)
-                pos_prompts_list.append(pos if pos else "")
-                neg_prompts_list.append(neg if neg else "")
-                seeds_list.append(seed if seed is not None else 0)
-
-            if not images_list:
-                empty_img = torch.zeros(1, 64, 64, 3)
-                return ([empty_img], [0], [0], [""], [""], [0])
-
-            return (images_list, widths_list, heights_list, pos_prompts_list, neg_prompts_list, seeds_list)
-
-    def _process_single_image(self, selected_item):
-        empty_return = (torch.zeros(1, 64, 64, 3), 0, 0, "", "", 0)
+    def get_original_image(self, paths, index):
+        selected_item = parse_selection_and_get_item(paths, index, "image")
+        
+        empty_return = (torch.zeros(1, 1, 1, 3), 0, 0, "", "", 0)
 
         if not selected_item or 'path' not in selected_item or not os.path.exists(selected_item['path']):
             return empty_return
@@ -310,7 +282,8 @@ class LMMSelectImagePW:
                 
                 img_out = img.convert("RGBA") if 'A' in img.getbands() else img.convert("RGB")
                 img_array = np.array(img_out).astype(np.float32) / 255.0
-                image_tensor = torch.from_numpy(img_array)[None,] 
+                # 直接输出单张图片 (Batch size = 1)
+                image_tensor = torch.from_numpy(img_array)[None,]
 
                 metadata = selected_item.get('metadata', {})
                 if not metadata:
@@ -323,7 +296,7 @@ class LMMSelectImagePW:
                         
                 positive_prompt, negative_prompt, seed = extract_prompts_and_seed(metadata)
                 
-                return (image_tensor, W_orig, H_orig, positive_prompt, negative_prompt, seed)
+                return (image_tensor, W_orig, H_orig, positive_prompt, negative_prompt, seed,)
         except Exception as e:
             print(f"PW Utility: Error loading or processing image {selected_path}: {e}")
             return empty_return
@@ -352,23 +325,15 @@ class LMMSelectVideoPW:
     CATEGORY = "🔮PWUtility/Local Media"
 
     def get_original_video(self, paths, index, generation_width, generation_height, aspect_ratio_preservation, force_rate, frame_load_cap, skip_first_frames, select_every_nth):
-        try:
-            selection_list = json.loads(paths)
-            if not isinstance(selection_list, list): selection_list = []
-        except:
-            selection_list = []
-            
-        video_items = [item for item in selection_list if item.get("type") == "video"]
-        if not (0 <= index < len(video_items)):
-            empty_audio = {'waveform': torch.zeros(1, 2, 1), 'sample_rate': 44100}
-            return (torch.zeros(1, 1, 1, 3), 0, 0, 0, 0.0, empty_audio, "{}")
+        selected_item = parse_selection_and_get_item(paths, index, "video")
 
-        selected_item = video_items[index]
+        empty_audio = {'waveform': torch.zeros(1, 2, 1), 'sample_rate': 44100}
+        empty_return = (torch.zeros(1, 1, 1, 3), 0, 0, 0, 0.0, empty_audio, "{}")
+
+        if not selected_item or 'path' not in selected_item or not os.path.exists(selected_item['path']):
+            return empty_return
+        
         selected_path = selected_item['path']
-
-        if not os.path.exists(selected_path):
-            empty_audio = {'waveform': torch.zeros(1, 2, 1), 'sample_rate': 44100}
-            return (torch.zeros(1, 1, 1, 3), 0, 0, 0, 0.0, empty_audio, "{}")
 
         audio_fps_estimate = force_rate if force_rate > 0 else 30
         audio_data = get_audio(selected_path, start_time=skip_first_frames / audio_fps_estimate)
@@ -423,8 +388,7 @@ class LMMSelectVideoPW:
             return (final_tensor, final_tensor.shape[0], output_w, output_h, output_fps, audio_data, json.dumps(source_info, indent=4))
         except Exception as e:
             print(f"PW Utility: Error loading or resizing video frames from {selected_path}: {e}")
-            empty_audio = {'waveform': torch.zeros(1, 2, 1), 'sample_rate': 44100}
-            return (torch.zeros(1, 1, 1, 3), 0, 0, 0, 0.0, empty_audio, "{}")
+            return empty_return
 
 
 class LMMSelectAudioPW:
@@ -445,17 +409,11 @@ class LMMSelectAudioPW:
     CATEGORY = "🔮PWUtility/Local Media"
 
     def get_original_audio(self, paths, index, seek_seconds, duration):
-        try:
-            selection_list = json.loads(paths)
-            if not isinstance(selection_list, list): selection_list = []
-        except:
-            selection_list = []
-            
-        audio_items = [item for item in selection_list if item.get("type") == "audio"]
-        if not (0 <= index < len(audio_items)):
-            return (None, 0.0)
+        selected_item = parse_selection_and_get_item(paths, index, "audio")
 
-        selected_item = audio_items[index]
+        if not selected_item or 'path' not in selected_item:
+            return (None, 0.0)
+            
         selected_path = selected_item['path']
 
         if not os.path.exists(selected_path):
