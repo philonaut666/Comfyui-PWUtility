@@ -233,12 +233,12 @@ def cv_frame_generator(video_path, force_rate, frame_load_cap, skip_first_frames
     video_cap.release()
 
 
-class SelectOriginalImagePW:
+class LMMSelectImagePW:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "paths": ("STRING", {"forceInput": True, "multiline": True}),
+                "paths": ("LMM_ALL_PATHS",),
                 "index": ("INT", {"default": 0, "min": 0, "step": 1}),
                 "frame_load_cap": ("INT", {"default": 1, "min": 1, "max": 4096, "step": 1, "tooltip": "Copy a single image into a specified number of image sequences"}),
                 "generation_width": ("INT", {"default": 1024, "min": 64, "max": 8096, "step": 8, "tooltip": "The desired image width"}),
@@ -250,7 +250,7 @@ class SelectOriginalImagePW:
     RETURN_TYPES = ("IMAGE", "INT", "INT", "STRING", "STRING",)
     RETURN_NAMES = ("image", "width", "height", "positive_prompt", "negative_prompt",)
     FUNCTION = "get_original_image"
-    CATEGORY = "🔮PWUtility/Load Media PW"
+    CATEGORY = "🔮PWUtility/Local Media"
 
     def get_original_image(self, paths, index, frame_load_cap, generation_width, generation_height, aspect_ratio_preservation):
         selected_item = parse_selection_and_get_item(paths, index, "image")
@@ -298,7 +298,6 @@ class SelectOriginalImagePW:
                     image_sequence = processed_image
 
                 metadata = selected_item.get('metadata', {})
-                # 增强逻辑：如果 JSON 中缺失 metadata，则直接从图片文件中读取以保证提示词提取正常工作
                 if not metadata:
                     try:
                         if 'parameters' in img.info: metadata['parameters'] = img.info['parameters']
@@ -315,14 +314,14 @@ class SelectOriginalImagePW:
             return empty_return
 
 
-class SelectOriginalVideoPW:
+class LMMSelectVideoPW:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "paths": ("STRING", {"forceInput": True, "multiline": True}),
+                "paths": ("LMM_ALL_PATHS",),
                 "index": ("INT", {"default": 0, "min": 0, "step": 1}),
-                "generation_width": ("INT", {"default": 1024, "min": 64, "max": 8096, "step": 8, "tooltip": "Expected video width to generate"}),
+                "generation_width": ("INT", {"default": 1024, "min": 64, "max": 8096, "step": 8, "tooltip": "Expected video width"}),
                 "generation_height": ("INT", {"default": 1024, "min": 64, "max": 8096, "step": 8, "tooltip": "Expected video height"}),
                 "aspect_ratio_preservation": (["original", "keep_input", "stretch_to_new", "crop_to_new"], {"tooltip": "Zoom Mode：\n- keep_input: Maintain the aspect ratio of the original video\n- stretch_to_new: Stretch to fit the new size\n- crop_to_new: Cropped to fit new sizes\n- original: No processing is performed, use the original video size"}),
                 "force_rate": ("FLOAT", {"default": 0, "min": 0, "max": 240, "step": 1}),
@@ -335,7 +334,7 @@ class SelectOriginalVideoPW:
     RETURN_TYPES = ("IMAGE", "INT", "INT", "INT", "FLOAT", "AUDIO", "STRING",)
     RETURN_NAMES = ("IMAGE", "frame_count", "width", "height", "fps", "audio", "video_info",)
     FUNCTION = "get_original_video"
-    CATEGORY = "🔮PWUtility/Load Media PW"
+    CATEGORY = "🔮PWUtility/Local Media"
 
     def get_original_video(self, paths, index, generation_width, generation_height, aspect_ratio_preservation, force_rate, frame_load_cap, skip_first_frames, select_every_nth):
         selected_item = parse_selection_and_get_item(paths, index, "video")
@@ -404,12 +403,12 @@ class SelectOriginalVideoPW:
             return empty_return
 
 
-class SelectOriginalAudioPW:
+class LMMSelectAudioPW:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "paths": ("STRING", {"forceInput": True, "multiline": True}),
+                "paths": ("LMM_ALL_PATHS",),
                 "index": ("INT", {"default": 0, "min": 0, "step": 1}),
                 "seek_seconds": ("FLOAT", {"default": 0, "min": 0, "max": 100000, "step": 0.01}),
                 "duration": ("FLOAT", {"default": 0, "min": 0, "max": 100000, "step": 0.01}),
@@ -419,7 +418,7 @@ class SelectOriginalAudioPW:
     RETURN_TYPES = ("AUDIO", "FLOAT",)
     RETURN_NAMES = ("audio", "duration",)
     FUNCTION = "get_original_audio"
-    CATEGORY = "🔮PWUtility/Load Media PW"
+    CATEGORY = "🔮PWUtility/Local Media"
 
     def get_original_audio(self, paths, index, seek_seconds, duration):
         selected_item = parse_selection_and_get_item(paths, index, "audio")
@@ -444,13 +443,13 @@ class SelectOriginalAudioPW:
 
 
 NODE_CLASS_MAPPINGS = {
-    "SelectOriginalImagePW": SelectOriginalImagePW,
-    "SelectOriginalVideoPW": SelectOriginalVideoPW,
-    "SelectOriginalAudioPW": SelectOriginalAudioPW,
+    "LMMSelectImagePW": LMMSelectImagePW,
+    "LMMSelectVideoPW": LMMSelectVideoPW,
+    "LMMSelectAudioPW": LMMSelectAudioPW,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "SelectOriginalImagePW": "Select Original Image PW",
-    "SelectOriginalVideoPW": "Select Original Video PW",
-    "SelectOriginalAudioPW": "Select Original Audio PW",
+    "LMMSelectImagePW": "LMM Select Image PW",
+    "LMMSelectVideoPW": "LMM Select Video PW",
+    "LMMSelectAudioPW": "LMM Select Audio PW",
 }
