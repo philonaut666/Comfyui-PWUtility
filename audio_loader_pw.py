@@ -66,6 +66,8 @@ class AudioLoaderPW:
                 "pre_silence": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Silence in seconds to add before the audio"}),
                 "post_silence": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Silence in seconds to add after the audio"}),
                 "align_8n+1": ("BOOLEAN", {"default": False, "tooltip": "Pad audio to make total frames equal to 8n+1 based on fps"}),
+                # 新增 normalize 输入框，支持负数，默认 -16.0
+                "normalize": ("FLOAT", {"default": -16.0, "min": -100.0, "max": 100.0, "step": 0.1, "tooltip": "Target peak dB for normalization. Set to 0 to disable."}),
             },
             "optional": {
                 "audioUI": ("AUDIO_UI",),
@@ -82,7 +84,7 @@ class AudioLoaderPW:
     def VALIDATE_INPUTS(cls, audio, **kwargs):
         return True
 
-    def load_audio(self, audio, start_time, end_time, duration, fps, pre_silence, post_silence, path=None, **kwargs):
+    def load_audio(self, audio, start_time, end_time, duration, fps, pre_silence, post_silence, normalize, path=None, **kwargs):
         align_flag = kwargs.get("align_8n+1", False)
         audio_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else audio
 
@@ -135,6 +137,16 @@ class AudioLoaderPW:
         
         final_waveform = torch.cat((pre_silence_waveform, trimmed_waveform, post_silence_waveform), dim=1)
         
+        # --- 新增：音频归一化逻辑 ---
+        if normalize != 0.0:
+            peak = torch.max(torch.abs(final_waveform)).item()
+            if peak > 1e-6:  # 避免全静音导致除零错误
+                current_peak_db = 20 * math.log10(peak)
+                gain_db = normalize - current_peak_db
+                gain_linear = 10 ** (gain_db / 20.0)
+                final_waveform = final_waveform * gain_linear
+
+        # 8n+1 帧对齐逻辑
         if align_flag and fps > 0:
             audio_length_sec = final_waveform.shape[1] / sample_rate
             total_frames = audio_length_sec * fps
@@ -160,22 +172,4 @@ class AudioLoaderPW:
         audio_output = {"waveform": final_waveform.unsqueeze(0), "sample_rate": sample_rate}
         frame_count = int(round(final_duration * fps)) if fps > 0 else 0
         
-        mono_waveform = final_waveform.mean(dim=0)
-        num_peaks = 1200
-        chunk_size = max(1, mono_waveform.shape[0] // num_peaks)
-        peaks = []
-        for i in range(0, mono_waveform.shape[0], chunk_size):
-            chunk = mono_waveform[i:i+chunk_size]
-            if chunk.shape[0] > 0:
-                peaks.append(float(chunk.abs().max().item()))
-        
-        # 【核心修复】：将 duration 和 frame_count 放入 ui 字典，确保 WebSocket 能将其推送到前端
-        return {
-            "ui": {
-                "audio_path": [str(audio_to_load)], 
-                "waveform_peaks": peaks,
-                "duration": [final_duration],
-                "frame_count": [frame_count]
-            }, 
-            "result": (audio_output, final_duration, frame_count)
-        }
+        return {"ui": {"audio_path": [str(audio_to_load)]}, "result": (audio_output, final_duration, frame_count)}
