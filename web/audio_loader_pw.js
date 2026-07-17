@@ -53,6 +53,37 @@ app.registerExtension({
                     configurable: true
                 });
 
+                // ==========================================
+                // 局部执行 (Partial Execution) 机制
+                // ==========================================
+                const triggerPartialExecution = async () => {
+                    const prompt = {
+                        prompt: {
+                            [node.id]: {
+                                class_type: nodeData.name,
+                                inputs: {}
+                            }
+                        },
+                        client_id: api.clientId || "pw_utility_client"
+                    };
+                    if (node.widgets) {
+                        for (const w of node.widgets) {
+                            if (w.name && w.value !== undefined && w.type !== 'hidden' && w.name !== 'audioUI') {
+                                prompt.prompt[node.id].inputs[w.name] = w.value;
+                            }
+                        }
+                    }
+                    try {
+                        await api.fetchApi("/prompt", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(prompt)
+                        });
+                    } catch (e) {
+                        console.warn("[AudioLoaderPW] Partial execution failed:", e);
+                    }
+                };
+
                 const handleFileUpload = async (file) => {
                     if (!file.type.startsWith('audio/') && !file.type.startsWith('video/')) return false;
                     try {
@@ -79,6 +110,7 @@ app.registerExtension({
                                     audioWidget.callback(data.name);
                                 }
                                 app.graph.setDirtyCanvas(true, false);
+                                triggerPartialExecution(); // 触发局部执行刷新元数据
                             }
                         }
                     } catch (err) {
@@ -240,20 +272,37 @@ app.registerExtension({
                 Object.assign(sliderBox.style, {
                     position: "relative",
                     width: "100%",
-                    height: "24px",
+                    height: "40px", // 增加高度以更好展示波纹
                     background: "#111",
                     borderRadius: "4px",
                     cursor: "pointer",
                     userSelect: "none",
-                    boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)"
+                    boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)",
+                    overflow: "hidden"
                 });
+
+                // ==========================================
+                // 波纹显示 (Waveform Display) Canvas
+                // ==========================================
+                const waveCanvas = document.createElement("canvas");
+                Object.assign(waveCanvas.style, {
+                    position: "absolute",
+                    top: "0",
+                    left: "0",
+                    width: "100%",
+                    height: "100%",
+                    pointerEvents: "none",
+                    zIndex: "1"
+                });
+                sliderBox.appendChild(waveCanvas);
 
                 const fill = document.createElement("div");
                 Object.assign(fill.style, {
                     position: "absolute",
                     height: "100%",
                     background: "rgba(14, 165, 233, 0.35)",
-                    pointerEvents: "none"
+                    pointerEvents: "none",
+                    zIndex: "2"
                 });
                 sliderBox.appendChild(fill);
 
@@ -268,7 +317,8 @@ app.registerExtension({
                         transform: "translateX(-50%)",
                         pointerEvents: "none",
                         boxShadow: "0 0 4px rgba(0,0,0,0.8)",
-                        borderRadius: "2px"
+                        borderRadius: "2px",
+                        zIndex: "3"
                     });
                     return h;
                 };
@@ -285,7 +335,67 @@ app.registerExtension({
                 this.size = [475, this.computeSize()[1]];
                 
                 widget.computeSize = function(width) {
-                    return [width, 200];
+                    return [width, 220];
+                };
+
+                let currentPeaks = null;
+                const drawWaveform = (peaks) => {
+                    if (peaks) currentPeaks = peaks;
+                    if (!waveCanvas || !currentPeaks || currentPeaks.length === 0) return;
+                    
+                    const ctx = waveCanvas.getContext("2d");
+                    const rect = sliderBox.getBoundingClientRect();
+                    const width = rect.width;
+                    const height = rect.height;
+                    
+                    waveCanvas.width = width * window.devicePixelRatio;
+                    waveCanvas.height = height * window.devicePixelRatio;
+                    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+                    
+                    ctx.clearRect(0, 0, width, height);
+                    
+                    ctx.fillStyle = "rgba(56, 189, 248, 0.5)"; 
+                    const barWidth = width / currentPeaks.length;
+                    const centerY = height / 2;
+                    
+                    for (let i = 0; i < currentPeaks.length; i++) {
+                        const peak = currentPeaks[i];
+                        const barHeight = peak * centerY * 0.95; 
+                        ctx.fillRect(i * barWidth, centerY - barHeight, Math.max(1, barWidth - 0.5), barHeight * 2);
+                    }
+                };
+
+                // 监听 sliderBox 大小变化，确保波纹始终与时间轴完美对齐
+                const resizeObserver = new ResizeObserver(() => {
+                    drawWaveform();
+                });
+                resizeObserver.observe(sliderBox);
+
+                // 前端 Web Audio API 实时解析原始音频波纹 (保证与裁剪时间轴完美对齐)
+                const generateWaveformFromUrl = async (audioUrl) => {
+                    if (!audioUrl || audioUrl === "none") return;
+                    try {
+                        const response = await fetch(audioUrl);
+                        const arrayBuffer = await response.arrayBuffer();
+                        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                        const rawData = audioBuffer.getChannelData(0); 
+                        
+                        const numPeaks = 1200;
+                        const blockSize = Math.floor(rawData.length / numPeaks);
+                        const peaks = [];
+                        for (let i = 0; i < numPeaks; i++) {
+                            let max = 0;
+                            for (let j = 0; j < blockSize; j++) {
+                                const val = Math.abs(rawData[i * blockSize + j]);
+                                if (val > max) max = val;
+                            }
+                            peaks.push(max);
+                        }
+                        drawWaveform(peaks);
+                    } catch (e) {
+                        console.warn("[AudioLoaderPW] Waveform generation failed:", e);
+                    }
                 };
 
                 setTimeout(() => {
@@ -344,6 +454,8 @@ app.registerExtension({
                             const filename = overridePath || audioWidget.value;
                             if (!filename || filename === "none") {
                                 playerTitle.textContent = "No audio selected";
+                                currentPeaks = null;
+                                drawWaveform();
                                 return;
                             }
                             let audioSrc;
@@ -367,6 +479,7 @@ app.registerExtension({
                         audioWidget.callback = function() {
                             if (!node._initializing) {
                                 node._should_reset_trim = true;
+                                triggerPartialExecution(); // 文件改变时触发局部执行
                             }
                             updateAudio();
                         };
@@ -476,6 +589,11 @@ app.registerExtension({
                         updateRuler(); 
                         updateUI();
                         app.graph.setDirtyCanvas(true, false);
+                        
+                        // 音频元数据加载完成后，前端实时解析波纹
+                        if (audioEl.src) {
+                            generateWaveformFromUrl(audioEl.src);
+                        }
                     };
 
                     audioEl.ontimeupdate = () => {
