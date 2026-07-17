@@ -580,6 +580,11 @@ app.registerExtension({
             const restriction = this.properties.toggleRestriction;
             const isRestricted = restriction === 'always_one' || restriction === 'max_one';
 
+            // 【核心修复】提前更新当前组的 enabled 状态。
+            // 这样在后续互斥关闭其他组并触发全局保底检查时，系统能感知到新组已处于 enabled 状态，避免保底逻辑误判。
+            const config = this.properties.groups.find(g => g.group_name === uniqueId);
+            if (config) config.enabled = enable;
+
             // 手动触发或外部触发时，当前节点不豁免，严格执行互斥
             if (enable && isRestricted && !opts.skipRestriction) {
                 const filteredIds = this.filterGroups(this.getAllGroupsFlat()).map(g => g._pwUniqueId);
@@ -596,9 +601,6 @@ app.registerExtension({
             if (groupInfo._pwTopSubgraphNode && groupInfo._pwTopSubgraphNode.setDirtyCanvas) {
                 groupInfo._pwTopSubgraphNode.setDirtyCanvas(true, true);
             }
-
-            const config = this.properties.groups.find(g => g.group_name === uniqueId);
-            if (config) config.enabled = enable;
 
             // Always One 保底逻辑 (手动关闭时)
             if (!enable && restriction === 'always_one' && !opts.skipRestriction) {
@@ -631,7 +633,6 @@ app.registerExtension({
                 };
                 const allAdvNodesGlobal = collectAdvNodes(app.graph);
                 
-                // 辅助函数：查找组所属的 GSA 节点
                 const getGroupOwnerNode = (groupName) => {
                     for (const node of allAdvNodesGlobal) {
                         if (node.properties.groups && node.properties.groups.some(g => g.group_name === groupName)) {
@@ -659,7 +660,6 @@ app.registerExtension({
                 if (sourceRules) {
                     const rules = enable ? sourceRules.on_enable : sourceRules.on_disable;
                     for (const rule of rules) {
-                        // 【核心新增】记录触发源 parent
                         pendingActions.push({ name: rule.target_group, action: rule.action || 'active', depth: 1, parent: uniqueId });
                     }
                 }
@@ -669,7 +669,7 @@ app.registerExtension({
                     const act = pendingActions[head++];
                     const { name, action, depth, parent } = act;
                     if (finalStates[name] && finalStates[name].depth <= depth) continue;
-                    finalStates[name] = { action, depth, parent }; // 保存 parent
+                    finalStates[name] = { action, depth, parent };
                     const rules = globalRules[name];
                     if (rules) {
                         const nextRules = (action === 'active') ? rules.on_enable : rules.on_disable;
@@ -681,7 +681,6 @@ app.registerExtension({
                 
                 const allGroupsFlat = this.getAllGroupsFlat();
                 
-                // 【核心修复】处理 Linkage 触发开启时的互斥限制 (带同节点豁免机制)
                 for (const [name, state] of Object.entries(finalStates)) {
                     if (state.action === 'active') {
                         const targetNode = getGroupOwnerNode(name);
@@ -690,11 +689,9 @@ app.registerExtension({
                             const isRestricted = restriction === 'always_one' || restriction === 'max_one';
                             if (isRestricted) {
                                 const parentNode = getGroupOwnerNode(state.parent);
-                                // 豁免条件：触发源和目标组在同一个 GSA 节点中
                                 const isExempt = (parentNode && targetNode && parentNode === targetNode);
                                 
                                 if (!isExempt) {
-                                    // 不豁免，严格执行互斥：关闭 targetNode 中除了 name 之外的其他已开启组
                                     const filteredIds = targetNode.filterGroups(targetNode.getAllGroupsFlat()).map(g => g._pwUniqueId);
                                     const enabledOthers = targetNode.properties.groups.filter(g => g.enabled && g.group_name !== name && filteredIds.includes(g.group_name));
                                     for (const otherCfg of enabledOthers) {
@@ -718,7 +715,6 @@ app.registerExtension({
                     }
                 }
 
-                // 应用 finalStates 到实际的节点 mode
                 for (const [name, state] of Object.entries(finalStates)) {
                     const targetGroupInfo = allGroupsFlat.find(g => g._pwUniqueId === name);
                     if (targetGroupInfo) {
@@ -743,7 +739,6 @@ app.registerExtension({
                     }
                 }
                 
-                // 处理 Linkage 触发关闭后的 Always One 保底逻辑
                 for (const advNode of allAdvNodesGlobal) {
                     if (advNode.properties.toggleRestriction === 'always_one') {
                         const filteredGroups = advNode.filterGroups(advNode.getAllGroupsFlat());
