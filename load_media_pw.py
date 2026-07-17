@@ -25,11 +25,12 @@ def parse_selection_and_get_item(selection_json_str: str, index: int, expected_t
     except (json.JSONDecodeError, TypeError):
         return None
 
-def extract_prompts(metadata):
+def extract_prompts_and_seed(metadata):
     positive_prompts, negative_prompts = [], []
+    seed = 0
 
     if not metadata:
-        return "", ""
+        return "", "", 0
 
     parameters = metadata.get('parameters')
     if isinstance(parameters, str):
@@ -37,18 +38,24 @@ def extract_prompts(metadata):
         if neg_prompt_match:
             negative = neg_prompt_match.group(1).split('Steps:')[0].strip()
             positive = parameters.split('Negative prompt:')[0].strip()
-            return positive.strip(), negative.strip()
         else:
-            return parameters.split('Steps:')[0].strip(), ""
+            positive = parameters.split('Steps:')[0].strip()
+            negative = ""
+        
+        seed_match = re.search(r'Seed:\s*(\d+)', parameters)
+        if seed_match:
+            seed = int(seed_match.group(1))
+            
+        return positive.strip(), negative.strip(), seed
 
     workflow_str = metadata.get('workflow') or metadata.get('prompt')
     if not isinstance(workflow_str, str):
-        return (str(metadata.get('prompt', '')), "")
+        return str(metadata.get('prompt', '')), "", 0
 
     try:
         workflow = json.loads(workflow_str)
         if 'nodes' not in workflow or not isinstance(workflow.get('nodes'), list):
-            return str(workflow), ""
+            return str(workflow), "", 0
 
         nodes_by_id = {str(n['id']): n for n in workflow['nodes']}
         all_links = workflow.get('links', [])
@@ -101,6 +108,17 @@ def extract_prompts(metadata):
                             return True
             return False
 
+        # Extract seed from KSampler nodes
+        for node in workflow['nodes']:
+            node_type = node.get('type', '')
+            if 'KSampler' in node_type:
+                widgets = node.get('widgets_values', [])
+                if isinstance(widgets, list) and len(widgets) > 0:
+                    seed_val = widgets[0]
+                    if isinstance(seed_val, (int, float)):
+                        seed = int(seed_val)
+                        break
+
         for node in workflow['nodes']:
             if 'CLIPTextEncode' in node.get('type', ''):
                 if check_downstream_for_sampler(node):
@@ -134,11 +152,11 @@ def extract_prompts(metadata):
                     except (json.JSONDecodeError, AttributeError):
                         pass
 
-        return " ".join(positive_prompts).strip(), " ".join(negative_prompts).strip()
+        return " ".join(positive_prompts).strip(), " ".join(negative_prompts).strip(), seed
 
     except Exception as e:
         print(f"PW Utility Error: Failed to parse workflow. Error: {e}")
-        return "", ""
+        return "", "", 0
 
 def get_audio(file_path, start_time=0, duration=0):
     args = ['ffmpeg', "-i", file_path, "-vn"]
@@ -241,21 +259,18 @@ class LMMSelectImagePW:
                 "paths": ("LMM_ALL_PATHS",),
                 "index": ("INT", {"default": 0, "min": 0, "step": 1}),
                 "frame_load_cap": ("INT", {"default": 1, "min": 1, "max": 4096, "step": 1, "tooltip": "Copy a single image into a specified number of image sequences"}),
-                "generation_width": ("INT", {"default": 1024, "min": 64, "max": 8096, "step": 8, "tooltip": "The desired image width"}),
-                "generation_height": ("INT", {"default": 1024, "min": 64, "max": 8096, "step": 8, "tooltip": "The desired image height"}),
-                "aspect_ratio_preservation": (["original", "keep_input", "stretch_to_new", "crop_to_new"], {"tooltip": "Zoom Mode：\n- keep_input: Maintain the aspect ratio of the original image\n- stretch_to_new: Stretch to fit the new size\n- crop_to_new: Cropped to fit new sizes\n- original: No processing is performed, use the original image size"}),
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "INT", "INT", "STRING", "STRING",)
-    RETURN_NAMES = ("image", "width", "height", "positive_prompt", "negative_prompt",)
+    RETURN_TYPES = ("IMAGE", "INT", "INT", "STRING", "STRING", "INT",)
+    RETURN_NAMES = ("image", "width", "height", "positive_prompt", "negative_prompt", "seed",)
     FUNCTION = "get_original_image"
     CATEGORY = "🔮PWUtility/Local Media"
 
-    def get_original_image(self, paths, index, frame_load_cap, generation_width, generation_height, aspect_ratio_preservation):
+    def get_original_image(self, paths, index, frame_load_cap):
         selected_item = parse_selection_and_get_item(paths, index, "image")
         
-        empty_return = (torch.zeros(1, 1, 1, 3), 0, 0, "", "")
+        empty_return = (torch.zeros(1, 1, 1, 3), 0, 0, "", "", 0)
 
         if not selected_item or 'path' not in selected_item or not os.path.exists(selected_item['path']):
             return empty_return
@@ -270,32 +285,10 @@ class LMMSelectImagePW:
                 img_array = np.array(img_out).astype(np.float32) / 255.0
                 image_tensor = torch.from_numpy(img_array)[None,]
 
-                if aspect_ratio_preservation != "original":
-                    max_area = generation_width * generation_height
-                    crop = "disabled"
-
-                    if aspect_ratio_preservation == "keep_input":
-                        aspect_ratio = H_orig / W_orig if W_orig > 0 else 1.0
-                    elif aspect_ratio_preservation == "stretch_to_new" or aspect_ratio_preservation == "crop_to_new":
-                        aspect_ratio = generation_height / generation_width if generation_width > 0 else 1.0
-                        if aspect_ratio_preservation == "crop_to_new":
-                            crop = "center"
-                    
-                    lat_h = round(np.sqrt(max_area * aspect_ratio) / VAE_STRIDE[1] / PATCH_SIZE[1]) * PATCH_SIZE[1]
-                    lat_w = round(np.sqrt(max_area / aspect_ratio) / VAE_STRIDE[2] / PATCH_SIZE[2]) * PATCH_SIZE[2]
-                    h_new = int(lat_h * VAE_STRIDE[1])
-                    w_new = int(lat_w * VAE_STRIDE[2])
-                    
-                    processed_image = common_upscale(image_tensor.movedim(-1, 1), w_new, h_new, "lanczos", crop).movedim(1, -1)
-                else:
-                    w_new = W_orig
-                    h_new = H_orig
-                    processed_image = image_tensor
-                
                 if frame_load_cap > 1:
-                    image_sequence = processed_image.repeat(frame_load_cap, 1, 1, 1)
+                    image_sequence = image_tensor.repeat(frame_load_cap, 1, 1, 1)
                 else:
-                    image_sequence = processed_image
+                    image_sequence = image_tensor
 
                 metadata = selected_item.get('metadata', {})
                 if not metadata:
@@ -306,9 +299,9 @@ class LMMSelectImagePW:
                     except Exception:
                         pass
                         
-                positive_prompt, negative_prompt = extract_prompts(metadata)
+                positive_prompt, negative_prompt, seed = extract_prompts_and_seed(metadata)
                 
-                return (image_sequence, w_new, h_new, positive_prompt, negative_prompt,)
+                return (image_sequence, W_orig, H_orig, positive_prompt, negative_prompt, seed,)
         except Exception as e:
             print(f"PW Utility: Error loading or processing image {selected_path}: {e}")
             return empty_return
