@@ -49,38 +49,56 @@ app.registerExtension({
 
                 Object.defineProperty(node, 'imgs', {
                     get: function() { return undefined; },
-                    set: function(val) { /* Ignore attempts by ComfyUI to set an image preview */ },
+                    set: function(val) { /* Ignore image preview */ },
                     configurable: true
                 });
 
                 // ==========================================
-                // 局部执行 (Partial Execution) 机制
+                // 修复后的局部执行 (Partial Execution) 机制
                 // ==========================================
                 const triggerPartialExecution = async () => {
-                    const prompt = {
-                        prompt: {
-                            [node.id]: {
-                                class_type: nodeData.name,
-                                inputs: {}
-                            }
-                        },
-                        client_id: api.clientId || "pw_utility_client"
-                    };
+                    const nodeId = String(node.id);
+                    const inputs = {};
+                    
                     if (node.widgets) {
                         for (const w of node.widgets) {
                             if (w.name && w.value !== undefined && w.type !== 'hidden' && w.name !== 'audioUI') {
-                                prompt.prompt[node.id].inputs[w.name] = w.value;
+                                inputs[w.name] = w.value;
                             }
                         }
                     }
+
+                    // 构造符合 ComfyUI 后端严格校验标准的 Payload
+                    const prompt = {
+                        prompt: {
+                            [nodeId]: {
+                                inputs: inputs,
+                                class_type: node.comfyClass || nodeData.name,
+                                _meta: {
+                                    title: node.title || nodeData.name
+                                }
+                            }
+                        },
+                        client_id: api.clientId || "pw_utility_client",
+                        extra_data: {
+                            extra_pnginfo: {
+                                workflow: app.graph ? app.graph.serialize() : {}
+                            }
+                        }
+                    };
+
                     try {
-                        await api.fetchApi("/prompt", {
+                        const resp = await api.fetchApi("/prompt", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify(prompt)
                         });
+                        if (!resp.ok) {
+                            const errText = await resp.text();
+                            console.warn("[AudioLoaderPW] Partial execution rejected:", errText);
+                        }
                     } catch (e) {
-                        console.warn("[AudioLoaderPW] Partial execution failed:", e);
+                        console.warn("[AudioLoaderPW] Partial execution network error:", e);
                     }
                 };
 
@@ -110,7 +128,7 @@ app.registerExtension({
                                     audioWidget.callback(data.name);
                                 }
                                 app.graph.setDirtyCanvas(true, false);
-                                triggerPartialExecution(); // 触发局部执行刷新元数据
+                                triggerPartialExecution(); // 上传后触发局部执行
                             }
                         }
                     } catch (err) {
@@ -230,11 +248,21 @@ app.registerExtension({
                     }
                 };
 
+                // 监听后端局部执行返回的结果
                 const _execHandler = ({ detail }) => {
                     if (!detail || String(detail.node) !== String(node.id)) return;
                     const out = detail.output;
-                    if (out && out.audio_path && out.audio_path.length) {
-                        applyAudioPath(out.audio_path[0]);
+                    if (out) {
+                        if (out.audio_path && out.audio_path.length) {
+                            applyAudioPath(out.audio_path[0]);
+                        }
+                        // 同步后端计算的精确 duration
+                        if (out.duration && out.duration.length > 0) {
+                            const dw = node.widgets && node.widgets.find(w => w.name === "duration");
+                            if (dw) {
+                                dw.value = parseFloat(out.duration[0]);
+                            }
+                        }
                     }
                 };
                 api.addEventListener("executed", _execHandler);
@@ -272,7 +300,7 @@ app.registerExtension({
                 Object.assign(sliderBox.style, {
                     position: "relative",
                     width: "100%",
-                    height: "40px", // 增加高度以更好展示波纹
+                    height: "40px", 
                     background: "#111",
                     borderRadius: "4px",
                     cursor: "pointer",
@@ -281,9 +309,7 @@ app.registerExtension({
                     overflow: "hidden"
                 });
 
-                // ==========================================
-                // 波纹显示 (Waveform Display) Canvas
-                // ==========================================
+                // 波纹 Canvas
                 const waveCanvas = document.createElement("canvas");
                 Object.assign(waveCanvas.style, {
                     position: "absolute",
@@ -341,7 +367,13 @@ app.registerExtension({
                 let currentPeaks = null;
                 const drawWaveform = (peaks) => {
                     if (peaks) currentPeaks = peaks;
-                    if (!waveCanvas || !currentPeaks || currentPeaks.length === 0) return;
+                    if (!waveCanvas || !currentPeaks || currentPeaks.length === 0) {
+                        if(waveCanvas) {
+                            const ctx = waveCanvas.getContext("2d");
+                            ctx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+                        }
+                        return;
+                    }
                     
                     const ctx = waveCanvas.getContext("2d");
                     const rect = sliderBox.getBoundingClientRect();
@@ -353,8 +385,7 @@ app.registerExtension({
                     ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
                     
                     ctx.clearRect(0, 0, width, height);
-                    
-                    ctx.fillStyle = "rgba(56, 189, 248, 0.5)"; 
+                    ctx.fillStyle = "rgba(56, 189, 248, 0.6)"; 
                     const barWidth = width / currentPeaks.length;
                     const centerY = height / 2;
                     
@@ -365,13 +396,10 @@ app.registerExtension({
                     }
                 };
 
-                // 监听 sliderBox 大小变化，确保波纹始终与时间轴完美对齐
-                const resizeObserver = new ResizeObserver(() => {
-                    drawWaveform();
-                });
+                const resizeObserver = new ResizeObserver(() => drawWaveform());
                 resizeObserver.observe(sliderBox);
 
-                // 前端 Web Audio API 实时解析原始音频波纹 (保证与裁剪时间轴完美对齐)
+                // 前端 Web Audio API 实时解析 (保证波纹与时间轴完美对齐)
                 const generateWaveformFromUrl = async (audioUrl) => {
                     if (!audioUrl || audioUrl === "none") return;
                     try {
@@ -419,31 +447,24 @@ app.registerExtension({
                                 if (origCallback) origCallback.apply(this, arguments);
                                 return;
                             }
-                            
                             isUpdatingDuration = true;
                             let d = parseFloat(v) || 0;
                             if (d < 0) d = 0;
-                            
                             let pre = preSilenceWidget ? parseFloat(preSilenceWidget.value) || 0 : 0;
                             let post = postSilenceWidget ? parseFloat(postSilenceWidget.value) || 0 : 0;
                             let availableForAudio = d - pre - post;
                             if (availableForAudio < 0) availableForAudio = 0;
-
                             let s = startWidget ? parseFloat(startWidget.value) || 0 : 0;
                             let newStart = s;
                             let newEnd = s + availableForAudio;
-
                             if (newEnd > duration) {
                                 newEnd = duration;
                                 newStart = Math.max(0, duration - availableForAudio);
                             }
-
                             if (startWidget) startWidget.value = parseFloat(newStart.toFixed(2));
                             if (endWidget) endWidget.value = parseFloat(newEnd.toFixed(2));
-
                             updateUI(true);
                             app.graph.setDirtyCanvas(true, false);
-                            
                             if (origCallback) origCallback.apply(this, arguments);
                             isUpdatingDuration = false;
                         };
@@ -479,7 +500,7 @@ app.registerExtension({
                         audioWidget.callback = function() {
                             if (!node._initializing) {
                                 node._should_reset_trim = true;
-                                triggerPartialExecution(); // 文件改变时触发局部执行
+                                triggerPartialExecution(); // 下拉菜单改变时触发局部执行
                             }
                             updateAudio();
                         };
@@ -487,23 +508,11 @@ app.registerExtension({
                         node._updateAudio = updateAudio;
                     }
 
-                    container.ondragover = (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        container.style.background = "rgba(14, 165, 233, 0.2)";
-                    };
-                    container.ondragleave = (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        container.style.background = defaultBg;
-                    };
+                    container.ondragover = (e) => { e.preventDefault(); e.stopPropagation(); container.style.background = "rgba(14, 165, 233, 0.2)"; };
+                    container.ondragleave = (e) => { e.preventDefault(); e.stopPropagation(); container.style.background = defaultBg; };
                     container.ondrop = async (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        container.style.background = defaultBg;
-                        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                            handleFileUpload(e.dataTransfer.files[0]);
-                        }
+                        e.preventDefault(); e.stopPropagation(); container.style.background = defaultBg;
+                        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files[0]);
                     };
 
                     const formatTime = (secs) => {
@@ -551,26 +560,21 @@ app.registerExtension({
                         let e = endWidget ? parseFloat(endWidget.value) || 0 : 0;
                         let pre = preSilenceWidget ? parseFloat(preSilenceWidget.value) || 0 : 0;
                         let post = postSilenceWidget ? parseFloat(postSilenceWidget.value) || 0 : 0;
-
                         if (e === 0 || e > duration) e = duration;
                         if (s > e) s = e;
-                        
                         const sPct = (s / duration) * 100;
                         const ePct = (e / duration) * 100;
                         startHandle.style.left = `${sPct}%`;
                         endHandle.style.left = `${ePct}%`;
                         fill.style.left = `${sPct}%`;
                         fill.style.width = `${ePct - sPct}%`;
-                        
                         const currentDur = parseFloat((e - s + pre + post).toFixed(2));
                         trimLength.textContent = `Trimmed: ${currentDur}s`;
-                        
                         if (durationWidget && durationWidget.value !== currentDur) {
                             isUpdatingDuration = true;
                             durationWidget.value = currentDur;
                             isUpdatingDuration = false;
                         }
-                        
                         if (syncPlayer && audioEl.readyState >= 1) { audioEl.currentTime = s; }
                     };
 
@@ -582,18 +586,12 @@ app.registerExtension({
                             node._should_reset_trim = false;
                         } else {
                             let e = endWidget ? parseFloat(endWidget.value) || 0 : 0;
-                            if (endWidget && (e === 0 || e > duration)) { 
-                                endWidget.value = parseFloat(duration.toFixed(2)); 
-                            }
+                            if (endWidget && (e === 0 || e > duration)) endWidget.value = parseFloat(duration.toFixed(2));
                         }
                         updateRuler(); 
                         updateUI();
                         app.graph.setDirtyCanvas(true, false);
-                        
-                        // 音频元数据加载完成后，前端实时解析波纹
-                        if (audioEl.src) {
-                            generateWaveformFromUrl(audioEl.src);
-                        }
+                        if (audioEl.src) generateWaveformFromUrl(audioEl.src); // 前端实时解析波纹
                     };
 
                     audioEl.ontimeupdate = () => {
@@ -625,9 +623,7 @@ app.registerExtension({
                         const val = (x / rect.width) * duration;
                         let s = startWidget ? parseFloat(startWidget.value) || 0 : 0;
                         let e_val = endWidget ? parseFloat(endWidget.value) || duration : duration;
-                        
                         const handleTolerance = (10 / rect.width) * duration;
-                        
                         if (val > s + handleTolerance && val < e_val - handleTolerance) {
                             dragging = 'center';
                             dragOffset = val - s;
@@ -657,15 +653,8 @@ app.registerExtension({
                         } else if (dragging === 'center') {
                             let newStart = val - dragOffset;
                             let newEnd = newStart + dragSelectionWidth;
-                            
-                            if (newStart < 0) {
-                                newStart = 0;
-                                newEnd = dragSelectionWidth;
-                            } else if (newEnd > duration) {
-                                newEnd = duration;
-                                newStart = duration - dragSelectionWidth;
-                            }
-                            
+                            if (newStart < 0) { newStart = 0; newEnd = dragSelectionWidth; } 
+                            else if (newEnd > duration) { newEnd = duration; newStart = duration - dragSelectionWidth; }
                             if(startWidget) startWidget.value = parseFloat(newStart.toFixed(2));
                             if(endWidget) endWidget.value = parseFloat(newEnd.toFixed(2));
                         }
@@ -673,9 +662,7 @@ app.registerExtension({
                     };
 
                     sliderBox.onpointerup = (e) => { dragging = null; sliderBox.releasePointerCapture(e.pointerId); };
-
                     setTimeout(() => { node._initializing = false; }, 500);
-
                 }, 100);
 
                 node.onExecuted = function (output) {
