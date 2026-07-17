@@ -54,51 +54,34 @@ app.registerExtension({
                 });
 
                 // ==========================================
-                // 修复后的局部执行 (Partial Execution) 机制
+                // 【核心修复】使用 ComfyUI 原生 API 触发局部执行
                 // ==========================================
                 const triggerPartialExecution = async () => {
-                    const nodeId = String(node.id);
-                    const inputs = {};
-                    
-                    if (node.widgets) {
-                        for (const w of node.widgets) {
-                            if (w.name && w.value !== undefined && w.type !== 'hidden' && w.name !== 'audioUI') {
-                                inputs[w.name] = w.value;
-                            }
-                        }
-                    }
+                    try {
+                        // 获取完整的、经过 ComfyUI 官方序列化的 prompt 和 workflow
+                        const p = await app.graphToPrompt();
+                        const nodePrompt = p.output[String(node.id)];
+                        if (!nodePrompt) return;
 
-                    // 构造符合 ComfyUI 后端严格校验标准的 Payload
-                    const prompt = {
-                        prompt: {
-                            [nodeId]: {
-                                inputs: inputs,
-                                class_type: node.comfyClass || nodeData.name,
-                                _meta: {
-                                    title: node.title || nodeData.name
+                        const payload = {
+                            prompt: {
+                                [String(node.id)]: nodePrompt
+                            },
+                            client_id: api.clientId,
+                            extra_data: {
+                                extra_pnginfo: {
+                                    workflow: p.workflow
                                 }
                             }
-                        },
-                        client_id: api.clientId || "pw_utility_client",
-                        extra_data: {
-                            extra_pnginfo: {
-                                workflow: app.graph ? app.graph.serialize() : {}
-                            }
-                        }
-                    };
+                        };
 
-                    try {
-                        const resp = await api.fetchApi("/prompt", {
+                        await api.fetchApi("/prompt", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify(prompt)
+                            body: JSON.stringify(payload)
                         });
-                        if (!resp.ok) {
-                            const errText = await resp.text();
-                            console.warn("[AudioLoaderPW] Partial execution rejected:", errText);
-                        }
                     } catch (e) {
-                        console.warn("[AudioLoaderPW] Partial execution network error:", e);
+                        console.warn("[AudioLoaderPW] Partial execution error:", e);
                     }
                 };
 
@@ -128,7 +111,7 @@ app.registerExtension({
                                     audioWidget.callback(data.name);
                                 }
                                 app.graph.setDirtyCanvas(true, false);
-                                triggerPartialExecution(); // 上传后触发局部执行
+                                triggerPartialExecution(); 
                             }
                         }
                     } catch (err) {
@@ -256,12 +239,10 @@ app.registerExtension({
                         if (out.audio_path && out.audio_path.length) {
                             applyAudioPath(out.audio_path[0]);
                         }
-                        // 同步后端计算的精确 duration
+                        // 【核心修复】接收后端推来的 duration 并更新 widget
                         if (out.duration && out.duration.length > 0) {
                             const dw = node.widgets && node.widgets.find(w => w.name === "duration");
-                            if (dw) {
-                                dw.value = parseFloat(out.duration[0]);
-                            }
+                            if (dw) dw.value = parseFloat(out.duration[0]);
                         }
                     }
                 };
@@ -309,7 +290,6 @@ app.registerExtension({
                     overflow: "hidden"
                 });
 
-                // 波纹 Canvas
                 const waveCanvas = document.createElement("canvas");
                 Object.assign(waveCanvas.style, {
                     position: "absolute",
@@ -399,7 +379,6 @@ app.registerExtension({
                 const resizeObserver = new ResizeObserver(() => drawWaveform());
                 resizeObserver.observe(sliderBox);
 
-                // 前端 Web Audio API 实时解析 (保证波纹与时间轴完美对齐)
                 const generateWaveformFromUrl = async (audioUrl) => {
                     if (!audioUrl || audioUrl === "none") return;
                     try {
@@ -500,7 +479,7 @@ app.registerExtension({
                         audioWidget.callback = function() {
                             if (!node._initializing) {
                                 node._should_reset_trim = true;
-                                triggerPartialExecution(); // 下拉菜单改变时触发局部执行
+                                triggerPartialExecution(); 
                             }
                             updateAudio();
                         };
@@ -591,7 +570,7 @@ app.registerExtension({
                         updateRuler(); 
                         updateUI();
                         app.graph.setDirtyCanvas(true, false);
-                        if (audioEl.src) generateWaveformFromUrl(audioEl.src); // 前端实时解析波纹
+                        if (audioEl.src) generateWaveformFromUrl(audioEl.src); 
                     };
 
                     audioEl.ontimeupdate = () => {
