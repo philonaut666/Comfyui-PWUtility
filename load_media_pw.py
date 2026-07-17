@@ -6,6 +6,7 @@ import os
 import cv2
 import subprocess
 import re
+import math
 from comfy.utils import common_upscale
 
 VAE_STRIDE = (4, 8, 8)
@@ -401,6 +402,7 @@ class LMMSelectAudioPW:
                 "pre_silence": ("FLOAT", {"default": 0.00, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Add silence to the beginning of the main audio (in seconds)"}),
                 "post_silence": ("FLOAT", {"default": 0.00, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Add silence to the end of the main audio (in seconds)"}),
                 "fps": ("FLOAT", {"default": 25.0, "min": 0.0, "max": 1000.0, "step": 0.1, "tooltip": "Frames per second, used to convert seconds to frames"}),
+                "normalize": ("FLOAT", {"default": -16.0, "min": -100.0, "max": 100.0, "step": 0.1, "tooltip": "Target Peak dBFS for audio normalization"}),
                 "align_8n+1": ("BOOLEAN", {"default": False, "tooltip": "Align final main audio length to 8n+1 video frames by appending silence"}),
             },
             "optional": {
@@ -414,7 +416,7 @@ class LMMSelectAudioPW:
     FUNCTION = "get_original_audio"
     CATEGORY = "🔮PWUtility/Local Media"
 
-    def get_original_audio(self, index, trim_front, duration, pre_silence, post_silence, fps, paths=None, audio=None, **kwargs):
+    def get_original_audio(self, index, trim_front, duration, pre_silence, post_silence, fps, normalize, paths=None, audio=None, **kwargs):
         align_8n_plus_1 = kwargs.get("align_8n+1", False)
         
         original_waveform = None
@@ -459,7 +461,7 @@ class LMMSelectAudioPW:
             
         end_samples = front_samples + duration_samples
         
-        # 3. 切分音频 (纯净原始波形，不受后续特效影响)
+        # 3. 切分音频 (纯净原始波形)
         # 前段 (trimed_front_audio)
         if front_samples > 0:
             front_waveform = original_waveform[:, :, :front_samples]
@@ -476,6 +478,17 @@ class LMMSelectAudioPW:
         main_waveform = original_waveform[:, :, front_samples:end_samples]
         if main_waveform.shape[-1] == 0:
              main_waveform = torch.zeros(1, channels, 1, dtype=original_waveform.dtype, device=original_waveform.device)
+
+        # 3.5 归一化处理 (基于原始完整音频的 Peak 计算增益，统一应用到所有切分片段)
+        peak = torch.max(torch.abs(original_waveform))
+        if peak > 0:
+            current_db = 20 * math.log10(peak.item())
+            gain_db = normalize - current_db
+            gain_linear = 10 ** (gain_db / 20.0)
+            
+            front_waveform = torch.clamp(front_waveform * gain_linear, -1.0, 1.0)
+            back_waveform = torch.clamp(back_waveform * gain_linear, -1.0, 1.0)
+            main_waveform = torch.clamp(main_waveform * gain_linear, -1.0, 1.0)
 
         trimed_front_audio = {'waveform': front_waveform, 'sample_rate': sample_rate}
         trimed_back_audio = {'waveform': back_waveform, 'sample_rate': sample_rate}
