@@ -57,11 +57,11 @@ function reduceNodesDepthFirst(nodeOrNodes, reduceFn, reduceTo) {
     return reduceTo;
 }
 
-// 【优化】移除单节点的 setDirtyCanvas，统一在最后刷新，避免频繁触发前端校验误报
 function changeModeOfNodes(nodeOrNodes, mode) {
     reduceNodesDepthFirst(nodeOrNodes, (n) => {
         if (n.mode !== mode) {
             n.mode = mode;
+            if (n.setDirtyCanvas) n.setDirtyCanvas(true, true);
         }
     });
 }
@@ -580,6 +580,7 @@ app.registerExtension({
             const restriction = this.properties.toggleRestriction;
             const isRestricted = restriction === 'always_one' || restriction === 'max_one';
 
+            // 手动触发或外部触发时，当前节点不豁免，严格执行互斥
             if (enable && isRestricted && !opts.skipRestriction) {
                 const filteredIds = this.filterGroups(this.getAllGroupsFlat()).map(g => g._pwUniqueId);
                 const enabledOthers = this.properties.groups.filter(g => g.enabled && g.group_name !== uniqueId && filteredIds.includes(g.group_name));
@@ -592,9 +593,14 @@ app.registerExtension({
             const mode = enable ? 0 : (switchMode === 'bypass' ? 4 : 2);
             changeModeOfNodes(nodes, mode);
             
+            if (groupInfo._pwTopSubgraphNode && groupInfo._pwTopSubgraphNode.setDirtyCanvas) {
+                groupInfo._pwTopSubgraphNode.setDirtyCanvas(true, true);
+            }
+
             const config = this.properties.groups.find(g => g.group_name === uniqueId);
             if (config) config.enabled = enable;
 
+            // Always One 保底逻辑 (手动关闭时)
             if (!enable && restriction === 'always_one' && !opts.skipRestriction) {
                 const filteredGroups = this.filterGroups(this.getAllGroupsFlat());
                 const filteredIds = filteredGroups.map(g => g._pwUniqueId);
@@ -625,6 +631,7 @@ app.registerExtension({
                 };
                 const allAdvNodesGlobal = collectAdvNodes(app.graph);
                 
+                // 辅助函数：查找组所属的 GSA 节点
                 const getGroupOwnerNode = (groupName) => {
                     for (const node of allAdvNodesGlobal) {
                         if (node.properties.groups && node.properties.groups.some(g => g.group_name === groupName)) {
@@ -652,6 +659,7 @@ app.registerExtension({
                 if (sourceRules) {
                     const rules = enable ? sourceRules.on_enable : sourceRules.on_disable;
                     for (const rule of rules) {
+                        // 【核心新增】记录触发源 parent
                         pendingActions.push({ name: rule.target_group, action: rule.action || 'active', depth: 1, parent: uniqueId });
                     }
                 }
@@ -661,7 +669,7 @@ app.registerExtension({
                     const act = pendingActions[head++];
                     const { name, action, depth, parent } = act;
                     if (finalStates[name] && finalStates[name].depth <= depth) continue;
-                    finalStates[name] = { action, depth, parent };
+                    finalStates[name] = { action, depth, parent }; // 保存 parent
                     const rules = globalRules[name];
                     if (rules) {
                         const nextRules = (action === 'active') ? rules.on_enable : rules.on_disable;
@@ -673,6 +681,7 @@ app.registerExtension({
                 
                 const allGroupsFlat = this.getAllGroupsFlat();
                 
+                // 【核心修复】处理 Linkage 触发开启时的互斥限制 (带同节点豁免机制)
                 for (const [name, state] of Object.entries(finalStates)) {
                     if (state.action === 'active') {
                         const targetNode = getGroupOwnerNode(name);
@@ -681,9 +690,11 @@ app.registerExtension({
                             const isRestricted = restriction === 'always_one' || restriction === 'max_one';
                             if (isRestricted) {
                                 const parentNode = getGroupOwnerNode(state.parent);
+                                // 豁免条件：触发源和目标组在同一个 GSA 节点中
                                 const isExempt = (parentNode && targetNode && parentNode === targetNode);
                                 
                                 if (!isExempt) {
+                                    // 不豁免，严格执行互斥：关闭 targetNode 中除了 name 之外的其他已开启组
                                     const filteredIds = targetNode.filterGroups(targetNode.getAllGroupsFlat()).map(g => g._pwUniqueId);
                                     const enabledOthers = targetNode.properties.groups.filter(g => g.enabled && g.group_name !== name && filteredIds.includes(g.group_name));
                                     for (const otherCfg of enabledOthers) {
@@ -692,6 +703,9 @@ app.registerExtension({
                                             const otherNodes = getNodesInGroupGlobal(otherGroupInfo);
                                             const otherMode = (targetNode.properties.switchMode === 'bypass') ? 4 : 2;
                                             changeModeOfNodes(otherNodes, otherMode);
+                                            if (otherGroupInfo._pwTopSubgraphNode && otherGroupInfo._pwTopSubgraphNode.setDirtyCanvas) {
+                                                otherGroupInfo._pwTopSubgraphNode.setDirtyCanvas(true, true);
+                                            }
                                             for (const syncNode of allAdvNodesGlobal) {
                                                 const syncCfg = syncNode.properties.groups.find(g => g.group_name === otherCfg.group_name);
                                                 if (syncCfg) syncCfg.enabled = false;
@@ -704,6 +718,7 @@ app.registerExtension({
                     }
                 }
 
+                // 应用 finalStates 到实际的节点 mode
                 for (const [name, state] of Object.entries(finalStates)) {
                     const targetGroupInfo = allGroupsFlat.find(g => g._pwUniqueId === name);
                     if (targetGroupInfo) {
@@ -715,6 +730,10 @@ app.registerExtension({
                             else if (state.action === 'bypass') targetMode = 4;
                             changeModeOfNodes(targetNodes, targetMode);
                             
+                            if (targetGroupInfo._pwTopSubgraphNode && targetGroupInfo._pwTopSubgraphNode.setDirtyCanvas) {
+                                targetGroupInfo._pwTopSubgraphNode.setDirtyCanvas(true, true);
+                            }
+
                             const isEnabling = (state.action === 'active');
                             for (const advNode of allAdvNodesGlobal) {
                                 const cfg = advNode.properties.groups.find(g => g.group_name === name);
@@ -724,6 +743,7 @@ app.registerExtension({
                     }
                 }
                 
+                // 处理 Linkage 触发关闭后的 Always One 保底逻辑
                 for (const advNode of allAdvNodesGlobal) {
                     if (advNode.properties.toggleRestriction === 'always_one') {
                         const filteredGroups = advNode.filterGroups(advNode.getAllGroupsFlat());
@@ -737,6 +757,9 @@ app.registerExtension({
                                 const targetNodes = getNodesInGroupGlobal(targetGroup);
                                 if (targetNodes.length > 0) {
                                     changeModeOfNodes(targetNodes, 0);
+                                    if (targetGroup._pwTopSubgraphNode && targetGroup._pwTopSubgraphNode.setDirtyCanvas) {
+                                        targetGroup._pwTopSubgraphNode.setDirtyCanvas(true, true);
+                                    }
                                     for (const syncNode of allAdvNodesGlobal) {
                                         const cfg = syncNode.properties.groups.find(g => g.group_name === targetGroup._pwUniqueId);
                                         if (cfg) cfg.enabled = true;
@@ -760,9 +783,6 @@ app.registerExtension({
                     }
                 };
                 refreshAll(app.graph);
-                
-                // 【优化】所有状态计算和修改完毕后，统一触发一次全局画布刷新
-                // 这能让 ComfyUI 看到“最终完整”的图状态，大幅减少前端校验器的误报
                 app.graph.setDirtyCanvas(true, true);
                 window.dispatchEvent(new CustomEvent('group-mute-changed', { detail: { sourceId: this._gsaId } }));
             }
