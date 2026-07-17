@@ -397,36 +397,92 @@ class LMMSelectAudioPW:
             "required": {
                 "paths": ("LMM_ALL_PATHS",),
                 "index": ("INT", {"default": 0, "min": 0, "step": 1}),
-                "seek_seconds": ("FLOAT", {"default": 0, "min": 0, "max": 100000, "step": 0.01}),
-                "duration": ("FLOAT", {"default": 0, "min": 0, "max": 100000, "step": 0.01}),
+                "Trim_start_sec": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
+                "duration": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
+                "pre_silence": ("FLOAT", {"default": 0.00, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Add silence to the beginning of the audio (in seconds)"}),
+                "post_silence": ("FLOAT", {"default": 0.00, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Add silence to the end of the audio (in seconds)"}),
+                "fps": ("FLOAT", {"default": 25.0, "min": 0.0, "max": 1000.0, "step": 0.1, "tooltip": "Frames per second, used to convert seconds to frames"}),
+                "align_8n+1": ("BOOLEAN", {"default": False, "tooltip": "Align final audio length to 8n+1 video frames by appending silence"}),
             },
         }
 
-    RETURN_TYPES = ("AUDIO", "FLOAT",)
-    RETURN_NAMES = ("audio", "duration",)
+    RETURN_TYPES = ("AUDIO", "FLOAT", "INT",)
+    RETURN_NAMES = ("audio", "duration", "frame_count",)
     FUNCTION = "get_original_audio"
     CATEGORY = "🔮PWUtility/Local Media"
 
-    def get_original_audio(self, paths, index, seek_seconds, duration):
+    def get_original_audio(self, paths, index, Trim_start_sec, duration, pre_silence, post_silence, fps, **kwargs):
+        # 安全接收包含特殊字符的 UI 参数名
+        align_8n_plus_1 = kwargs.get("align_8n+1", False)
+        
         selected_item = parse_selection_and_get_item(paths, index, "audio")
 
         if not selected_item or 'path' not in selected_item:
-            return (None, 0.0)
+            return (None, 0.0, 0)
             
         selected_path = selected_item['path']
 
         if not os.path.exists(selected_path):
-            return (None, 0.0)
+            return (None, 0.0, 0)
 
-        audio_data = get_audio(selected_path, start_time=seek_seconds, duration=duration)
+        # 1. 基础提取 (应用 Trim_start_sec 和 duration)
+        audio_data = get_audio(selected_path, start_time=Trim_start_sec, duration=duration)
 
-        if audio_data and 'waveform' in audio_data and audio_data['waveform'] is not None:
-            waveform = audio_data['waveform']
-            sample_rate = audio_data['sample_rate']
-            loaded_duration = waveform.shape[-1] / sample_rate
-            return (audio_data, loaded_duration)
-        else:
-            return (None, 0.0)
+        if not (audio_data and 'waveform' in audio_data and audio_data['waveform'] is not None):
+            return (None, 0.0, 0)
+            
+        waveform = audio_data['waveform']
+        sample_rate = audio_data['sample_rate']
+        
+        # 2. 前置静音 (Pre-silence)
+        if pre_silence > 0:
+            pre_samples = int(round(pre_silence * sample_rate))
+            if pre_samples > 0:
+                pre_tensor = torch.zeros(1, waveform.shape[1], pre_samples, dtype=waveform.dtype, device=waveform.device)
+                waveform = torch.cat([pre_tensor, waveform], dim=-1)
+                
+        # 3. 后置静音 (Post-silence)
+        if post_silence > 0:
+            post_samples = int(round(post_silence * sample_rate))
+            if post_samples > 0:
+                post_tensor = torch.zeros(1, waveform.shape[1], post_samples, dtype=waveform.dtype, device=waveform.device)
+                waveform = torch.cat([waveform, post_tensor], dim=-1)
+                
+        # 4. 8n+1 帧对齐 (最后一步执行)
+        if align_8n_plus_1:
+            current_samples = waveform.shape[-1]
+            current_duration_sec = current_samples / sample_rate
+            current_frames = current_duration_sec * fps
+            
+            rounded_frames = round(current_frames)
+            
+            # 判断是否符合 8n+1
+            if (rounded_frames - 1) % 8 != 0:
+                # 计算向上取整最近的 8n+1 目标帧数
+                n = (rounded_frames - 1 + 7) // 8
+                target_frames = 8 * n + 1
+                
+                if target_frames < rounded_frames:
+                    n += 1
+                    target_frames = 8 * n + 1
+                    
+                target_duration_sec = target_frames / fps
+                target_samples = int(round(target_duration_sec * sample_rate))
+                
+                # 如果目标采样点数大于当前点数，则在末尾补充空白音频
+                if target_samples > current_samples:
+                    pad_samples = target_samples - current_samples
+                    pad_tensor = torch.zeros(1, waveform.shape[1], pad_samples, dtype=waveform.dtype, device=waveform.device)
+                    waveform = torch.cat([waveform, pad_tensor], dim=-1)
+
+        # 更新最终音频数据
+        audio_data['waveform'] = waveform
+        
+        final_samples = waveform.shape[-1]
+        final_duration = final_samples / sample_rate
+        final_frame_count = round(final_duration * fps)
+        
+        return (audio_data, final_duration, final_frame_count)
 
 
 class LMMPathsExtractPW:
@@ -445,7 +501,6 @@ class LMMPathsExtractPW:
     CATEGORY = "🔮PWUtility/Local Media"
 
     def extract_path(self, paths, index):
-        # expected_type 设为 None，表示不限制媒体类型，提取任意类型的 path
         selected_item = parse_selection_and_get_item(paths, index, expected_type=None)
         
         if not selected_item or 'path' not in selected_item:
