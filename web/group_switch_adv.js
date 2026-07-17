@@ -580,6 +580,7 @@ app.registerExtension({
             const restriction = this.properties.toggleRestriction;
             const isRestricted = restriction === 'always_one' || restriction === 'max_one';
 
+            // 手动触发或外部触发时，当前节点不豁免，严格执行互斥
             if (enable && isRestricted && !opts.skipRestriction) {
                 const filteredIds = this.filterGroups(this.getAllGroupsFlat()).map(g => g._pwUniqueId);
                 const enabledOthers = this.properties.groups.filter(g => g.enabled && g.group_name !== uniqueId && filteredIds.includes(g.group_name));
@@ -599,18 +600,15 @@ app.registerExtension({
             const config = this.properties.groups.find(g => g.group_name === uniqueId);
             if (config) config.enabled = enable;
 
+            // Always One 保底逻辑 (手动关闭时)
             if (!enable && restriction === 'always_one' && !opts.skipRestriction) {
                 const filteredGroups = this.filterGroups(this.getAllGroupsFlat());
                 const filteredIds = filteredGroups.map(g => g._pwUniqueId);
                 const anyEnabled = this.properties.groups.some(g => g.enabled && g.group_name !== uniqueId && filteredIds.includes(g.group_name));
                 if (!anyEnabled && filteredGroups.length > 0) {
                     let targetGroup = filteredGroups.find(g => g._pwUniqueId === this.properties.defaultGroup);
-                    if (!targetGroup) {
-                        targetGroup = filteredGroups.find(g => g._pwUniqueId !== uniqueId);
-                    }
-                    if (!targetGroup) {
-                        targetGroup = filteredGroups[0];
-                    }
+                    if (!targetGroup) targetGroup = filteredGroups.find(g => g._pwUniqueId !== uniqueId);
+                    if (!targetGroup) targetGroup = filteredGroups[0];
                     if (targetGroup) {
                         this.toggleGroup(targetGroup._pwUniqueId, true, { skipRestriction: true, skipUIUpdate: true });
                     }
@@ -632,6 +630,17 @@ app.registerExtension({
                     return result;
                 };
                 const allAdvNodesGlobal = collectAdvNodes(app.graph);
+                
+                // 辅助函数：查找组所属的 GSA 节点
+                const getGroupOwnerNode = (groupName) => {
+                    for (const node of allAdvNodesGlobal) {
+                        if (node.properties.groups && node.properties.groups.some(g => g.group_name === groupName)) {
+                            return node;
+                        }
+                    }
+                    return null;
+                };
+
                 const globalRules = {};
                 for (const node of allAdvNodesGlobal) {
                     if (!node.properties || !node.properties.groups) continue;
@@ -643,43 +652,56 @@ app.registerExtension({
                         }
                     }
                 }
+                
                 const finalStates = {};
                 const pendingActions = [];
                 const sourceRules = globalRules[uniqueId];
                 if (sourceRules) {
                     const rules = enable ? sourceRules.on_enable : sourceRules.on_disable;
-                    for (const rule of rules) pendingActions.push({ name: rule.target_group, action: rule.action || 'active', depth: 1 });
+                    for (const rule of rules) {
+                        // 【核心新增】记录触发源 parent
+                        pendingActions.push({ name: rule.target_group, action: rule.action || 'active', depth: 1, parent: uniqueId });
+                    }
                 }
+                
                 let head = 0;
                 while (head < pendingActions.length) {
                     const act = pendingActions[head++];
-                    const { name, action, depth } = act;
+                    const { name, action, depth, parent } = act;
                     if (finalStates[name] && finalStates[name].depth <= depth) continue;
-                    finalStates[name] = { action, depth };
+                    finalStates[name] = { action, depth, parent }; // 保存 parent
                     const rules = globalRules[name];
                     if (rules) {
                         const nextRules = (action === 'active') ? rules.on_enable : rules.on_disable;
-                        for (const rule of nextRules) pendingActions.push({ name: rule.target_group, action: rule.action || 'active', depth: depth + 1 });
+                        for (const rule of nextRules) {
+                            pendingActions.push({ name: rule.target_group, action: rule.action || 'active', depth: depth + 1, parent: name });
+                        }
                     }
                 }
+                
                 const allGroupsFlat = this.getAllGroupsFlat();
                 
-                // 【核心修复 1】处理 Linkage 触发开启时的互斥限制 (Max One / Always One)
+                // 【核心修复】处理 Linkage 触发开启时的互斥限制 (带同节点豁免机制)
                 for (const [name, state] of Object.entries(finalStates)) {
                     if (state.action === 'active') {
-                        for (const advNode of allAdvNodesGlobal) {
-                            const restriction = advNode.properties.toggleRestriction;
+                        const targetNode = getGroupOwnerNode(name);
+                        if (targetNode) {
+                            const restriction = targetNode.properties.toggleRestriction;
                             const isRestricted = restriction === 'always_one' || restriction === 'max_one';
                             if (isRestricted) {
-                                const cfg = advNode.properties.groups.find(g => g.group_name === name);
-                                if (cfg) {
-                                    const filteredIds = advNode.filterGroups(advNode.getAllGroupsFlat()).map(g => g._pwUniqueId);
-                                    const enabledOthers = advNode.properties.groups.filter(g => g.enabled && g.group_name !== name && filteredIds.includes(g.group_name));
+                                const parentNode = getGroupOwnerNode(state.parent);
+                                // 豁免条件：触发源和目标组在同一个 GSA 节点中
+                                const isExempt = (parentNode && targetNode && parentNode === targetNode);
+                                
+                                if (!isExempt) {
+                                    // 不豁免，严格执行互斥：关闭 targetNode 中除了 name 之外的其他已开启组
+                                    const filteredIds = targetNode.filterGroups(targetNode.getAllGroupsFlat()).map(g => g._pwUniqueId);
+                                    const enabledOthers = targetNode.properties.groups.filter(g => g.enabled && g.group_name !== name && filteredIds.includes(g.group_name));
                                     for (const otherCfg of enabledOthers) {
                                         const otherGroupInfo = allGroupsFlat.find(g => g._pwUniqueId === otherCfg.group_name);
                                         if (otherGroupInfo) {
                                             const otherNodes = getNodesInGroupGlobal(otherGroupInfo);
-                                            const otherMode = (advNode.properties.switchMode === 'bypass') ? 4 : 2;
+                                            const otherMode = (targetNode.properties.switchMode === 'bypass') ? 4 : 2;
                                             changeModeOfNodes(otherNodes, otherMode);
                                             if (otherGroupInfo._pwTopSubgraphNode && otherGroupInfo._pwTopSubgraphNode.setDirtyCanvas) {
                                                 otherGroupInfo._pwTopSubgraphNode.setDirtyCanvas(true, true);
@@ -721,7 +743,7 @@ app.registerExtension({
                     }
                 }
                 
-                // 【核心修复 2】处理 Linkage 触发关闭后的 Always One 保底逻辑
+                // 处理 Linkage 触发关闭后的 Always One 保底逻辑
                 for (const advNode of allAdvNodesGlobal) {
                     if (advNode.properties.toggleRestriction === 'always_one') {
                         const filteredGroups = advNode.filterGroups(advNode.getAllGroupsFlat());
