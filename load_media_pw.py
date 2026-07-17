@@ -94,7 +94,6 @@ def extract_prompts_and_seed(metadata):
                             return True
             return False
 
-        # Extract seed from KSampler nodes
         for node in workflow['nodes']:
             node_type = node.get('type', '')
             if 'KSampler' in node_type:
@@ -249,7 +248,8 @@ class LMMSelectImagePW:
         }
 
     RETURN_TYPES = ("IMAGE", "INT", "INT", "STRING", "STRING", "INT",)
-    RETURN_NAMES = ("image", "width", "height", "positive_prompt", "negative_prompt", "seed",)
+    RETURN_NAMES = ("image_list", "width", "height", "positive_prompt", "negative_prompt", "seed",)
+    OUTPUT_IS_LIST = (True, True, True, True, True, True)
     FUNCTION = "get_original_image"
     CATEGORY = "🔮PWUtility/Local Media"
 
@@ -261,18 +261,19 @@ class LMMSelectImagePW:
         except (json.JSONDecodeError, TypeError):
             selection_list = []
 
-        # 过滤出所有图片类型的 item
         image_items = [item for item in selection_list if item.get("type") == "image"]
 
         if not 批量:
-            # 单张模式：根据 index 获取具体某一张
+            # 单张模式：返回长度为 1 的列表，ComfyUI 会自动为普通节点解包
             if not (0 <= index < len(image_items)):
-                return (torch.zeros(1, 1, 1, 3), 0, 0, "", "", 0)
+                empty_img = torch.zeros(1, 64, 64, 3)
+                return ([empty_img], [0], [0], [""], [""], [0])
             
             selected_item = image_items[index]
-            return self._process_single_image(selected_item)
+            img, w, h, pos, neg, seed = self._process_single_image(selected_item)
+            return ([img], [w], [h], [pos], [neg], [seed])
         else:
-            # 批量模式：忽略 index，将所有读入并输出为 list
+            # 批量模式：返回包含所有原图及其参数的完整列表
             images_list = []
             widths_list = []
             heights_list = []
@@ -285,15 +286,18 @@ class LMMSelectImagePW:
                 images_list.append(img)
                 widths_list.append(w)
                 heights_list.append(h)
-                # 遇到无数据时，字符串返回空字符，INT 返回 0 防止 ComfyUI 类型报错
                 pos_prompts_list.append(pos if pos else "")
                 neg_prompts_list.append(neg if neg else "")
                 seeds_list.append(seed if seed is not None else 0)
 
+            if not images_list:
+                empty_img = torch.zeros(1, 64, 64, 3)
+                return ([empty_img], [0], [0], [""], [""], [0])
+
             return (images_list, widths_list, heights_list, pos_prompts_list, neg_prompts_list, seeds_list)
 
     def _process_single_image(self, selected_item):
-        empty_return = (torch.zeros(1, 1, 1, 3), 0, 0, "", "", 0)
+        empty_return = (torch.zeros(1, 64, 64, 3), 0, 0, "", "", 0)
 
         if not selected_item or 'path' not in selected_item or not os.path.exists(selected_item['path']):
             return empty_return
@@ -306,7 +310,6 @@ class LMMSelectImagePW:
                 
                 img_out = img.convert("RGBA") if 'A' in img.getbands() else img.convert("RGB")
                 img_array = np.array(img_out).astype(np.float32) / 255.0
-                # 保持 4D tensor 格式 (Batch, Height, Width, Channels)
                 image_tensor = torch.from_numpy(img_array)[None,] 
 
                 metadata = selected_item.get('metadata', {})
