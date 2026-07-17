@@ -49,41 +49,9 @@ app.registerExtension({
 
                 Object.defineProperty(node, 'imgs', {
                     get: function() { return undefined; },
-                    set: function(val) { /* Ignore image preview */ },
+                    set: function(val) { /* Ignore attempts by ComfyUI to set an image preview */ },
                     configurable: true
                 });
-
-                // ==========================================
-                // 【核心修复】使用 ComfyUI 原生 API 触发局部执行
-                // ==========================================
-                const triggerPartialExecution = async () => {
-                    try {
-                        // 获取完整的、经过 ComfyUI 官方序列化的 prompt 和 workflow
-                        const p = await app.graphToPrompt();
-                        const nodePrompt = p.output[String(node.id)];
-                        if (!nodePrompt) return;
-
-                        const payload = {
-                            prompt: {
-                                [String(node.id)]: nodePrompt
-                            },
-                            client_id: api.clientId,
-                            extra_data: {
-                                extra_pnginfo: {
-                                    workflow: p.workflow
-                                }
-                            }
-                        };
-
-                        await api.fetchApi("/prompt", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify(payload)
-                        });
-                    } catch (e) {
-                        console.warn("[AudioLoaderPW] Partial execution error:", e);
-                    }
-                };
 
                 const handleFileUpload = async (file) => {
                     if (!file.type.startsWith('audio/') && !file.type.startsWith('video/')) return false;
@@ -111,7 +79,6 @@ app.registerExtension({
                                     audioWidget.callback(data.name);
                                 }
                                 app.graph.setDirtyCanvas(true, false);
-                                triggerPartialExecution(); 
                             }
                         }
                     } catch (err) {
@@ -231,28 +198,14 @@ app.registerExtension({
                     }
                 };
 
-                // 监听后端局部执行返回的结果
                 const _execHandler = ({ detail }) => {
                     if (!detail || String(detail.node) !== String(node.id)) return;
                     const out = detail.output;
-                    if (out) {
-                        if (out.audio_path && out.audio_path.length) {
-                            applyAudioPath(out.audio_path[0]);
-                        }
-                        // 【核心修复】接收后端推来的 duration 并更新 widget
-                        if (out.duration && out.duration.length > 0) {
-                            const dw = node.widgets && node.widgets.find(w => w.name === "duration");
-                            if (dw) dw.value = parseFloat(out.duration[0]);
-                        }
+                    if (out && out.audio_path && out.audio_path.length) {
+                        applyAudioPath(out.audio_path[0]);
                     }
                 };
                 api.addEventListener("executed", _execHandler);
-
-                const _origRemoved = node.onRemoved;
-                node.onRemoved = function () {
-                    api.removeEventListener("executed", _execHandler);
-                    if (_origRemoved) _origRemoved.apply(this, arguments);
-                };
 
                 const trimArea = document.createElement("div");
                 Object.assign(trimArea.style, {
@@ -281,7 +234,7 @@ app.registerExtension({
                 Object.assign(sliderBox.style, {
                     position: "relative",
                     width: "100%",
-                    height: "40px", 
+                    height: "36px", // 稍微增加高度以更好展示波形
                     background: "#111",
                     borderRadius: "4px",
                     cursor: "pointer",
@@ -290,6 +243,7 @@ app.registerExtension({
                     overflow: "hidden"
                 });
 
+                // --- 新增：波形 Canvas ---
                 const waveCanvas = document.createElement("canvas");
                 Object.assign(waveCanvas.style, {
                     position: "absolute",
@@ -298,9 +252,9 @@ app.registerExtension({
                     width: "100%",
                     height: "100%",
                     pointerEvents: "none",
-                    zIndex: "1"
+                    zIndex: "0"
                 });
-                sliderBox.appendChild(waveCanvas);
+                sliderBox.insertBefore(waveCanvas, sliderBox.firstChild);
 
                 const fill = document.createElement("div");
                 Object.assign(fill.style, {
@@ -308,7 +262,7 @@ app.registerExtension({
                     height: "100%",
                     background: "rgba(14, 165, 233, 0.35)",
                     pointerEvents: "none",
-                    zIndex: "2"
+                    zIndex: "1"
                 });
                 sliderBox.appendChild(fill);
 
@@ -324,7 +278,7 @@ app.registerExtension({
                         pointerEvents: "none",
                         boxShadow: "0 0 4px rgba(0,0,0,0.8)",
                         borderRadius: "2px",
-                        zIndex: "3"
+                        zIndex: "2"
                     });
                     return h;
                 };
@@ -341,68 +295,89 @@ app.registerExtension({
                 this.size = [475, this.computeSize()[1]];
                 
                 widget.computeSize = function(width) {
-                    return [width, 220];
+                    return [width, 200];
                 };
 
-                let currentPeaks = null;
-                const drawWaveform = (peaks) => {
-                    if (peaks) currentPeaks = peaks;
-                    if (!waveCanvas || !currentPeaks || currentPeaks.length === 0) {
-                        if(waveCanvas) {
-                            const ctx = waveCanvas.getContext("2d");
-                            ctx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
-                        }
+                let cachedWaveData = null;
+
+                const renderWaveform = () => {
+                    if (!cachedWaveData) {
+                        const ctx = waveCanvas.getContext("2d");
+                        if (ctx) ctx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
                         return;
                     }
+                    const width = waveCanvas.clientWidth * 2;
+                    const height = waveCanvas.clientHeight * 2;
+                    if (width === 0 || height === 0) return;
                     
+                    waveCanvas.width = width;
+                    waveCanvas.height = height;
                     const ctx = waveCanvas.getContext("2d");
-                    const rect = sliderBox.getBoundingClientRect();
-                    const width = rect.width;
-                    const height = rect.height;
-                    
-                    waveCanvas.width = width * window.devicePixelRatio;
-                    waveCanvas.height = height * window.devicePixelRatio;
-                    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-                    
                     ctx.clearRect(0, 0, width, height);
-                    ctx.fillStyle = "rgba(56, 189, 248, 0.6)"; 
-                    const barWidth = width / currentPeaks.length;
-                    const centerY = height / 2;
                     
-                    for (let i = 0; i < currentPeaks.length; i++) {
-                        const peak = currentPeaks[i];
-                        const barHeight = peak * centerY * 0.95; 
-                        ctx.fillRect(i * barWidth, centerY - barHeight, Math.max(1, barWidth - 0.5), barHeight * 2);
+                    ctx.fillStyle = "rgba(140, 160, 180, 0.6)";
+                    const mid = height / 2;
+                    const dataLen = cachedWaveData.length;
+                    
+                    for (let i = 0; i < width; i++) {
+                        const dataIndex = Math.floor((i / width) * dataLen);
+                        const p = cachedWaveData[dataIndex];
+                        const y1 = mid - p.max * mid;
+                        const y2 = mid - p.min * mid;
+                        ctx.fillRect(i, y1, 1, y2 - y1);
                     }
                 };
 
-                const resizeObserver = new ResizeObserver(() => drawWaveform());
-                resizeObserver.observe(sliderBox);
-
-                const generateWaveformFromUrl = async (audioUrl) => {
-                    if (!audioUrl || audioUrl === "none") return;
+                const drawWaveform = async (src) => {
+                    if (!src) return;
                     try {
-                        const response = await fetch(audioUrl);
+                        const response = await fetch(src);
+                        if (!response.ok) return;
                         const arrayBuffer = await response.arrayBuffer();
                         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                         const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
                         const rawData = audioBuffer.getChannelData(0); 
                         
-                        const numPeaks = 1200;
-                        const blockSize = Math.floor(rawData.length / numPeaks);
-                        const peaks = [];
-                        for (let i = 0; i < numPeaks; i++) {
-                            let max = 0;
-                            for (let j = 0; j < blockSize; j++) {
-                                const val = Math.abs(rawData[i * blockSize + j]);
+                        const numPoints = 1000;
+                        const step = Math.floor(rawData.length / numPoints);
+                        if (step === 0) return;
+                        
+                        let globalPeak = 0;
+                        const points = [];
+                        for (let i = 0; i < numPoints; i++) {
+                            let min = 1.0, max = -1.0;
+                            for (let j = 0; j < step; j++) {
+                                const val = rawData[(i * step) + j];
+                                if (val < min) min = val;
                                 if (val > max) max = val;
                             }
-                            peaks.push(max);
+                            if (Math.abs(min) > globalPeak) globalPeak = Math.abs(min);
+                            if (Math.abs(max) > globalPeak) globalPeak = Math.abs(max);
+                            points.push({min, max});
                         }
-                        drawWaveform(peaks);
+                        if (globalPeak === 0) globalPeak = 1;
+                        
+                        cachedWaveData = points.map(p => ({
+                            min: p.min / globalPeak,
+                            max: p.max / globalPeak
+                        }));
+                        
+                        renderWaveform();
                     } catch (e) {
-                        console.warn("[AudioLoaderPW] Waveform generation failed:", e);
+                        console.warn("Waveform decode failed:", e);
                     }
+                };
+
+                const resizeObserver = new ResizeObserver(() => {
+                    renderWaveform();
+                });
+                resizeObserver.observe(sliderBox);
+
+                const _origRemoved = node.onRemoved;
+                node.onRemoved = function () {
+                    api.removeEventListener("executed", _execHandler);
+                    if (resizeObserver) resizeObserver.disconnect();
+                    if (_origRemoved) _origRemoved.apply(this, arguments);
                 };
 
                 setTimeout(() => {
@@ -426,24 +401,31 @@ app.registerExtension({
                                 if (origCallback) origCallback.apply(this, arguments);
                                 return;
                             }
+                            
                             isUpdatingDuration = true;
                             let d = parseFloat(v) || 0;
                             if (d < 0) d = 0;
+                            
                             let pre = preSilenceWidget ? parseFloat(preSilenceWidget.value) || 0 : 0;
                             let post = postSilenceWidget ? parseFloat(postSilenceWidget.value) || 0 : 0;
                             let availableForAudio = d - pre - post;
                             if (availableForAudio < 0) availableForAudio = 0;
+
                             let s = startWidget ? parseFloat(startWidget.value) || 0 : 0;
                             let newStart = s;
                             let newEnd = s + availableForAudio;
+
                             if (newEnd > duration) {
                                 newEnd = duration;
                                 newStart = Math.max(0, duration - availableForAudio);
                             }
+
                             if (startWidget) startWidget.value = parseFloat(newStart.toFixed(2));
                             if (endWidget) endWidget.value = parseFloat(newEnd.toFixed(2));
+
                             updateUI(true);
                             app.graph.setDirtyCanvas(true, false);
+                            
                             if (origCallback) origCallback.apply(this, arguments);
                             isUpdatingDuration = false;
                         };
@@ -454,8 +436,8 @@ app.registerExtension({
                             const filename = overridePath || audioWidget.value;
                             if (!filename || filename === "none") {
                                 playerTitle.textContent = "No audio selected";
-                                currentPeaks = null;
-                                drawWaveform();
+                                cachedWaveData = null;
+                                renderWaveform();
                                 return;
                             }
                             let audioSrc;
@@ -474,12 +456,15 @@ app.registerExtension({
                                 playerTitle.textContent = fname;
                                 audioSrc = api.apiURL(`/view?filename=${encodeURIComponent(fname)}&type=input&subfolder=${encodeURIComponent(subfolder)}`);
                             }
-                            audioEl.src = audioSrc;
+                            const isNewFile = (audioSrc !== audioEl.src);
+                            if (isNewFile) {
+                                audioEl.src = audioSrc;
+                                drawWaveform(audioSrc);
+                            }
                         };
                         audioWidget.callback = function() {
                             if (!node._initializing) {
                                 node._should_reset_trim = true;
-                                triggerPartialExecution(); 
                             }
                             updateAudio();
                         };
@@ -487,11 +472,23 @@ app.registerExtension({
                         node._updateAudio = updateAudio;
                     }
 
-                    container.ondragover = (e) => { e.preventDefault(); e.stopPropagation(); container.style.background = "rgba(14, 165, 233, 0.2)"; };
-                    container.ondragleave = (e) => { e.preventDefault(); e.stopPropagation(); container.style.background = defaultBg; };
+                    container.ondragover = (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        container.style.background = "rgba(14, 165, 233, 0.2)";
+                    };
+                    container.ondragleave = (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        container.style.background = defaultBg;
+                    };
                     container.ondrop = async (e) => {
-                        e.preventDefault(); e.stopPropagation(); container.style.background = defaultBg;
-                        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files[0]);
+                        e.preventDefault();
+                        e.stopPropagation();
+                        container.style.background = defaultBg;
+                        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                            handleFileUpload(e.dataTransfer.files[0]);
+                        }
                     };
 
                     const formatTime = (secs) => {
@@ -539,21 +536,26 @@ app.registerExtension({
                         let e = endWidget ? parseFloat(endWidget.value) || 0 : 0;
                         let pre = preSilenceWidget ? parseFloat(preSilenceWidget.value) || 0 : 0;
                         let post = postSilenceWidget ? parseFloat(postSilenceWidget.value) || 0 : 0;
+
                         if (e === 0 || e > duration) e = duration;
                         if (s > e) s = e;
+                        
                         const sPct = (s / duration) * 100;
                         const ePct = (e / duration) * 100;
                         startHandle.style.left = `${sPct}%`;
                         endHandle.style.left = `${ePct}%`;
                         fill.style.left = `${sPct}%`;
                         fill.style.width = `${ePct - sPct}%`;
+                        
                         const currentDur = parseFloat((e - s + pre + post).toFixed(2));
                         trimLength.textContent = `Trimmed: ${currentDur}s`;
+                        
                         if (durationWidget && durationWidget.value !== currentDur) {
                             isUpdatingDuration = true;
                             durationWidget.value = currentDur;
                             isUpdatingDuration = false;
                         }
+                        
                         if (syncPlayer && audioEl.readyState >= 1) { audioEl.currentTime = s; }
                     };
 
@@ -565,12 +567,13 @@ app.registerExtension({
                             node._should_reset_trim = false;
                         } else {
                             let e = endWidget ? parseFloat(endWidget.value) || 0 : 0;
-                            if (endWidget && (e === 0 || e > duration)) endWidget.value = parseFloat(duration.toFixed(2));
+                            if (endWidget && (e === 0 || e > duration)) { 
+                                endWidget.value = parseFloat(duration.toFixed(2)); 
+                            }
                         }
                         updateRuler(); 
                         updateUI();
                         app.graph.setDirtyCanvas(true, false);
-                        if (audioEl.src) generateWaveformFromUrl(audioEl.src); 
                     };
 
                     audioEl.ontimeupdate = () => {
@@ -602,7 +605,9 @@ app.registerExtension({
                         const val = (x / rect.width) * duration;
                         let s = startWidget ? parseFloat(startWidget.value) || 0 : 0;
                         let e_val = endWidget ? parseFloat(endWidget.value) || duration : duration;
+                        
                         const handleTolerance = (10 / rect.width) * duration;
+                        
                         if (val > s + handleTolerance && val < e_val - handleTolerance) {
                             dragging = 'center';
                             dragOffset = val - s;
@@ -632,8 +637,15 @@ app.registerExtension({
                         } else if (dragging === 'center') {
                             let newStart = val - dragOffset;
                             let newEnd = newStart + dragSelectionWidth;
-                            if (newStart < 0) { newStart = 0; newEnd = dragSelectionWidth; } 
-                            else if (newEnd > duration) { newEnd = duration; newStart = duration - dragSelectionWidth; }
+                            
+                            if (newStart < 0) {
+                                newStart = 0;
+                                newEnd = dragSelectionWidth;
+                            } else if (newEnd > duration) {
+                                newEnd = duration;
+                                newStart = duration - dragSelectionWidth;
+                            }
+                            
                             if(startWidget) startWidget.value = parseFloat(newStart.toFixed(2));
                             if(endWidget) endWidget.value = parseFloat(newEnd.toFixed(2));
                         }
@@ -641,7 +653,9 @@ app.registerExtension({
                     };
 
                     sliderBox.onpointerup = (e) => { dragging = null; sliderBox.releasePointerCapture(e.pointerId); };
+
                     setTimeout(() => { node._initializing = false; }, 500);
+
                 }, 100);
 
                 node.onExecuted = function (output) {
