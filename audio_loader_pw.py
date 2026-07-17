@@ -66,7 +66,6 @@ class AudioLoaderPW:
                 "pre_silence": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Silence in seconds to add before the audio"}),
                 "post_silence": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Silence in seconds to add after the audio"}),
                 "align_8n+1": ("BOOLEAN", {"default": False, "tooltip": "Pad audio to make total frames equal to 8n+1 based on fps"}),
-                # 新增 normalize 输入框，支持负数，默认 -16.0
                 "normalize": ("FLOAT", {"default": -16.0, "min": -100.0, "max": 100.0, "step": 0.1, "tooltip": "Target peak dB for normalization. Set to 0 to disable."}),
             },
             "optional": {
@@ -76,8 +75,9 @@ class AudioLoaderPW:
         }
 
     CATEGORY = "PWUtility/Audio"
-    RETURN_TYPES = ("AUDIO", "FLOAT", "INT")
-    RETURN_NAMES = ("audio", "duration", "frame_count")
+    # 新增两个 AUDIO 输出端口
+    RETURN_TYPES = ("AUDIO", "FLOAT", "INT", "AUDIO", "AUDIO")
+    RETURN_NAMES = ("audio", "duration", "frame_count", "trimed_front_audio", "trimed_back_audio")
     FUNCTION = "load_audio"
 
     @classmethod
@@ -124,11 +124,37 @@ class AudioLoaderPW:
             end_frame = waveform.shape[1]
             
         start_frame = min(start_frame, end_frame)
-        trimmed_waveform = waveform[:, start_frame:end_frame]
         
+        # --- 切分前、中、后三段音频 ---
+        front_waveform = waveform[:, 0:start_frame]
+        trimmed_waveform = waveform[:, start_frame:end_frame]
+        back_waveform = waveform[:, end_frame:waveform.shape[1]]
+        
+        # 防止空 tensor 导致下游节点崩溃
+        if front_waveform.shape[1] == 0:
+            front_waveform = torch.zeros((waveform.shape[0], 1), dtype=waveform.dtype, device=waveform.device)
         if trimmed_waveform.shape[1] == 0:
             trimmed_waveform = torch.zeros((waveform.shape[0], 1), dtype=waveform.dtype, device=waveform.device)
+        if back_waveform.shape[1] == 0:
+            back_waveform = torch.zeros((waveform.shape[0], 1), dtype=waveform.dtype, device=waveform.device)
+
+        # --- 归一化辅助函数 ---
+        def _apply_normalize(wav, target_db):
+            if target_db != 0.0 and wav.shape[1] > 0:
+                peak = torch.max(torch.abs(wav)).item()
+                if peak > 1e-6:  # 避免全静音导致除零错误
+                    current_peak_db = 20 * math.log10(peak)
+                    gain_db = target_db - current_peak_db
+                    gain_linear = 10 ** (gain_db / 20.0)
+                    return wav * gain_linear
+            return wav
+
+        # --- 对三段音频分别进行归一化计算 ---
+        front_waveform = _apply_normalize(front_waveform, normalize)
+        trimmed_waveform = _apply_normalize(trimmed_waveform, normalize)
+        back_waveform = _apply_normalize(back_waveform, normalize)
         
+        # --- 仅对中段音频进行 pre/post silence 拼接 ---
         pre_silence_frames = int(pre_silence * sample_rate)
         post_silence_frames = int(post_silence * sample_rate)
         
@@ -137,16 +163,7 @@ class AudioLoaderPW:
         
         final_waveform = torch.cat((pre_silence_waveform, trimmed_waveform, post_silence_waveform), dim=1)
         
-        # --- 新增：音频归一化逻辑 ---
-        if normalize != 0.0:
-            peak = torch.max(torch.abs(final_waveform)).item()
-            if peak > 1e-6:  # 避免全静音导致除零错误
-                current_peak_db = 20 * math.log10(peak)
-                gain_db = normalize - current_peak_db
-                gain_linear = 10 ** (gain_db / 20.0)
-                final_waveform = final_waveform * gain_linear
-
-        # 8n+1 帧对齐逻辑
+        # --- 8n+1 帧对齐逻辑 (仅针对中段 final_waveform) ---
         if align_flag and fps > 0:
             audio_length_sec = final_waveform.shape[1] / sample_rate
             total_frames = audio_length_sec * fps
@@ -169,7 +186,14 @@ class AudioLoaderPW:
         else:
             final_duration = float(final_waveform.shape[1] / sample_rate)
         
+        # --- 构建输出字典 ---
         audio_output = {"waveform": final_waveform.unsqueeze(0), "sample_rate": sample_rate}
+        front_audio_output = {"waveform": front_waveform.unsqueeze(0), "sample_rate": sample_rate}
+        back_audio_output = {"waveform": back_waveform.unsqueeze(0), "sample_rate": sample_rate}
+        
         frame_count = int(round(final_duration * fps)) if fps > 0 else 0
         
-        return {"ui": {"audio_path": [str(audio_to_load)]}, "result": (audio_output, final_duration, frame_count)}
+        return {
+            "ui": {"audio_path": [str(audio_to_load)]}, 
+            "result": (audio_output, final_duration, frame_count, front_audio_output, back_audio_output)
+        }
