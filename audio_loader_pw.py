@@ -54,7 +54,6 @@ class AudioLoaderPW:
                 except:
                     files = sorted(all_files)
         
-        # 强制将 "none" 放在列表最前面，确保新建节点时默认不选中任何实际文件
         files = ["none"] + [f for f in files if f != "none"]
 
         return {
@@ -75,7 +74,6 @@ class AudioLoaderPW:
         }
 
     CATEGORY = "PWUtility/Audio"
-    # 新增 INT 类型的 frame_count 输出端口
     RETURN_TYPES = ("AUDIO", "FLOAT", "INT")
     RETURN_NAMES = ("audio", "duration", "frame_count")
     FUNCTION = "load_audio"
@@ -137,9 +135,6 @@ class AudioLoaderPW:
         
         final_waveform = torch.cat((pre_silence_waveform, trimmed_waveform, post_silence_waveform), dim=1)
         
-        # ==========================================
-        # 8n+1 帧对齐逻辑
-        # ==========================================
         if align_flag and fps > 0:
             audio_length_sec = final_waveform.shape[1] / sample_rate
             total_frames = audio_length_sec * fps
@@ -163,8 +158,22 @@ class AudioLoaderPW:
             final_duration = float(final_waveform.shape[1] / sample_rate)
         
         audio_output = {"waveform": final_waveform.unsqueeze(0), "sample_rate": sample_rate}
-        
-        # 计算最终帧数 (使用 round 消除浮点精度误差，确保输出精确的整数)
         frame_count = int(round(final_duration * fps)) if fps > 0 else 0
         
-        return {"ui": {"audio_path": [str(audio_to_load)]}, "result": (audio_output, final_duration, frame_count)}
+        # 提取处理后的波形峰值 (供外部调用或调试)
+        mono_waveform = final_waveform.mean(dim=0)
+        num_peaks = 1200
+        chunk_size = max(1, mono_waveform.shape[0] // num_peaks)
+        peaks = []
+        for i in range(0, mono_waveform.shape[0], chunk_size):
+            chunk = mono_waveform[i:i+chunk_size]
+            if chunk.shape[0] > 0:
+                peaks.append(float(chunk.abs().max().item()))
+        
+        return {
+            "ui": {
+                "audio_path": [str(audio_to_load)], 
+                "waveform_peaks": peaks
+            }, 
+            "result": (audio_output, final_duration, frame_count)
+        }
