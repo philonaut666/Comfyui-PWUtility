@@ -282,7 +282,6 @@ class LMMSelectImagePW:
                 
                 img_out = img.convert("RGBA") if 'A' in img.getbands() else img.convert("RGB")
                 img_array = np.array(img_out).astype(np.float32) / 255.0
-                # 直接输出单张图片 (Batch size = 1)
                 image_tensor = torch.from_numpy(img_array)[None,]
 
                 metadata = selected_item.get('metadata', {})
@@ -430,14 +429,41 @@ class LMMSelectAudioPW:
             return (None, 0.0)
 
 
+class LMMPathsExtractPW:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "paths": ("LMM_ALL_PATHS",),
+                "index": ("INT", {"default": 0, "min": 0, "step": 1, "tooltip": "The sequence number of the path to extract (starts from 0)"}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("path",)
+    FUNCTION = "extract_path"
+    CATEGORY = "🔮PWUtility/Local Media"
+
+    def extract_path(self, paths, index):
+        # expected_type 设为 None，表示不限制媒体类型，提取任意类型的 path
+        selected_item = parse_selection_and_get_item(paths, index, expected_type=None)
+        
+        if not selected_item or 'path' not in selected_item:
+            return ("",)
+            
+        return (selected_item['path'],)
+
+
 NODE_CLASS_MAPPINGS = {
     "LMMSelectImagePW": LMMSelectImagePW,
     "LMMSelectVideoPW": LMMSelectVideoPW,
     "LMMSelectAudioPW": LMMSelectAudioPW,
+    "LMMPathsExtractPW": LMMPathsExtractPW,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LMMSelectImagePW": "LMM Select Image PW",
     "LMMSelectVideoPW": "LMM Select Video PW",
     "LMMSelectAudioPW": "LMM Select Audio PW",
+    "LMMPathsExtractPW": "LMM Paths Extract PW",
 }
