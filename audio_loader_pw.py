@@ -160,7 +160,6 @@ class AudioLoaderPW:
         audio_output = {"waveform": final_waveform.unsqueeze(0), "sample_rate": sample_rate}
         frame_count = int(round(final_duration * fps)) if fps > 0 else 0
         
-        # 提取处理后的波形峰值 (供外部调用或调试)
         mono_waveform = final_waveform.mean(dim=0)
         num_peaks = 1200
         chunk_size = max(1, mono_waveform.shape[0] // num_peaks)
@@ -170,10 +169,13 @@ class AudioLoaderPW:
             if chunk.shape[0] > 0:
                 peaks.append(float(chunk.abs().max().item()))
         
+        # 【核心修复】：将 duration 和 frame_count 放入 ui 字典，确保 WebSocket 能将其推送到前端
         return {
             "ui": {
                 "audio_path": [str(audio_to_load)], 
-                "waveform_peaks": peaks
+                "waveform_peaks": peaks,
+                "duration": [final_duration],
+                "frame_count": [frame_count]
             }, 
             "result": (audio_output, final_duration, frame_count)
         }
