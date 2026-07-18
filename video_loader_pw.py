@@ -16,28 +16,12 @@ async def custom_view(request):
         return web.FileResponse(file_path)
     return web.Response(status=404, text="File not found")
 
-@PromptServer.instance.routes.post("/video_ui_upload_chunk")
-async def upload_chunk(request):
-    post = await request.post()
-    file = post.get("file")
-    filename = post.get("filename")
-    chunk_index = int(post.get("chunk_index"))
-    total_chunks = int(post.get("total_chunks"))
-    upload_dir = folder_paths.get_input_directory()
-    file_path = os.path.join(upload_dir, filename)
-    mode = "ab" if chunk_index > 0 else "wb"
-    with open(file_path, mode) as f:
-        f.write(file.file.read())
-    if chunk_index == total_chunks - 1:
-        return web.json_response({"name": filename})
-    return web.json_response({"status": "ok"})
-
 class VideoLoaderPW:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
-                "video": ("STRING", {"default": ""}),
+                "path": ("STRING", {"default": "", "forceInput": True, "tooltip": "Path to the video file"}),
                 "start_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "end_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
@@ -55,9 +39,6 @@ class VideoLoaderPW:
                 "split_green_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "split_green_point_idx": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "select_generate": (["blue", "purple"], {"default": "blue", "tooltip": "Which segment to use as generate when split_count=1"}),
-            },
-            "optional": {
-                "path": ("STRING", {"forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
             }
         }
 
@@ -66,9 +47,9 @@ class VideoLoaderPW:
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, start_frame, end_frame, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_purple_point=0.0, split_purple_point_idx=0, split_green_point=0.0, split_green_point_idx=0, select_generate="blue", path=None, **kwargs):
+    def load_video(self, path, frame_rate, display_mode, start_time, end_time, start_frame, end_frame, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_purple_point=0.0, split_purple_point_idx=0, split_green_point=0.0, split_green_point_idx=0, select_generate="blue", **kwargs):
         align_8n_plus_1 = kwargs.get("align_8n+1", True)
-        video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
+        video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else ""
 
         if not video_to_load:
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
@@ -256,7 +237,6 @@ class VideoLoaderPW:
             image_tensor = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
 
         audio_dict = None
-        waveform_peaks = []
         if len(container.streams.audio) > 0:
             try:
                 audio_stream = container.streams.audio[0]
@@ -308,34 +288,6 @@ class VideoLoaderPW:
                            
                     waveform = waveform.unsqueeze(0)
                     audio_dict = {"waveform": waveform, "sample_rate": sample_rate}
-                    
-                    # 【新增】：生成波形峰值数据用于前端绘制，并加入自动缩放机制
-                    if waveform.dim() == 3:
-                        w_tensor = waveform[0]
-                    else:
-                        w_tensor = waveform
-                    if w_tensor.dim() == 2:
-                        w_tensor = w_tensor.mean(dim=0)
-                        
-                    num_samples = w_tensor.shape[0]
-                    target_peaks = 800
-                    if num_samples > 0:
-                        chunk_size = max(1, num_samples // target_peaks)
-                        usable_samples = (num_samples // chunk_size) * chunk_size
-                        if usable_samples > 0:
-                            w_reshaped = w_tensor[:usable_samples].reshape(-1, chunk_size)
-                            mins = w_reshaped.min(dim=1).values
-                            maxs = w_reshaped.max(dim=1).values
-                            
-                            global_max = max(float(maxs.max()), abs(float(mins.min())))
-                            scale_factor = 1.0
-                            if global_max > 0 and global_max < 0.2:
-                                scale_factor = 0.2 / global_max
-                            
-                            mins = (mins * scale_factor).clamp(-1.0, 1.0)
-                            maxs = (maxs * scale_factor).clamp(-1.0, 1.0)
-                            
-                            waveform_peaks = [[round(mn, 3), round(mx, 3)] for mn, mx in zip(mins.tolist(), maxs.tolist())]
             except Exception as e:
                 print(f"[VideoLoaderPW] Audio track extraction skipped or failed: {e}")
 
@@ -358,7 +310,6 @@ class VideoLoaderPW:
             "loaded_duration": final_duration_sec,
             "loaded_width": loaded_w,
             "loaded_height": loaded_h,
-            "waveform_peaks": waveform_peaks,
         }, indent=4)
 
         if display_mode == "frames":
