@@ -17,10 +17,10 @@ app.registerExtension({
                 if (this.syncToggleVisual) this.syncToggleVisual();
 
                 if (this.widgets) {
-                    const videoWidget = this.widgets.find(w => w.name === "video");
-                    if (videoWidget && videoWidget.value && this.updatePreview) {
-                        this._lastLoadedVideoPath = videoWidget.value;
-                        this.updatePreview(videoWidget.value);
+                    const pathWidget = this.widgets.find(w => w.name === "path");
+                    if (pathWidget && pathWidget.value && this.updatePreview) {
+                        this._lastLoadedVideoPath = pathWidget.value;
+                        this.updatePreview(pathWidget.value);
                     }
                 }
             };
@@ -60,7 +60,7 @@ app.registerExtension({
                 node.accurateFrameCount = 0;
                 node.accurateDuration = 0;
 
-                const videoWidget = this.widgets.find((w) => w.name === "video");
+                const pathWidget = this.widgets.find((w) => w.name === "path");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
                 const displayModeWidget = this.widgets.find((w) => w.name === "display_mode");
                 const startTimeWidget = this.widgets.find((w) => w.name === "start_time");
@@ -80,6 +80,7 @@ app.registerExtension({
                 const selectGenerateWidget = this.widgets.find((w) => w.name === "select_generate");
 
                 let isSyncing = false;
+                
                 let isFramesMode = displayModeWidget && displayModeWidget.value === "frames";
                 if (displayModeWidget && !displayModeWidget.value) {
                     displayModeWidget.value = "frames";
@@ -90,6 +91,7 @@ app.registerExtension({
                 let dragging = null;
                 let dragOffset = 0;
                 let dragSelectionWidth = 0;
+                let isUpdatingDuration = false;
                 let cropDragging = null;
                 let dragStartX = 0;
                 let dragStartY = 0;
@@ -97,10 +99,8 @@ app.registerExtension({
                 let dragStartCropY = 0;
                 let dragStartCropW = 1;
                 let dragStartCropH = 1;
-                let dragCounter = 0;
                 let currentAspectRatio = 0;
                 let isCropVisible = false;
-                let currentWaveformPeaks = [];
 
                 const getActiveDuration = () => {
                     if (duration > 0) return duration;
@@ -132,6 +132,7 @@ app.registerExtension({
                     setWidgetVisibility(cropHWidget, false, "FLOAT");
 
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
+                    
                     setWidgetVisibility(splitPurpleWidget, sc >= 1 && !isFramesMode, "FLOAT");
                     setWidgetVisibility(splitPurpleIdxWidget, sc >= 1 && isFramesMode, "INT");
                     setWidgetVisibility(splitGreenWidget, sc === 2 && !isFramesMode, "FLOAT");
@@ -143,12 +144,14 @@ app.registerExtension({
                     node.size[1] = Math.max(node.size[1], minSize[1]);
                     if (node.onResize) node.onResize(node.size);
                     app.graph.setDirtyCanvas(true, true);
+                    
                     if (typeof node.updateSplitHandles === 'function') node.updateSplitHandles();
                 };
 
                 const clampSplitValues = () => {
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
+                    
                     const s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
                     let e_f = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
                     if (e_f === 0) e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * fr) - 1;
@@ -158,11 +161,13 @@ app.registerExtension({
                         let p_f = parseInt(splitPurpleIdxWidget.value) || 0;
                         let min_p = s_f + 1;
                         let max_p = e_f - 1;
+                        
                         if (sc === 2 && splitGreenIdxWidget) {
                             let g_f = parseInt(splitGreenIdxWidget.value) || 0;
                             max_p = Math.min(max_p, g_f - 1);
                         }
                         if (min_p > max_p) min_p = max_p;
+                        
                         p_f = Math.max(min_p, Math.min(p_f, max_p));
                         splitPurpleIdxWidget.value = p_f;
                         splitPurpleWidget.value = parseFloat((p_f / fr).toFixed(3));
@@ -171,9 +176,11 @@ app.registerExtension({
                     if (sc === 2 && splitGreenIdxWidget && splitGreenWidget) {
                         let g_f = parseInt(splitGreenIdxWidget.value) || 0;
                         let p_f = splitPurpleIdxWidget ? parseInt(splitPurpleIdxWidget.value) || 0 : s_f;
+                        
                         let min_g = p_f + 1;
                         let max_g = e_f - 1;
                         if (min_g > max_g) min_g = max_g;
+                        
                         g_f = Math.max(min_g, Math.min(g_f, max_g));
                         splitGreenIdxWidget.value = g_f;
                         splitGreenWidget.value = parseFloat((g_f / fr).toFixed(3));
@@ -194,7 +201,10 @@ app.registerExtension({
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
                     const fr = parseFloat(frameRateWidget.value) || 25.0;
-                    if (startTimeWidget && startFrameWidget) startFrameWidget.value = Math.max(0, Math.round(startTimeWidget.value * fr));
+                    
+                    if (startTimeWidget && startFrameWidget) {
+                        startFrameWidget.value = Math.max(0, Math.round(startTimeWidget.value * fr));
+                    }
                     if (endTimeWidget && endFrameWidget) {
                         if (endTimeWidget.value > 0) {
                             let endF = Math.round(endTimeWidget.value * fr) - 1;
@@ -203,10 +213,18 @@ app.registerExtension({
                                 endTimeWidget.value = parseFloat((endF / fr).toFixed(3));
                             }
                             endFrameWidget.value = Math.max(0, endF);
-                        } else { endFrameWidget.value = 0; }
+                        } else {
+                            endFrameWidget.value = 0;
+                        }
                     }
-                    if (splitPurpleWidget && splitPurpleIdxWidget) splitPurpleIdxWidget.value = Math.max(0, Math.round(splitPurpleWidget.value * fr));
-                    if (splitGreenWidget && splitGreenIdxWidget) splitGreenIdxWidget.value = Math.max(0, Math.round(splitGreenWidget.value * fr));
+                    
+                    if (splitPurpleWidget && splitPurpleIdxWidget) {
+                        splitPurpleIdxWidget.value = Math.max(0, Math.round(splitPurpleWidget.value * fr));
+                    }
+                    if (splitGreenWidget && splitGreenIdxWidget) {
+                        splitGreenIdxWidget.value = Math.max(0, Math.round(splitGreenWidget.value * fr));
+                    }
+
                     clampSplitValues();
                     isSyncing = false;
                 };
@@ -215,7 +233,10 @@ app.registerExtension({
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
                     const fr = parseFloat(frameRateWidget.value) || 25.0;
-                    if (startTimeWidget && startFrameWidget) startTimeWidget.value = parseFloat(Math.max(0, startFrameWidget.value / fr).toFixed(3));
+                    
+                    if (startTimeWidget && startFrameWidget) {
+                        startTimeWidget.value = parseFloat(Math.max(0, startFrameWidget.value / fr).toFixed(3));
+                    }
                     if (endTimeWidget && endFrameWidget) {
                         if (endFrameWidget.value > 0) {
                             let endF = parseInt(endFrameWidget.value);
@@ -224,10 +245,18 @@ app.registerExtension({
                                 endFrameWidget.value = endF;
                             }
                             endTimeWidget.value = parseFloat(((endF + 1) / fr).toFixed(3));
-                        } else { endTimeWidget.value = 0; }
+                        } else {
+                            endTimeWidget.value = 0;
+                        }
                     }
-                    if (splitPurpleWidget && splitPurpleIdxWidget) splitPurpleWidget.value = parseFloat(Math.max(0, splitPurpleIdxWidget.value / fr).toFixed(3));
-                    if (splitGreenWidget && splitGreenIdxWidget) splitGreenWidget.value = parseFloat(Math.max(0, splitGreenIdxWidget.value / fr).toFixed(3));
+
+                    if (splitPurpleWidget && splitPurpleIdxWidget) {
+                        splitPurpleWidget.value = parseFloat(Math.max(0, splitPurpleIdxWidget.value / fr).toFixed(3));
+                    }
+                    if (splitGreenWidget && splitGreenIdxWidget) {
+                        splitGreenWidget.value = parseFloat(Math.max(0, splitGreenIdxWidget.value / fr).toFixed(3));
+                    }
+
                     clampSplitValues();
                     isSyncing = false;
                 };
@@ -239,7 +268,9 @@ app.registerExtension({
                         if (orig) orig.apply(this, arguments);
                         if (isFrame) node.syncTimeFromFrames();
                         else node.syncFramesFromTime();
+                        
                         clampSplitValues();
+                        
                         if (duration === 0 || isFrameRate) updateRuler();
                         updateUI(true);
                     };
@@ -261,6 +292,8 @@ app.registerExtension({
                     splitCountWidget.callback = function () {
                         if (orig) orig.apply(this, arguments);
                         const mode = splitCountWidget.value;
+                        const fr = parseFloat(frameRateWidget.value) || 25.0;
+                        
                         if (mode >= 1 && splitPurpleIdxWidget) {
                             let s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
                             splitPurpleIdxWidget.value = s_f + 1;
@@ -270,54 +303,79 @@ app.registerExtension({
                             if (e_f === 0) e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(getActiveDuration() * fr) - 1;
                             splitGreenIdxWidget.value = e_f - 1;
                         }
+                        
                         clampSplitValues();
                         node.toggleWidgetVisibility();
                         updateUI(true);
                     };
                 }
 
-                // 【修改】支持强制刷新防缓存
-                node.updatePreview = function (filename, forceReload = false) {
+                node.updatePreview = function (filename) {
                     if (!filename) return;
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
-                    const timestamp = Date.now();
-                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}&t=${timestamp}`);
-                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input&t=${timestamp}`);
+                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
+                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
                     
-                    if (videoPreview) {
+                    if (videoPreview && videoPreview.src !== url) {
                         videoPreview.src = url;
-                        if (forceReload) videoPreview.load();
                     }
                 };
 
-                // 【修改】支持强制重载
-                const applyVideoPath = (rawPath, forceReload = false) => {
+                const resetAllParams = () => {
+                    duration = 0;
+                    node.accurateDuration = 0;
+                    node.accurateFrameCount = 0;
+                    
+                    if (startTimeWidget) startTimeWidget.value = 0;
+                    if (endTimeWidget) endTimeWidget.value = 0; 
+                    if (startFrameWidget) startFrameWidget.value = 0;
+                    if (endFrameWidget) endFrameWidget.value = 0;
+                    
+                    if (cropXWidget) cropXWidget.value = 0.0;
+                    if (cropYWidget) cropYWidget.value = 0.0;
+                    if (cropWWidget) cropWWidget.value = 1.0;
+                    if (cropHWidget) cropHWidget.value = 1.0;
+                    
+                    isCropVisible = false;
+                    if (cropBtn) {
+                        cropBtn.style.background = "rgba(255, 255, 255, 0.1)";
+                        cropBtn.style.color = "white";
+                    }
+                    if (arSelect) arSelect.value = "0";
+                    currentAspectRatio = 0;
+                    if (wInput) wInput.value = "";
+                    if (hInput) hInput.value = "";
+                    
+                    if (splitCountWidget) splitCountWidget.value = 0;
+                    if (splitPurpleWidget) splitPurpleWidget.value = 0.0;
+                    if (splitPurpleIdxWidget) splitPurpleIdxWidget.value = 0;
+                    if (splitGreenWidget) splitGreenWidget.value = 0.0;
+                    if (splitGreenIdxWidget) splitGreenIdxWidget.value = 0;
+                    if (selectGenerateWidget) selectGenerateWidget.value = "blue";
+                    
+                    node.toggleWidgetVisibility();
+                    
+                    updateCropUI();
+                    updateRuler();
+                    updateUI(true);
+                };
+
+                const applyVideoPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
-                    const isNewFile = forceReload || (p !== node._lastLoadedVideoPath);
+                    const isNewFile = (p !== node._lastLoadedVideoPath);
                     node._lastLoadedVideoPath = p;
-                    if (videoWidget) videoWidget.value = p;
                     
                     if (isNewFile) {
-                        duration = 0;
-                        node.accurateDuration = 0;
-                        node.accurateFrameCount = 0;
-
-                        if (node.updatePreview) node.updatePreview(p, forceReload);
-                        if (startTimeWidget) startTimeWidget.value = 0;
-                        if (endTimeWidget) endTimeWidget.value = 0;
-                        if (startFrameWidget) startFrameWidget.value = 0;
-                        if (endFrameWidget) endFrameWidget.value = 0;
-                        
-                        resetSplitWidgets();
-                        if (node.syncFramesFromTime) node.syncFramesFromTime();
+                        resetAllParams(); 
+                        if (node.updatePreview) node.updatePreview(p);
                     }
                 };
 
-                if (videoWidget) {
-                    const originalCallback = videoWidget.callback;
-                    videoWidget.callback = function () {
+                if (pathWidget) {
+                    const originalCallback = pathWidget.callback;
+                    pathWidget.callback = function () {
                         if (originalCallback) originalCallback.apply(this, arguments);
                         applyVideoPath(this.value);
                     };
@@ -326,40 +384,37 @@ app.registerExtension({
                 const _videoExecHandler = ({ detail }) => {
                     if (!detail || String(detail.node) !== String(node.id)) return;
                     const out = detail.output;
-                    if (out && out.video_path && out.video_path.length) applyVideoPath(out.video_path[0]);
+                    if (out && out.video_path && out.video_path.length) {
+                        applyVideoPath(out.video_path[0]);
+                    }
                     
                     if (out && out.video_info) {
                         try {
                             const infoStr = Array.isArray(out.video_info) ? out.video_info[0] : out.video_info;
                             const info = JSON.parse(infoStr);
+                            
                             if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
                             }
+                            
                             if (info.loaded_frame_count !== undefined && endFrameWidget) {
                                 node.accurateFrameCount = info.loaded_frame_count;
                                 node.accurateDuration = info.loaded_duration || 0;
-                                if (endTimeWidget) {
-                                    let currentEnd = parseFloat(endTimeWidget.value) || 0;
-                                    if (currentEnd === 0 || currentEnd > node.accurateDuration) endTimeWidget.value = node.accurateDuration;
+                                
+                                const currentEndFrame = parseInt(endFrameWidget.value) || 0;
+                                
+                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
+                                    endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                                    
+                                    if (endTimeWidget) endTimeWidget.value = parseFloat(info.loaded_duration.toFixed(3));
+                                    
+                                    updateRuler();
+                                    updateUI(true);
                                 }
-                                if (endFrameWidget) {
-                                    let currentEndF = parseInt(endFrameWidget.value) || 0;
-                                    if (currentEndF === 0 || currentEndF >= node.accurateFrameCount) {
-                                        endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
-                                    }
-                                }
-                                node.syncFramesFromTime();
-                                updateRuler();
-                                updateUI(true);
                             }
-                            if (info.waveform_peaks && Array.isArray(info.waveform_peaks)) {
-                                currentWaveformPeaks = info.waveform_peaks;
-                                requestAnimationFrame(drawWaveform);
-                            } else {
-                                currentWaveformPeaks = [];
-                                requestAnimationFrame(drawWaveform);
-                            }
-                        } catch(e) { console.error("Failed to parse video_info", e); }
+                        } catch(e) {
+                            console.error("Failed to parse video_info", e);
+                        }
                     }
                 };
                 api.addEventListener("executed", _videoExecHandler);
@@ -371,7 +426,9 @@ app.registerExtension({
                 };
 
                 node.onExecuted = function (output) {
-                    if (output && output.video_path && output.video_path.length > 0) applyVideoPath(output.video_path[0]);
+                    if (output && output.video_path && output.video_path.length > 0) {
+                        applyVideoPath(output.video_path[0]);
+                    }
                     if (output && output.video_info) {
                         try {
                             const infoStr = Array.isArray(output.video_info) ? output.video_info[0] : output.video_info;
@@ -379,29 +436,19 @@ app.registerExtension({
                             if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) {
                                 fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
                             }
+                            
                             if (info.loaded_frame_count !== undefined && endFrameWidget) {
                                 node.accurateFrameCount = info.loaded_frame_count;
                                 node.accurateDuration = info.loaded_duration || 0;
-                                if (endTimeWidget) {
-                                    let currentEnd = parseFloat(endTimeWidget.value) || 0;
-                                    if (currentEnd === 0 || currentEnd > node.accurateDuration) endTimeWidget.value = node.accurateDuration;
+                                
+                                const currentEndFrame = parseInt(endFrameWidget.value) || 0;
+                                
+                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
+                                    endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                                    if (endTimeWidget) endTimeWidget.value = parseFloat(info.loaded_duration.toFixed(3));
+                                    updateRuler();
+                                    updateUI(true);
                                 }
-                                if (endFrameWidget) {
-                                    let currentEndF = parseInt(endFrameWidget.value) || 0;
-                                    if (currentEndF === 0 || currentEndF >= node.accurateFrameCount) {
-                                        endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
-                                    }
-                                }
-                                node.syncFramesFromTime();
-                                updateRuler();
-                                updateUI(true);
-                            }
-                            if (info.waveform_peaks && Array.isArray(info.waveform_peaks)) {
-                                currentWaveformPeaks = info.waveform_peaks;
-                                requestAnimationFrame(drawWaveform);
-                            } else {
-                                currentWaveformPeaks = [];
-                                requestAnimationFrame(drawWaveform);
                             }
                         } catch(e) {}
                     }
@@ -409,98 +456,9 @@ app.registerExtension({
 
                 node.toggleWidgetVisibility();
 
-                // 【新增】Load/Reload from path 按钮
-                const reloadBtnWidget = this.addWidget("button", "Load/Reload from path", null, () => {
-                    if (videoWidget && videoWidget.value && videoWidget.value.trim()) {
-                        applyVideoPath(videoWidget.value, true);
-                    } else {
-                        alert("No video path specified.");
-                    }
-                });
-
-                const fileInput = document.createElement("input");
-                fileInput.type = "file";
-                fileInput.accept = "video/*";
-                fileInput.style.display = "none";
-                document.body.appendChild(fileInput);
-
-                const btnWidget = this.addWidget("button", "choose file to upload", null, () => { fileInput.click(); });
-
-                const uploadFile = async (file) => {
-                    try {
-                        if (errorMsg) errorMsg.style.display = "none";
-                        if (file.path) {
-                            applyVideoPath(file.path, true);
-                            return;
-                        }
-                        btnWidget.name = "Uploading...";
-                        node.setDirtyCanvas(true, false);
-                        const CHUNK_SIZE = 10 * 1024 * 1024;
-
-                        if (file.size > CHUNK_SIZE) {
-                            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-                            const safeFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-                            const safeName = Date.now() + "_" + safeFileName;
-                            for (let i = 0; i < totalChunks; i++) {
-                                btnWidget.name = `Uploading... ${Math.round((i / totalChunks) * 100)}%`;
-                                node.setDirtyCanvas(true, false);
-                                const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-                                const formData = new FormData();
-                                formData.append("file", chunk);
-                                formData.append("filename", safeName);
-                                formData.append("chunk_index", i);
-                                formData.append("total_chunks", totalChunks);
-                                const resp = await api.fetchApi("/video_ui_upload_chunk", { method: "POST", body: formData });
-                                if (resp.status !== 200) throw new Error("Chunk upload failed");
-                                if (i === totalChunks - 1) {
-                                    const data = await resp.json();
-                                    applyVideoPath(data.name, true);
-                                }
-                            }
-                        } else {
-                            const body = new FormData();
-                            body.append("image", file);
-                            const resp = await api.fetchApi("/upload/image", { method: "POST", body: body });
-                            if (resp.status === 413) throw new Error("File too large.");
-                            if (resp.status === 200) {
-                                const data = await resp.json();
-                                applyVideoPath(data.name, true);
-                            } else {
-                                throw new Error(`Upload failed: ${resp.statusText}`);
-                            }
-                        }
-                    } catch (error) {
-                        console.error("Upload failed", error);
-                        if (errorMsg) { errorMsg.textContent = "Upload failed. Check console."; errorMsg.style.display = "block"; }
-                    } finally {
-                        btnWidget.name = "choose file to upload";
-                        node.setDirtyCanvas(true, false);
-                        fileInput.value = "";
-                    }
-                };
-
-                fileInput.addEventListener("change", (e) => { if (e.target.files.length) uploadFile(e.target.files[0]); });
-                node.onDropFile = function (file) {
-                    if (file.type.startsWith('video/') || file.name.toLowerCase().match(/\.(mp4|webm|mkv|avi|mov|m4v|flv|wmv)$/)) {
-                        uploadFile(file);
-                        return true;
-                    }
-                    return false;
-                };
-
-                const originalOnRemove = node.onRemoved;
-                node.onRemoved = function () {
-                    if (fileInput && fileInput.parentNode) fileInput.parentNode.removeChild(fileInput);
-                    if (originalOnRemove) originalOnRemove.apply(this, arguments);
-                };
-
                 const container = document.createElement("div");
                 const defaultBg = "rgba(30, 30, 30, 0.9)";
                 Object.assign(container.style, { display: "flex", flexDirection: "column", gap: "10px", width: "100%", margin: "0", padding: "10px", boxSizing: "border-box", background: defaultBg, borderRadius: "6px", color: "white", fontFamily: "sans-serif", marginTop: "8px", flexShrink: "0", transition: "background 0.2s" });
-
-                const errorMsg = document.createElement("div");
-                Object.assign(errorMsg.style, { color: "#ff6b6b", fontSize: "12px", display: "none", marginBottom: "4px", flexShrink: "0", boxSizing: "border-box" });
-                container.appendChild(errorMsg);
 
                 const playerTop = document.createElement("div");
                 Object.assign(playerTop.style, { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 2px", marginBottom: "-4px", flexShrink: "0", boxSizing: "border-box", flexWrap: "wrap", gap: "6px", position: "relative" });
@@ -554,6 +512,8 @@ app.registerExtension({
                 };
 
                 segmentedToggle.onclick = doToggle;
+                const switchBox = { onclick: doToggle };
+
                 node.syncToggleVisual = function () {
                     const savedIsFrames = displayModeWidget && displayModeWidget.value === "frames";
                     isFramesMode = savedIsFrames;
@@ -767,51 +727,12 @@ app.registerExtension({
                 const sliderBox = document.createElement("div");
                 Object.assign(sliderBox.style, { position: "relative", width: "100%", height: "24px", background: "#111", borderRadius: "4px", cursor: "pointer", userSelect: "none", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)", boxSizing: "border-box" });
 
-                const waveCanvas = document.createElement("canvas");
-                Object.assign(waveCanvas.style, {
-                    position: "absolute", top: "0", left: "0", width: "100%", height: "100%",
-                    pointerEvents: "none", zIndex: "1", opacity: "0.6"
-                });
-                sliderBox.appendChild(waveCanvas);
-
-                const drawWaveform = () => {
-                    if (!waveCanvas) return;
-                    const rect = waveCanvas.getBoundingClientRect();
-                    if (rect.width === 0 || rect.height === 0) return;
-
-                    const dpr = window.devicePixelRatio || 1;
-                    if (waveCanvas.width !== rect.width * dpr || waveCanvas.height !== rect.height * dpr) {
-                        waveCanvas.width = rect.width * dpr;
-                        waveCanvas.height = rect.height * dpr;
-                    }
-                    
-                    const ctx = waveCanvas.getContext('2d');
-                    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                    ctx.clearRect(0, 0, rect.width, rect.height);
-                    
-                    if (currentWaveformPeaks.length === 0) return;
-                    
-                    ctx.fillStyle = "rgba(56, 189, 248, 0.8)";
-                    const numPeaks = currentWaveformPeaks.length;
-                    const centerY = rect.height / 2;
-                    const maxAmp = rect.height / 2;
-                    
-                    for (let i = 0; i < numPeaks; i++) {
-                        const x = (i / numPeaks) * rect.width;
-                        const w = Math.max(1, (rect.width / numPeaks) - 0.5);
-                        const [mn, mx] = currentWaveformPeaks[i];
-                        const yMin = centerY - mx * maxAmp;
-                        const yMax = centerY - mn * maxAmp;
-                        ctx.fillRect(x, yMin, w, Math.max(1, yMax - yMin));
-                    }
-                };
-
                 const fillPurple = document.createElement("div");
-                Object.assign(fillPurple.style, { position: "absolute", height: "100%", background: "purple", pointerEvents: "none", opacity: "0.6", zIndex: "2" });
+                Object.assign(fillPurple.style, { position: "absolute", height: "100%", background: "purple", pointerEvents: "none", opacity: "0.6" });
                 const fillBlue = document.createElement("div");
-                Object.assign(fillBlue.style, { position: "absolute", height: "100%", background: "rgba(14, 165, 233, 0.6)", pointerEvents: "none", zIndex: "2" });
+                Object.assign(fillBlue.style, { position: "absolute", height: "100%", background: "rgba(14, 165, 233, 0.6)", pointerEvents: "none" });
                 const fillGreen = document.createElement("div");
-                Object.assign(fillGreen.style, { position: "absolute", height: "100%", background: "green", pointerEvents: "none", opacity: "0.6", zIndex: "2" });
+                Object.assign(fillGreen.style, { position: "absolute", height: "100%", background: "green", pointerEvents: "none", opacity: "0.6" });
                 
                 sliderBox.appendChild(fillPurple);
                 sliderBox.appendChild(fillBlue);
@@ -819,7 +740,7 @@ app.registerExtension({
 
                 const createHandle = (color) => {
                     const h = document.createElement("div");
-                    Object.assign(h.style, { position: "absolute", top: "0", width: "8px", height: "100%", background: color, transform: "translateX(-50%)", pointerEvents: "none", boxShadow: "0 0 4px rgba(0,0,0,0.8)", borderRadius: "2px", zIndex: "3" });
+                    Object.assign(h.style, { position: "absolute", top: "0", width: "8px", height: "100%", background: color, transform: "translateX(-50%)", pointerEvents: "none", boxShadow: "0 0 4px rgba(0,0,0,0.8)", borderRadius: "2px" });
                     return h;
                 };
 
@@ -853,6 +774,7 @@ app.registerExtension({
                     const activeDur = getActiveDuration();
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    
                     let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
                     let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
                     if (e === 0) e = activeDur;
@@ -905,11 +827,9 @@ app.registerExtension({
                             cropBtn.style.color = "black";
                         }
                         updateCropUI();
+                        
                         app.graph.setDirtyCanvas(true, true);
                     });
-                    
-                    waveResizeObserver.observe(sliderBox);
-                    requestAnimationFrame(drawWaveform);
                 }, 100);
 
                 const updateCropUI = () => {
@@ -1053,15 +973,10 @@ app.registerExtension({
 
                 const resizeObserver = new ResizeObserver(() => { if (isCropVisible) updateCropUI(); });
                 resizeObserver.observe(videoWrapper);
-                
-                const waveResizeObserver = new ResizeObserver(() => {
-                    requestAnimationFrame(drawWaveform);
-                });
 
                 const oldOnRemoved = node.onRemoved;
                 node.onRemoved = function () {
                     resizeObserver.disconnect();
-                    if (waveResizeObserver) waveResizeObserver.disconnect();
                     if (oldOnRemoved) oldOnRemoved.apply(this, arguments);
                 }
                 
@@ -1070,6 +985,7 @@ app.registerExtension({
                     let p_f = Math.round(val_sec * fr);
                     if (splitPurpleIdxWidget) splitPurpleIdxWidget.value = p_f;
                     if (splitPurpleWidget) splitPurpleWidget.value = parseFloat(val_sec.toFixed(3));
+                    
                     clampSplitValues();
                     app.graph.setDirtyCanvas(true, false);
                 };
@@ -1079,6 +995,7 @@ app.registerExtension({
                     let g_f = Math.round(val_sec * fr);
                     if (splitGreenIdxWidget) splitGreenIdxWidget.value = g_f;
                     if (splitGreenWidget) splitGreenWidget.value = parseFloat(val_sec.toFixed(3));
+                    
                     clampSplitValues();
                     app.graph.setDirtyCanvas(true, false);
                 };
@@ -1087,13 +1004,16 @@ app.registerExtension({
                     let splitDragging = false;
                     splitPurpleHandle.addEventListener("pointerdown", (e) => {
                         if (splitPurpleHandle.style.display === "none") return;
-                        e.preventDefault(); e.stopPropagation();
+                        e.preventDefault();
+                        e.stopPropagation();
                         splitDragging = true;
                         splitPurpleHandle.setPointerCapture(e.pointerId);
+                        
                         const activeDur = getActiveDuration();
                         const rect = sliderBox.getBoundingClientRect();
                         const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
                         let val = (x / rect.width) * activeDur;
+                        
                         setPurpleVal(val);
                         if (duration > 0) videoPreview.currentTime = val;
                         node.updateSplitHandles();
@@ -1108,6 +1028,7 @@ app.registerExtension({
                         const rect = sliderBox.getBoundingClientRect();
                         const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
                         let val = (x / rect.width) * activeDur;
+                        
                         setPurpleVal(val);
                         if (duration > 0) videoPreview.currentTime = val;
                         node.updateSplitHandles();
@@ -1125,13 +1046,16 @@ app.registerExtension({
                     let splitDragging = false;
                     splitGreenHandle.addEventListener("pointerdown", (e) => {
                         if (splitGreenHandle.style.display === "none") return;
-                        e.preventDefault(); e.stopPropagation();
+                        e.preventDefault();
+                        e.stopPropagation();
                         splitDragging = true;
                         splitGreenHandle.setPointerCapture(e.pointerId);
+                        
                         const activeDur = getActiveDuration();
                         const rect = sliderBox.getBoundingClientRect();
                         const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
                         let val = (x / rect.width) * activeDur;
+                        
                         setGreenVal(val);
                         if (duration > 0) videoPreview.currentTime = val;
                         node.updateSplitHandles();
@@ -1146,6 +1070,7 @@ app.registerExtension({
                         const rect = sliderBox.getBoundingClientRect();
                         const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
                         let val = (x / rect.width) * activeDur;
+                        
                         setGreenVal(val);
                         if (duration > 0) videoPreview.currentTime = val;
                         node.updateSplitHandles();
@@ -1221,11 +1146,19 @@ app.registerExtension({
                     const e_val = visualEnd;
                     const p_val = splitPurpleWidget ? parseFloat(splitPurpleWidget.value) || 0 : 0;
                     const g_val = splitGreenWidget ? parseFloat(splitGreenWidget.value) || 0 : 0;
+                    
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
                     
-                    if (sc === 0) { bS = s_val; bE = e_val; } 
-                    else if (sc === 1) { pS = s_val; pE = p_val; bS = p_val; bE = e_val; } 
-                    else if (sc === 2) { pS = s_val; pE = p_val; bS = p_val; bE = g_val; gS = g_val; gE = e_val; }
+                    if (sc === 0) {
+                        bS = s_val; bE = e_val;
+                    } else if (sc === 1) {
+                        pS = s_val; pE = p_val;
+                        bS = p_val; bE = e_val;
+                    } else if (sc === 2) {
+                        pS = s_val; pE = p_val;
+                        bS = p_val; bE = g_val;
+                        gS = g_val; gE = e_val;
+                    }
                     
                     fillPurple.style.left = `${toPct(pS)}%`;
                     fillPurple.style.width = `${Math.max(0, toPct(pE) - toPct(pS))}%`;
@@ -1240,21 +1173,14 @@ app.registerExtension({
                 setTimeout(() => { updateRuler(); updateUI(); }, 50);
 
                 videoPreview.onloadedmetadata = () => {
-                    const newDuration = videoPreview.duration;
-                    if (!newDuration || newDuration === Infinity || isNaN(newDuration)) return;
-
-                    duration = newDuration;
-                    node.accurateDuration = newDuration;
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;  
-                    const newTotalFrames = Math.round(newDuration * fr);
-                    node.accurateFrameCount = newTotalFrames; 
-
-                    if (endTimeWidget) endTimeWidget.value = newDuration;
-                    if (endFrameWidget) endFrameWidget.value = newTotalFrames > 0 ? newTotalFrames - 1 : 0;
-
-                    node.syncFramesFromTime();
+                    duration = videoPreview.duration;
+                    node.accurateDuration = duration;
+                    if (endTimeWidget && (endTimeWidget.value === 0 || endTimeWidget.value > duration)) {
+                        endTimeWidget.value = duration;
+                        node.syncFramesFromTime();
+                    }
                     updateRuler();
-                    updateUI(true);
+                    updateUI();
                     updateCropUI();
                 };
 
@@ -1331,35 +1257,7 @@ app.registerExtension({
                     sliderBox.releasePointerCapture(e.pointerId);
                 };
 
-                container.addEventListener("dragenter", (e) => {
-                    e.preventDefault(); dragCounter++;
-                    if (dragCounter === 1) {
-                        container.style.outline = "2px dashed #38bdf8";
-                        container.style.outlineOffset = "-2px";
-                        container.style.background = "rgba(14, 165, 233, 0.1)";
-                    }
-                });
-                container.addEventListener("dragover", (e) => { e.preventDefault(); });
-                container.addEventListener("dragleave", (e) => {
-                    e.preventDefault(); dragCounter--;
-                    if (dragCounter === 0) {
-                        container.style.outline = "none";
-                        container.style.background = defaultBg;
-                    }
-                });
-                container.addEventListener("drop", (e) => {
-                    e.preventDefault(); e.stopPropagation(); dragCounter = 0;
-                    container.style.outline = "none";
-                    container.style.background = defaultBg;
-                    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                        const file = e.dataTransfer.files[0];
-                        if (file.type.startsWith('video/') || file.name.toLowerCase().match(/\.(mp4|webm|mkv|avi|mov|m4v|flv|wmv)$/)) {
-                            uploadFile(file);
-                        }
-                    }
-                });
-
-                if (videoWidget && videoWidget.value) applyVideoPath(videoWidget.value);
+                if (pathWidget && pathWidget.value) applyVideoPath(pathWidget.value);
                 return r;
             };
         }
