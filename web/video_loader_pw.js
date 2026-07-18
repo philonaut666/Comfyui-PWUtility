@@ -17,10 +17,10 @@ app.registerExtension({
                 if (this.syncToggleVisual) this.syncToggleVisual();
 
                 if (this.widgets) {
-                    const pathWidget = this.widgets.find(w => w.name === "path");
-                    if (pathWidget && pathWidget.value && this.updatePreview) {
-                        this._lastLoadedVideoPath = pathWidget.value;
-                        this.updatePreview(pathWidget.value);
+                    const videoWidget = this.widgets.find(w => w.name === "video");
+                    if (videoWidget && videoWidget.value && this.updatePreview) {
+                        this._lastLoadedVideoPath = videoWidget.value;
+                        this.updatePreview(videoWidget.value);
                     }
                 }
             };
@@ -61,6 +61,7 @@ app.registerExtension({
                 node.accurateDuration = 0;
 
                 const pathWidget = this.widgets.find((w) => w.name === "path");
+                const videoWidget = this.widgets.find((w) => w.name === "video");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
                 const displayModeWidget = this.widgets.find((w) => w.name === "display_mode");
                 const startTimeWidget = this.widgets.find((w) => w.name === "start_time");
@@ -97,6 +98,7 @@ app.registerExtension({
                 let dragStartCropY = 0;
                 let dragStartCropW = 1;
                 let dragStartCropH = 1;
+                let dragCounter = 0;
                 let currentAspectRatio = 0;
                 let isCropVisible = false;
                 let currentWaveformPeaks = [];
@@ -284,13 +286,10 @@ app.registerExtension({
                     if (!filename) return;
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
-                    const timestamp = Date.now();
-                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}&t=${timestamp}`);
-                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input&t=${timestamp}`);
-                    
-                    if (videoPreview) {
+                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
+                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
+                    if (videoPreview && videoPreview.src !== url) {
                         videoPreview.src = url;
-                        videoPreview.load();
                     }
                 };
 
@@ -404,8 +403,7 @@ app.registerExtension({
                 const resetAllParams = () => {
                     duration = 0;
                     node.accurateDuration = 0;
-                    node.accurateFrameCount = 0;
-                    currentWaveformPeaks = [];
+                    node.accurateFrameCount = 0; // 破除旧视频帧数限制
                     
                     if (startTimeWidget) startTimeWidget.value = 0;
                     if (endTimeWidget) endTimeWidget.value = 0; 
@@ -425,6 +423,7 @@ app.registerExtension({
                     if (hInput) hInput.value = "";
                     
                     resetSplitWidgets();
+                    currentWaveformPeaks = [];
                     
                     updateCropUI();
                     updateRuler();
@@ -440,13 +439,30 @@ app.registerExtension({
                     if (isNewFile) {
                         resetAllParams(); 
                         node._lastLoadedVideoPath = p;
-                        if (node.updatePreview) node.updatePreview(p);
+                    }
+                    
+                    if (videoWidget) videoWidget.value = p;
+                    if (node.updatePreview) node.updatePreview(p);
+                };
+                
+                // 【新增功能】：Load/Reload Video 逻辑
+                const loadReloadVideo = () => {
+                    let targetPath = "";
+                    if (pathWidget && pathWidget.value && pathWidget.value.trim()) {
+                        targetPath = pathWidget.value.trim();
+                    } else if (videoWidget && videoWidget.value && videoWidget.value.trim()) {
+                        targetPath = videoWidget.value.trim();
+                    }
+                    
+                    if (targetPath) {
+                        node._lastLoadedVideoPath = null; // 强制视为新文件以触发 resetAllParams
+                        applyVideoPath(targetPath);
                     }
                 };
 
-                if (pathWidget) {
-                    const originalCallback = pathWidget.callback;
-                    pathWidget.callback = function () {
+                if (videoWidget) {
+                    const originalCallback = videoWidget.callback;
+                    videoWidget.callback = function () {
                         if (originalCallback) originalCallback.apply(this, arguments);
                         applyVideoPath(this.value);
                     };
@@ -517,20 +533,92 @@ app.registerExtension({
 
                 node.toggleWidgetVisibility();
 
-                // 【新增】：Load/Reload Video 按钮
-                this.addWidget("button", "Load/Reload Video", null, () => {
-                    if (pathWidget && pathWidget.value && pathWidget.value.trim()) {
-                        node._lastLoadedVideoPath = null; // 强制清除缓存以触发重新加载
-                        resetAllParams();
-                        applyVideoPath(pathWidget.value.trim());
-                    } else {
-                        console.warn("[VideoLoaderPW] No path provided to load/reload.");
+                // 【新增按钮】：Load/Reload Video
+                this.addWidget("button", "Load/Reload Video", null, loadReloadVideo);
+
+                const fileInput = document.createElement("input");
+                fileInput.type = "file";
+                fileInput.accept = "video/*";
+                fileInput.style.display = "none";
+                document.body.appendChild(fileInput);
+
+                const btnWidget = this.addWidget("button", "choose file to upload", null, () => { fileInput.click(); });
+
+                const uploadFile = async (file) => {
+                    try {
+                        if (errorMsg) errorMsg.style.display = "none";
+                        if (file.path) {
+                            applyVideoPath(file.path);
+                            return;
+                        }
+                        btnWidget.name = "Uploading...";
+                        node.setDirtyCanvas(true, false);
+                        const CHUNK_SIZE = 10 * 1024 * 1024;
+
+                        if (file.size > CHUNK_SIZE) {
+                            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+                            const safeFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+                            const safeName = Date.now() + "_" + safeFileName;
+                            for (let i = 0; i < totalChunks; i++) {
+                                btnWidget.name = `Uploading... ${Math.round((i / totalChunks) * 100)}%`;
+                                node.setDirtyCanvas(true, false);
+                                const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+                                const formData = new FormData();
+                                formData.append("file", chunk);
+                                formData.append("filename", safeName);
+                                formData.append("chunk_index", i);
+                                formData.append("total_chunks", totalChunks);
+                                const resp = await api.fetchApi("/video_ui_upload_chunk", { method: "POST", body: formData });
+                                if (resp.status !== 200) throw new Error("Chunk upload failed");
+                                if (i === totalChunks - 1) {
+                                    const data = await resp.json();
+                                    applyVideoPath(data.name);
+                                }
+                            }
+                        } else {
+                            const body = new FormData();
+                            body.append("image", file);
+                            const resp = await api.fetchApi("/upload/image", { method: "POST", body: body });
+                            if (resp.status === 413) throw new Error("File too large.");
+                            if (resp.status === 200) {
+                                const data = await resp.json();
+                                applyVideoPath(data.name);
+                            } else {
+                                throw new Error(`Upload failed: ${resp.statusText}`);
+                            }
+                        }
+                    } catch (error) {
+                        console.error("Upload failed", error);
+                        if (errorMsg) { errorMsg.textContent = "Upload failed. Check console."; errorMsg.style.display = "block"; }
+                    } finally {
+                        btnWidget.name = "choose file to upload";
+                        node.setDirtyCanvas(true, false);
+                        fileInput.value = "";
                     }
-                });
+                };
+
+                fileInput.addEventListener("change", (e) => { if (e.target.files.length) uploadFile(e.target.files[0]); });
+                node.onDropFile = function (file) {
+                    if (file.type.startsWith('video/') || file.name.toLowerCase().match(/\.(mp4|webm|mkv|avi|mov|m4v|flv|wmv)$/)) {
+                        uploadFile(file);
+                        return true;
+                    }
+                    return false;
+                };
+
+                const originalOnRemove = node.onRemoved;
+                node.onRemoved = function () {
+                    if (fileInput && fileInput.parentNode) fileInput.parentNode.removeChild(fileInput);
+                    if (originalOnRemove) originalOnRemove.apply(this, arguments);
+                };
 
                 const container = document.createElement("div");
                 const defaultBg = "rgba(30, 30, 30, 0.9)";
                 Object.assign(container.style, { display: "flex", flexDirection: "column", gap: "10px", width: "100%", margin: "0", padding: "10px", boxSizing: "border-box", background: defaultBg, borderRadius: "6px", color: "white", fontFamily: "sans-serif", marginTop: "8px", flexShrink: "0", transition: "background 0.2s" });
+
+                const errorMsg = document.createElement("div");
+                Object.assign(errorMsg.style, { color: "#ff6b6b", fontSize: "12px", display: "none", marginBottom: "4px", flexShrink: "0", boxSizing: "border-box" });
+                container.appendChild(errorMsg);
 
                 const playerTop = document.createElement("div");
                 Object.assign(playerTop.style, { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 2px", marginBottom: "-4px", flexShrink: "0", boxSizing: "border-box", flexWrap: "wrap", gap: "6px", position: "relative" });
@@ -1146,7 +1234,35 @@ app.registerExtension({
 
                 sliderBox.onpointerup = (e) => { dragging = null; sliderBox.releasePointerCapture(e.pointerId); };
 
-                if (pathWidget && pathWidget.value) applyVideoPath(pathWidget.value);
+                container.addEventListener("dragenter", (e) => {
+                    e.preventDefault(); dragCounter++;
+                    if (dragCounter === 1) {
+                        container.style.outline = "2px dashed #38bdf8";
+                        container.style.outlineOffset = "-2px";
+                        container.style.background = "rgba(14, 165, 233, 0.1)";
+                    }
+                });
+                container.addEventListener("dragover", (e) => { e.preventDefault(); });
+                container.addEventListener("dragleave", (e) => {
+                    e.preventDefault(); dragCounter--;
+                    if (dragCounter === 0) {
+                        container.style.outline = "none";
+                        container.style.background = defaultBg;
+                    }
+                });
+                container.addEventListener("drop", (e) => {
+                    e.preventDefault(); e.stopPropagation(); dragCounter = 0;
+                    container.style.outline = "none";
+                    container.style.background = defaultBg;
+                    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                        const file = e.dataTransfer.files[0];
+                        if (file.type.startsWith('video/') || file.name.toLowerCase().match(/\.(mp4|webm|mkv|avi|mov|m4v|flv|wmv)$/)) {
+                            uploadFile(file);
+                        }
+                    }
+                });
+
+                if (videoWidget && videoWidget.value) applyVideoPath(videoWidget.value);
                 return r;
             };
         }
