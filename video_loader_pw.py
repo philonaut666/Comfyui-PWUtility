@@ -256,6 +256,7 @@ class VideoLoaderPW:
             image_tensor = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
 
         audio_dict = None
+        waveform_peaks = []
         if len(container.streams.audio) > 0:
             try:
                 audio_stream = container.streams.audio[0]
@@ -307,6 +308,34 @@ class VideoLoaderPW:
                            
                     waveform = waveform.unsqueeze(0)
                     audio_dict = {"waveform": waveform, "sample_rate": sample_rate}
+                    
+                    # 【新增】：生成波形峰值数据用于前端绘制，并加入自动缩放机制
+                    if waveform.dim() == 3:
+                        w_tensor = waveform[0]
+                    else:
+                        w_tensor = waveform
+                    if w_tensor.dim() == 2:
+                        w_tensor = w_tensor.mean(dim=0)
+                        
+                    num_samples = w_tensor.shape[0]
+                    target_peaks = 800
+                    if num_samples > 0:
+                        chunk_size = max(1, num_samples // target_peaks)
+                        usable_samples = (num_samples // chunk_size) * chunk_size
+                        if usable_samples > 0:
+                            w_reshaped = w_tensor[:usable_samples].reshape(-1, chunk_size)
+                            mins = w_reshaped.min(dim=1).values
+                            maxs = w_reshaped.max(dim=1).values
+                            
+                            global_max = max(float(maxs.max()), abs(float(mins.min())))
+                            scale_factor = 1.0
+                            if global_max > 0 and global_max < 0.2:
+                                scale_factor = 0.2 / global_max
+                            
+                            mins = (mins * scale_factor).clamp(-1.0, 1.0)
+                            maxs = (maxs * scale_factor).clamp(-1.0, 1.0)
+                            
+                            waveform_peaks = [[round(mn, 3), round(mx, 3)] for mn, mx in zip(mins.tolist(), maxs.tolist())]
             except Exception as e:
                 print(f"[VideoLoaderPW] Audio track extraction skipped or failed: {e}")
 
@@ -329,9 +358,9 @@ class VideoLoaderPW:
             "loaded_duration": final_duration_sec,
             "loaded_width": loaded_w,
             "loaded_height": loaded_h,
+            "waveform_peaks": waveform_peaks,
         }, indent=4)
 
-        # 修复：使用实际提取的 frame_count 计算 g_end_frame，避免 duration 浮点数误差
         if display_mode == "frames":
             g_start_frame = s_frame_0
             if e_frame_0 > 0:
