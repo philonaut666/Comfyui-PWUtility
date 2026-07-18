@@ -15,6 +15,14 @@ app.registerExtension({
                 if (this.syncFramesFromTime) this.syncFramesFromTime();
                 if (this.toggleWidgetVisibility) this.toggleWidgetVisibility();
                 if (this.syncToggleVisual) this.syncToggleVisual();
+
+                if (this.widgets) {
+                    const pathWidget = this.widgets.find(w => w.name === "path");
+                    if (pathWidget && pathWidget.value && this.updatePreview) {
+                        this._lastLoadedVideoPath = pathWidget.value;
+                        this.updatePreview(pathWidget.value);
+                    }
+                }
             };
 
             nodeType.prototype.onDrawForeground = function (ctx) {
@@ -52,6 +60,7 @@ app.registerExtension({
                 node.accurateFrameCount = 0;
                 node.accurateDuration = 0;
 
+                const pathWidget = this.widgets.find((w) => w.name === "path");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
                 const displayModeWidget = this.widgets.find((w) => w.name === "display_mode");
                 const startTimeWidget = this.widgets.find((w) => w.name === "start_time");
@@ -276,13 +285,10 @@ app.registerExtension({
                     if (!filename) return;
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
-                    const timestamp = Date.now();
-                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}&t=${timestamp}`);
-                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input&t=${timestamp}`);
-                    
-                    if (videoPreview) {
+                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
+                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
+                    if (videoPreview && videoPreview.src !== url) {
                         videoPreview.src = url;
-                        videoPreview.load();
                     }
                 };
 
@@ -424,7 +430,6 @@ app.registerExtension({
                     requestAnimationFrame(drawWaveform);
                 };
 
-                // 【修复】：防止 pathWidget 为 undefined 时报错
                 const applyVideoPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
@@ -435,59 +440,91 @@ app.registerExtension({
                         node._lastLoadedVideoPath = p;
                     }
                     
+                    if (pathWidget) pathWidget.value = p;
                     if (node.updatePreview) node.updatePreview(p);
                 };
                 
-                // 【核心黑科技重构】：完美兼容 Input Slot 的 Load/Reload 逻辑
-                const loadReloadVideo = () => {
-                    let targetPath = "";
-                    
-                    // 1. 尝试从自身的 widgets 中读取 (如果 path 不是 forceInput)
-                    const pathWidget = node.widgets ? node.widgets.find(w => w.name === "path") : null;
-                    if (pathWidget && pathWidget.value) {
-                        targetPath = pathWidget.value.trim();
+                // 【核心重构】：Load/Reload Video 逻辑
+                const loadReloadVideo = async () => {
+                    // 1. 追溯连线获取真实路径字符串，用于前端立即预览
+                    let pathValue = "";
+                    const pathInput = node.inputs?.find(i => i.name === "path");
+                    if (pathInput && pathInput.link) {
+                        const link = app.graph.links[pathInput.link];
+                        if (link) {
+                            const originNode = app.graph.getNodeById(link.origin_id);
+                            if (originNode && originNode.widgets) {
+                                const upstreamWidget = originNode.widgets.find(w => w.name === "path" || w.name === "video" || w.type === "string");
+                                if (upstreamWidget) pathValue = upstreamWidget.value;
+                            }
+                        }
+                    } else {
+                        const pWidget = node.widgets?.find(w => w.name === "path");
+                        if (pWidget) pathValue = pWidget.value;
                     }
+
+                    if (!pathValue) {
+                        console.warn("[VideoLoaderPW] No path found.");
+                        return;
+                    }
+
+                    // 2. 立即清除缓存并强制刷新前端视频预览 (让用户立刻看到视频加载)
+                    node._lastLoadedVideoPath = null; 
+                    applyVideoPath(pathValue); 
+
+                    // 3. 构建子图 Prompt 发送给后端，以获取精确的 video_info (帧数、波形)
+                    const promptDict = {};
+                    const visited = new Set();
                     
-                    // 2. 如果自身没有值，尝试从 input slot 的连线上游读取 (针对 forceInput: True)
-                    if (!targetPath && node.inputs) {
-                        const pathInputIndex = node.inputs.findIndex(i => i.name === "path");
-                        if (pathInputIndex !== -1) {
-                            const link = node.getInputLink(pathInputIndex);
-                            if (link) {
-                                const originNode = app.graph.getNodeById(link.origin_id);
-                                if (originNode && originNode.widgets) {
-                                    // 遍历上游节点的 widgets，寻找最像路径的字符串
-                                    for (let w of originNode.widgets) {
-                                        if (w.value && typeof w.value === "string" && w.value.trim().length > 0) {
-                                            const name = (w.name || "").toLowerCase();
-                                            if (name.includes("path") || name.includes("video") || name.includes("file") || name.includes("media") || name.includes("url")) {
-                                                targetPath = w.value.trim();
-                                                break;
-                                            }
-                                        }
+                    const buildSubgraph = (nId) => {
+                        if (visited.has(nId)) return;
+                        visited.add(nId);
+                        const n = app.graph.getNodeById(nId);
+                        if (!n) return;
+                        
+                        const inputs = {};
+                        if (n.inputs) {
+                            for (const inp of n.inputs) {
+                                if (inp.link) {
+                                    const l = app.graph.links[inp.link];
+                                    if (l) {
+                                        buildSubgraph(l.origin_id);
+                                        inputs[inp.name] = [String(l.origin_id), l.origin_slot];
                                     }
-                                    // 如果没找到特定名字的，找第一个包含路径分隔符或扩展名的长字符串
-                                    if (!targetPath) {
-                                        for (let w of originNode.widgets) {
-                                            if (w.value && typeof w.value === "string") {
-                                                const val = w.value.trim();
-                                                if (val.length > 3 && (val.includes("/") || val.includes("\\") || val.match(/\.(mp4|mov|avi|mkv|webm)$/i))) {
-                                                    targetPath = val;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
+                                } else {
+                                    const w = n.widgets?.find(w => w.name === inp.name);
+                                    if (w) inputs[inp.name] = w.value;
                                 }
                             }
                         }
-                    }
+                        if (n.widgets) {
+                            for (const w of n.widgets) {
+                                if (!inputs.hasOwnProperty(w.name)) inputs[w.name] = w.value;
+                            }
+                        }
+                        
+                        promptDict[String(nId)] = {
+                            "inputs": inputs,
+                            "class_type": n.comfyClass || n.type,
+                            "_meta": { "title": n.title || n.type }
+                        };
+                    };
 
-                    if (targetPath) {
-                        node._lastLoadedVideoPath = null; // 强制绕过缓存
-                        applyVideoPath(targetPath);
-                    } else {
-                        alert("无法获取视频路径。\n请确保已连接上游节点（如 Local Media Manager），或尝试先点击一次 'Queue Prompt' 运行工作流以同步路径。");
+                    buildSubgraph(node.id);
+
+                    try {
+                        const body = {
+                            prompt: promptDict,
+                            client_id: api.clientId,
+                            extra_data: { extra_pnginfo: { workflow: app.graph.serialize() } }
+                        };
+                        await api.fetchApi("/prompt", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(body)
+                        });
+                    } catch (e) {
+                        console.error("[VideoLoaderPW] Local execution error:", e);
                     }
                 };
 
@@ -1257,10 +1294,35 @@ app.registerExtension({
 
                 sliderBox.onpointerup = (e) => { dragging = null; sliderBox.releasePointerCapture(e.pointerId); };
 
-                if (node.widgets) {
-                    const pathWidgetInit = node.widgets.find(w => w.name === "path");
-                    if (pathWidgetInit && pathWidgetInit.value) applyVideoPath(pathWidgetInit.value);
-                }
+                container.addEventListener("dragenter", (e) => {
+                    e.preventDefault(); dragCounter++;
+                    if (dragCounter === 1) {
+                        container.style.outline = "2px dashed #38bdf8";
+                        container.style.outlineOffset = "-2px";
+                        container.style.background = "rgba(14, 165, 233, 0.1)";
+                    }
+                });
+                container.addEventListener("dragover", (e) => { e.preventDefault(); });
+                container.addEventListener("dragleave", (e) => {
+                    e.preventDefault(); dragCounter--;
+                    if (dragCounter === 0) {
+                        container.style.outline = "none";
+                        container.style.background = defaultBg;
+                    }
+                });
+                container.addEventListener("drop", (e) => {
+                    e.preventDefault(); e.stopPropagation(); dragCounter = 0;
+                    container.style.outline = "none";
+                    container.style.background = defaultBg;
+                    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                        const file = e.dataTransfer.files[0];
+                        if (file.type.startsWith('video/') || file.name.toLowerCase().match(/\.(mp4|webm|mkv|avi|mov|m4v|flv|wmv)$/)) {
+                            uploadFile(file);
+                        }
+                    }
+                });
+
+                if (pathWidget && pathWidget.value) applyVideoPath(pathWidget.value);
                 return r;
             };
         }
