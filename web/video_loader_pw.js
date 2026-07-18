@@ -97,7 +97,6 @@ app.registerExtension({
                 let dragStartCropY = 0;
                 let dragStartCropW = 1;
                 let dragStartCropH = 1;
-                let dragCounter = 0;
                 let currentAspectRatio = 0;
                 let isCropVisible = false;
                 let currentWaveformPeaks = [];
@@ -285,10 +284,13 @@ app.registerExtension({
                     if (!filename) return;
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
-                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
-                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
-                    if (videoPreview && videoPreview.src !== url) {
+                    const timestamp = Date.now(); // 加入时间戳强制绕过浏览器缓存
+                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}&t=${timestamp}`);
+                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input&t=${timestamp}`);
+                    
+                    if (videoPreview) {
                         videoPreview.src = url;
+                        videoPreview.load();
                     }
                 };
 
@@ -444,15 +446,63 @@ app.registerExtension({
                     if (node.updatePreview) node.updatePreview(p);
                 };
                 
+                // 【核心黑科技增强】：Load/Reload Video 逻辑
                 const loadReloadVideo = () => {
                     let targetPath = "";
+                    
+                    // 1. 优先读取当前节点 path widget 的值
                     if (pathWidget && pathWidget.value && pathWidget.value.trim()) {
                         targetPath = pathWidget.value.trim();
                     }
                     
+                    // 2. 【黑科技】：顺着连线去上游节点（如 Local Media Manager）“偷取”最新路径
+                    // 这样即使不点击 Queue Prompt，也能直接同步上游节点的最新选择
+                    const pathInputIndex = node.inputs ? node.inputs.findIndex(i => i.name === "path") : -1;
+                    if (pathInputIndex !== -1 && node.inputs[pathInputIndex].link) {
+                        const linkId = node.inputs[pathInputIndex].link;
+                        const linkInfo = app.graph.links.find(l => l[0] === linkId);
+                        
+                        if (linkInfo) {
+                            const originNodeId = linkInfo[1];
+                            const originNode = app.graph.getNodeById(originNodeId);
+                            
+                            if (originNode && originNode.widgets) {
+                                let upstreamPath = "";
+                                // 尝试寻找上游节点中代表路径的 widget
+                                for (let w of originNode.widgets) {
+                                    if (w.value && typeof w.value === "string" && w.value.length > 2) {
+                                        const name = (w.name || "").toLowerCase();
+                                        // 匹配常见的路径/视频字段名
+                                        if (name.includes("path") || name.includes("video") || name.includes("file") || name.includes("media")) {
+                                            upstreamPath = w.value;
+                                            break;
+                                        }
+                                    }
+                                }
+                                // 如果没找到特定名字的，找第一个包含路径分隔符的 string widget
+                                if (!upstreamPath) {
+                                    for (let w of originNode.widgets) {
+                                        if (w.value && typeof w.value === "string" && (w.value.includes("/") || w.value.includes("\\"))) {
+                                            upstreamPath = w.value;
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                if (upstreamPath) {
+                                    targetPath = upstreamPath;
+                                    // 将上游的最新路径同步显示到当前节点的 path 框中
+                                    if (pathWidget) pathWidget.value = targetPath;
+                                }
+                            }
+                        }
+                    }
+                    
                     if (targetPath) {
-                        node._lastLoadedVideoPath = null; 
+                        node._lastLoadedVideoPath = null; // 强制绕过缓存，视为新文件
                         applyVideoPath(targetPath);
+                    } else {
+                        alert("未找到有效的视频路径。请确保已连接上游节点（如 LMM）或手动输入路径。");
                     }
                 };
 
@@ -521,6 +571,7 @@ app.registerExtension({
 
                 node.toggleWidgetVisibility();
 
+                // 添加 Load/Reload 按钮
                 this.addWidget("button", "Load/Reload Video", null, loadReloadVideo);
 
                 const fileInput = document.createElement("input");
@@ -1221,34 +1272,6 @@ app.registerExtension({
                 };
 
                 sliderBox.onpointerup = (e) => { dragging = null; sliderBox.releasePointerCapture(e.pointerId); };
-
-                container.addEventListener("dragenter", (e) => {
-                    e.preventDefault(); dragCounter++;
-                    if (dragCounter === 1) {
-                        container.style.outline = "2px dashed #38bdf8";
-                        container.style.outlineOffset = "-2px";
-                        container.style.background = "rgba(14, 165, 233, 0.1)";
-                    }
-                });
-                container.addEventListener("dragover", (e) => { e.preventDefault(); });
-                container.addEventListener("dragleave", (e) => {
-                    e.preventDefault(); dragCounter--;
-                    if (dragCounter === 0) {
-                        container.style.outline = "none";
-                        container.style.background = defaultBg;
-                    }
-                });
-                container.addEventListener("drop", (e) => {
-                    e.preventDefault(); e.stopPropagation(); dragCounter = 0;
-                    container.style.outline = "none";
-                    container.style.background = defaultBg;
-                    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                        const file = e.dataTransfer.files[0];
-                        if (file.type.startsWith('video/') || file.name.toLowerCase().match(/\.(mp4|webm|mkv|avi|mov|m4v|flv|wmv)$/)) {
-                            uploadFile(file);
-                        }
-                    }
-                });
 
                 if (pathWidget && pathWidget.value) applyVideoPath(pathWidget.value);
                 return r;
