@@ -37,7 +37,8 @@ class VideoLoaderPW:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "video": ("STRING", {"default": ""}),
+                # 彻底移除 video，将 path 作为唯一路径输入
+                "path": ("STRING", {"default": "", "forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
                 "start_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "end_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
@@ -55,9 +56,6 @@ class VideoLoaderPW:
                 "split_green_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "split_green_point_idx": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "select_generate": (["blue", "purple"], {"default": "blue", "tooltip": "Which segment to use as generate when split_count=1"}),
-            },
-            "optional": {
-                "path": ("STRING", {"forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
             }
         }
 
@@ -66,9 +64,9 @@ class VideoLoaderPW:
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, start_frame, end_frame, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_purple_point=0.0, split_purple_point_idx=0, split_green_point=0.0, split_green_point_idx=0, select_generate="blue", path=None, **kwargs):
+    def load_video(self, path, frame_rate, display_mode, start_time, end_time, start_frame, end_frame, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_purple_point=0.0, split_purple_point_idx=0, split_green_point=0.0, split_green_point_idx=0, select_generate="blue", **kwargs):
         align_8n_plus_1 = kwargs.get("align_8n+1", True)
-        video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
+        video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else ""
 
         if not video_to_load:
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
