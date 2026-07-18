@@ -290,7 +290,6 @@ class VideoLoaderPW:
                     waveform = waveform.unsqueeze(0)
                     audio_dict = {"waveform": waveform, "sample_rate": sample_rate}
                     
-                    # 生成波形峰值数据用于前端绘制，并加入自动缩放机制
                     if waveform.dim() == 3:
                         w_tensor = waveform[0]
                     else:
@@ -342,7 +341,6 @@ class VideoLoaderPW:
             "waveform_peaks": waveform_peaks,
         }, indent=4)
 
-        # 修复：使用实际提取的 frame_count 计算 g_end_frame
         if display_mode == "frames":
             g_start_frame = s_frame_0
             if e_frame_0 > 0:
