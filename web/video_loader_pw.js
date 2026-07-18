@@ -311,25 +311,50 @@ app.registerExtension({
                     };
                 }
 
+                // 【核心修复 1】：强制同步 Widget 值到底层数据，打破 ComfyUI 缓存
                 node.updatePreview = function (filename) {
                     if (!filename) return;
+                    
+                    if (videoWidget) {
+                        if (videoWidget.value !== filename) {
+                            videoWidget.value = filename;
+                        }
+                        // 强制同步到 widgets_values 数组，这是 ComfyUI Queue 时真正读取的数据
+                        const idx = node.widgets.indexOf(videoWidget);
+                        if (idx !== -1 && node.widgets_values && node.widgets_values[idx] !== filename) {
+                            node.widgets_values[idx] = filename;
+                            app.graph.setDirtyCanvas(true, true);
+                        }
+                    }
+                    
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
-                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
-                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
+                    const timestamp = Date.now(); // 添加时间戳防止浏览器缓存
+                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}&t=${timestamp}`);
+                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input&t=${timestamp}`);
                     
-                    if (videoPreview && videoPreview.src !== url) {
-                        videoPreview.src = url;
+                    if (videoPreview) {
+                        if (videoPreview.src !== url) {
+                            videoPreview.src = url;
+                            videoPreview.load();
+                        }
                     }
                 };
 
-                // 【核心修复 1】：切换视频时彻底清空旧视频的帧数缓存
                 const applyVideoPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
                     const isNewFile = (p !== node._lastLoadedVideoPath);
                     node._lastLoadedVideoPath = p;
-                    if (videoWidget) videoWidget.value = p;
+                    
+                    // 强制同步 Widget 值
+                    if (videoWidget) {
+                        videoWidget.value = p;
+                        const idx = node.widgets.indexOf(videoWidget);
+                        if (idx !== -1 && node.widgets_values) {
+                            node.widgets_values[idx] = p;
+                        }
+                    }
                     
                     if (isNewFile) {
                         duration = 0;
@@ -372,7 +397,6 @@ app.registerExtension({
                                 fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
                             }
                             
-                            // 【核心修复 2】：使用 loaded_frame_count 替代 source_frame_count
                             if (info.loaded_frame_count !== undefined && endFrameWidget) {
                                 node.accurateFrameCount = info.loaded_frame_count;
                                 node.accurateDuration = info.loaded_duration || 0;
@@ -413,7 +437,6 @@ app.registerExtension({
                                 fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
                             }
                             
-                            // 【核心修复 3】：使用 loaded_frame_count 替代 source_frame_count
                             if (info.loaded_frame_count !== undefined && endFrameWidget) {
                                 node.accurateFrameCount = info.loaded_frame_count;
                                 node.accurateDuration = info.loaded_duration || 0;
@@ -447,6 +470,9 @@ app.registerExtension({
                         if (file.path) {
                             duration = 0; node.accurateDuration = 0; node.accurateFrameCount = 0;
                             videoWidget.value = file.path;
+                            const idx = node.widgets.indexOf(videoWidget);
+                            if (idx !== -1 && node.widgets_values) node.widgets_values[idx] = file.path;
+                            
                             node.updatePreview(file.path);
                             if (startTimeWidget) startTimeWidget.value = 0;
                             if (endTimeWidget) endTimeWidget.value = 0;
@@ -479,6 +505,9 @@ app.registerExtension({
                                     const data = await resp.json();
                                     duration = 0; node.accurateDuration = 0; node.accurateFrameCount = 0;
                                     videoWidget.value = data.name;
+                                    const idx = node.widgets.indexOf(videoWidget);
+                                    if (idx !== -1 && node.widgets_values) node.widgets_values[idx] = data.name;
+                                    
                                     node.updatePreview(data.name);
                                     if (startTimeWidget) startTimeWidget.value = 0;
                                     if (endTimeWidget) endTimeWidget.value = 0;
@@ -497,6 +526,9 @@ app.registerExtension({
                                 const data = await resp.json();
                                 duration = 0; node.accurateDuration = 0; node.accurateFrameCount = 0;
                                 videoWidget.value = data.name;
+                                const idx = node.widgets.indexOf(videoWidget);
+                                if (idx !== -1 && node.widgets_values) node.widgets_values[idx] = data.name;
+                                
                                 node.updatePreview(data.name);
                                 if (startTimeWidget) startTimeWidget.value = 0;
                                 if (endTimeWidget) endTimeWidget.value = 0;
