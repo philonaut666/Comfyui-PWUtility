@@ -17,10 +17,10 @@ app.registerExtension({
                 if (this.syncToggleVisual) this.syncToggleVisual();
 
                 if (this.widgets) {
-                    const videoWidget = this.widgets.find(w => w.name === "video");
-                    if (videoWidget && videoWidget.value && this.updatePreview) {
-                        this._lastLoadedVideoPath = videoWidget.value;
-                        this.updatePreview(videoWidget.value);
+                    const pathWidget = this.widgets.find(w => w.name === "path");
+                    if (pathWidget && pathWidget.value && this.updatePreview) {
+                        this._lastLoadedVideoPath = pathWidget.value;
+                        this.updatePreview(pathWidget.value);
                     }
                 }
             };
@@ -61,7 +61,6 @@ app.registerExtension({
                 node.accurateDuration = 0;
 
                 const pathWidget = this.widgets.find((w) => w.name === "path");
-                const videoWidget = this.widgets.find((w) => w.name === "video");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
                 const displayModeWidget = this.widgets.find((w) => w.name === "display_mode");
                 const startTimeWidget = this.widgets.find((w) => w.name === "start_time");
@@ -403,7 +402,7 @@ app.registerExtension({
                 const resetAllParams = () => {
                     duration = 0;
                     node.accurateDuration = 0;
-                    node.accurateFrameCount = 0; // 破除旧视频帧数限制
+                    node.accurateFrameCount = 0;
                     
                     if (startTimeWidget) startTimeWidget.value = 0;
                     if (endTimeWidget) endTimeWidget.value = 0; 
@@ -441,32 +440,21 @@ app.registerExtension({
                         node._lastLoadedVideoPath = p;
                     }
                     
-                    if (videoWidget) videoWidget.value = p;
+                    if (pathWidget) pathWidget.value = p;
                     if (node.updatePreview) node.updatePreview(p);
                 };
                 
-                // 【新增功能】：Load/Reload Video 逻辑
                 const loadReloadVideo = () => {
                     let targetPath = "";
                     if (pathWidget && pathWidget.value && pathWidget.value.trim()) {
                         targetPath = pathWidget.value.trim();
-                    } else if (videoWidget && videoWidget.value && videoWidget.value.trim()) {
-                        targetPath = videoWidget.value.trim();
                     }
                     
                     if (targetPath) {
-                        node._lastLoadedVideoPath = null; // 强制视为新文件以触发 resetAllParams
+                        node._lastLoadedVideoPath = null; 
                         applyVideoPath(targetPath);
                     }
                 };
-
-                if (videoWidget) {
-                    const originalCallback = videoWidget.callback;
-                    videoWidget.callback = function () {
-                        if (originalCallback) originalCallback.apply(this, arguments);
-                        applyVideoPath(this.value);
-                    };
-                }
 
                 const _videoExecHandler = ({ detail }) => {
                     if (!detail || String(detail.node) !== String(node.id)) return;
@@ -533,7 +521,6 @@ app.registerExtension({
 
                 node.toggleWidgetVisibility();
 
-                // 【新增按钮】：Load/Reload Video
                 this.addWidget("button", "Load/Reload Video", null, loadReloadVideo);
 
                 const fileInput = document.createElement("input");
@@ -547,13 +534,14 @@ app.registerExtension({
                 const uploadFile = async (file) => {
                     try {
                         if (errorMsg) errorMsg.style.display = "none";
+                        btnWidget.name = "Uploading...";
+                        node.setDirtyCanvas(true, false);
+                        const CHUNK_SIZE = 10 * 1024 * 1024;
+
                         if (file.path) {
                             applyVideoPath(file.path);
                             return;
                         }
-                        btnWidget.name = "Uploading...";
-                        node.setDirtyCanvas(true, false);
-                        const CHUNK_SIZE = 10 * 1024 * 1024;
 
                         if (file.size > CHUNK_SIZE) {
                             const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
@@ -1262,7 +1250,7 @@ app.registerExtension({
                     }
                 });
 
-                if (videoWidget && videoWidget.value) applyVideoPath(videoWidget.value);
+                if (pathWidget && pathWidget.value) applyVideoPath(pathWidget.value);
                 return r;
             };
         }
