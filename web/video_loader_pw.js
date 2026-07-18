@@ -102,6 +102,8 @@ app.registerExtension({
                 let dragCounter = 0;
                 let currentAspectRatio = 0;
                 let isCropVisible = false;
+                
+                let currentWaveformPeaks = [];
 
                 const getActiveDuration = () => {
                     if (duration > 0) return duration;
@@ -367,21 +369,34 @@ app.registerExtension({
                                 fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
                             }
                             
-                            // 【核心修复】：使用 loaded_frame_count 替代 source_frame_count
                             if (info.loaded_frame_count !== undefined && endFrameWidget) {
                                 node.accurateFrameCount = info.loaded_frame_count;
                                 node.accurateDuration = info.loaded_duration || 0;
-                                 
-                                const currentEndFrame = parseInt(endFrameWidget.value) || 0;
                                 
-                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
-                                    endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
-                                    
-                                    if (endTimeWidget) endTimeWidget.value = parseFloat(info.loaded_duration.toFixed(3));
-                                    
-                                    updateRuler();
-                                    updateUI(true);
+                                if (endTimeWidget) {
+                                    let currentEnd = parseFloat(endTimeWidget.value) || 0;
+                                    if (currentEnd === 0 || currentEnd > node.accurateDuration) {
+                                        endTimeWidget.value = node.accurateDuration;
+                                    }
                                 }
+                                if (endFrameWidget) {
+                                    let currentEndF = parseInt(endFrameWidget.value) || 0;
+                                    if (currentEndF === 0 || currentEndF >= node.accurateFrameCount) {
+                                        endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                                    }
+                                }
+                                
+                                node.syncFramesFromTime();
+                                updateRuler();
+                                updateUI(true);
+                            }
+                            
+                            if (info.waveform_peaks && Array.isArray(info.waveform_peaks)) {
+                                currentWaveformPeaks = info.waveform_peaks;
+                                requestAnimationFrame(drawWaveform);
+                            } else {
+                                currentWaveformPeaks = [];
+                                requestAnimationFrame(drawWaveform);
                             }
                         } catch(e) {
                             console.error("Failed to parse video_info", e);
@@ -408,19 +423,34 @@ app.registerExtension({
                                 fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
                             }
                             
-                            // 【核心修复】：使用 loaded_frame_count 替代 source_frame_count
                             if (info.loaded_frame_count !== undefined && endFrameWidget) {
                                 node.accurateFrameCount = info.loaded_frame_count;
                                 node.accurateDuration = info.loaded_duration || 0;
-                                 
-                                const currentEndFrame = parseInt(endFrameWidget.value) || 0;
                                 
-                                if (currentEndFrame === 0 || Math.abs(currentEndFrame - (node.accurateFrameCount - 1)) <= 1) {
-                                    endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
-                                    if (endTimeWidget) endTimeWidget.value = parseFloat(info.loaded_duration.toFixed(3));
-                                    updateRuler();
-                                    updateUI(true);
+                                if (endTimeWidget) {
+                                    let currentEnd = parseFloat(endTimeWidget.value) || 0;
+                                    if (currentEnd === 0 || currentEnd > node.accurateDuration) {
+                                        endTimeWidget.value = node.accurateDuration;
+                                    }
                                 }
+                                if (endFrameWidget) {
+                                    let currentEndF = parseInt(endFrameWidget.value) || 0;
+                                    if (currentEndF === 0 || currentEndF >= node.accurateFrameCount) {
+                                        endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                                    }
+                                }
+                                
+                                node.syncFramesFromTime();
+                                updateRuler();
+                                updateUI(true);
+                            }
+                            
+                            if (info.waveform_peaks && Array.isArray(info.waveform_peaks)) {
+                                currentWaveformPeaks = info.waveform_peaks;
+                                requestAnimationFrame(drawWaveform);
+                            } else {
+                                currentWaveformPeaks = [];
+                                requestAnimationFrame(drawWaveform);
                             }
                         } catch(e) {}
                     }
@@ -800,12 +830,55 @@ app.registerExtension({
                 const sliderBox = document.createElement("div");
                 Object.assign(sliderBox.style, { position: "relative", width: "100%", height: "24px", background: "#111", borderRadius: "4px", cursor: "pointer", userSelect: "none", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)", boxSizing: "border-box" });
 
+                // 【新增】：音频波形 Canvas
+                const waveCanvas = document.createElement("canvas");
+                Object.assign(waveCanvas.style, {
+                    position: "absolute", top: "0", left: "0", width: "100%", height: "100%",
+                    pointerEvents: "none", zIndex: "1", opacity: "0.6"
+                });
+                sliderBox.appendChild(waveCanvas);
+
+                const drawWaveform = () => {
+                    if (!waveCanvas) return;
+                    const rect = waveCanvas.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) return;
+
+                    const dpr = window.devicePixelRatio || 1;
+                    if (waveCanvas.width !== rect.width * dpr || waveCanvas.height !== rect.height * dpr) {
+                        waveCanvas.width = rect.width * dpr;
+                        waveCanvas.height = rect.height * dpr;
+                    }
+                    
+                    const ctx = waveCanvas.getContext('2d');
+                    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                    ctx.clearRect(0, 0, rect.width, rect.height);
+                    
+                    if (currentWaveformPeaks.length === 0) return;
+                    
+                    ctx.fillStyle = "rgba(56, 189, 248, 0.8)";
+                    
+                    const numPeaks = currentWaveformPeaks.length;
+                    const centerY = rect.height / 2;
+                    const maxAmp = rect.height / 2;
+                    
+                    for (let i = 0; i < numPeaks; i++) {
+                        const x = (i / numPeaks) * rect.width;
+                        const w = Math.max(1, (rect.width / numPeaks) - 0.5);
+                        const [mn, mx] = currentWaveformPeaks[i];
+                        
+                        const yMin = centerY - mx * maxAmp;
+                        const yMax = centerY - mn * maxAmp;
+                        
+                        ctx.fillRect(x, yMin, w, Math.max(1, yMax - yMin));
+                    }
+                };
+
                 const fillPurple = document.createElement("div");
-                Object.assign(fillPurple.style, { position: "absolute", height: "100%", background: "purple", pointerEvents: "none", opacity: "0.6" });
+                Object.assign(fillPurple.style, { position: "absolute", height: "100%", background: "purple", pointerEvents: "none", opacity: "0.6", zIndex: "2" });
                 const fillBlue = document.createElement("div");
-                Object.assign(fillBlue.style, { position: "absolute", height: "100%", background: "rgba(14, 165, 233, 0.6)", pointerEvents: "none" });
+                Object.assign(fillBlue.style, { position: "absolute", height: "100%", background: "rgba(14, 165, 233, 0.6)", pointerEvents: "none", zIndex: "2" });
                 const fillGreen = document.createElement("div");
-                Object.assign(fillGreen.style, { position: "absolute", height: "100%", background: "green", pointerEvents: "none", opacity: "0.6" });
+                Object.assign(fillGreen.style, { position: "absolute", height: "100%", background: "green", pointerEvents: "none", opacity: "0.6", zIndex: "2" });
                 
                 sliderBox.appendChild(fillPurple);
                 sliderBox.appendChild(fillBlue);
@@ -813,7 +886,7 @@ app.registerExtension({
 
                 const createHandle = (color) => {
                     const h = document.createElement("div");
-                    Object.assign(h.style, { position: "absolute", top: "0", width: "8px", height: "100%", background: color, transform: "translateX(-50%)", pointerEvents: "none", boxShadow: "0 0 4px rgba(0,0,0,0.8)", borderRadius: "2px" });
+                    Object.assign(h.style, { position: "absolute", top: "0", width: "8px", height: "100%", background: color, transform: "translateX(-50%)", pointerEvents: "none", boxShadow: "0 0 4px rgba(0,0,0,0.8)", borderRadius: "2px", zIndex: "3" });
                     return h;
                 };
 
@@ -903,6 +976,9 @@ app.registerExtension({
                         
                         app.graph.setDirtyCanvas(true, true);
                     });
+                    
+                    waveResizeObserver.observe(sliderBox);
+                    requestAnimationFrame(drawWaveform);
                 }, 100);
 
                 const updateCropUI = () => {
@@ -1046,10 +1122,15 @@ app.registerExtension({
 
                 const resizeObserver = new ResizeObserver(() => { if (isCropVisible) updateCropUI(); });
                 resizeObserver.observe(videoWrapper);
+                
+                const waveResizeObserver = new ResizeObserver(() => {
+                    requestAnimationFrame(drawWaveform);
+                });
 
                 const oldOnRemoved = node.onRemoved;
                 node.onRemoved = function () {
                     resizeObserver.disconnect();
+                    if (waveResizeObserver) waveResizeObserver.disconnect();
                     if (oldOnRemoved) oldOnRemoved.apply(this, arguments);
                 }
                 
@@ -1246,26 +1327,14 @@ app.registerExtension({
                 setTimeout(() => { updateRuler(); updateUI(); }, 50);
 
                 videoPreview.onloadedmetadata = () => {
-                    const newDuration = videoPreview.duration;
-                    if (!newDuration || newDuration === Infinity || isNaN(newDuration)) return;
-                    
-                    duration = newDuration;
-                    node.accurateDuration = newDuration;
-                    
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;  
-                    const newTotalFrames = Math.round(newDuration * fr);
-                    node.accurateFrameCount = newTotalFrames; 
-
-                    if (endTimeWidget) {
-                        endTimeWidget.value = newDuration;
+                    duration = videoPreview.duration;
+                    node.accurateDuration = duration;
+                    if (endTimeWidget && (endTimeWidget.value === 0 || endTimeWidget.value > duration)) {
+                        endTimeWidget.value = duration;
+                        node.syncFramesFromTime();
                     }
-                    if (endFrameWidget) {
-                        endFrameWidget.value = newTotalFrames > 0 ? newTotalFrames - 1 : 0;
-                    }
-
-                    node.syncFramesFromTime();
                     updateRuler();
-                    updateUI(true);
+                    updateUI();
                     updateCropUI();
                 };
 
