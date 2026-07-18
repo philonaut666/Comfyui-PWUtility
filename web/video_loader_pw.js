@@ -198,6 +198,21 @@ app.registerExtension({
                     node.toggleWidgetVisibility();
                 };
 
+                // 【新增】：提取统一的重置状态函数
+                const resetNodeState = () => {
+                    duration = 0;
+                    node.accurateDuration = 0;
+                    node.accurateFrameCount = 0;
+
+                    if (startTimeWidget) startTimeWidget.value = 0;
+                    if (endTimeWidget) endTimeWidget.value = 0;
+                    if (startFrameWidget) startFrameWidget.value = 0;
+                    if (endFrameWidget) endFrameWidget.value = 0;
+                    
+                    resetSplitWidgets();
+                    if (node.syncFramesFromTime) node.syncFramesFromTime();
+                };
+
                 node.syncFramesFromTime = function () {
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
@@ -311,33 +326,18 @@ app.registerExtension({
                     };
                 }
 
-                // 【核心修复 1】：强制同步 Widget 值到底层数据，打破 ComfyUI 缓存
+                // 【修改】：加入时间戳防缓存，确保 Reload 时浏览器强制重新拉取视频
                 node.updatePreview = function (filename) {
                     if (!filename) return;
-                    
-                    if (videoWidget) {
-                        if (videoWidget.value !== filename) {
-                            videoWidget.value = filename;
-                        }
-                        // 强制同步到 widgets_values 数组，这是 ComfyUI Queue 时真正读取的数据
-                        const idx = node.widgets.indexOf(videoWidget);
-                        if (idx !== -1 && node.widgets_values && node.widgets_values[idx] !== filename) {
-                            node.widgets_values[idx] = filename;
-                            app.graph.setDirtyCanvas(true, true);
-                        }
-                    }
-                    
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
-                    const timestamp = Date.now(); // 添加时间戳防止浏览器缓存
+                    const timestamp = Date.now();
                     if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}&t=${timestamp}`);
                     else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input&t=${timestamp}`);
                     
                     if (videoPreview) {
-                        if (videoPreview.src !== url) {
-                            videoPreview.src = url;
-                            videoPreview.load();
-                        }
+                        videoPreview.src = url;
+                        videoPreview.load();
                     }
                 };
 
@@ -346,30 +346,11 @@ app.registerExtension({
                     const p = rawPath.trim();
                     const isNewFile = (p !== node._lastLoadedVideoPath);
                     node._lastLoadedVideoPath = p;
-                    
-                    // 强制同步 Widget 值
-                    if (videoWidget) {
-                        videoWidget.value = p;
-                        const idx = node.widgets.indexOf(videoWidget);
-                        if (idx !== -1 && node.widgets_values) {
-                            node.widgets_values[idx] = p;
-                        }
-                    }
+                    if (videoWidget) videoWidget.value = p;
                     
                     if (isNewFile) {
-                        duration = 0;
-                        node.accurateDuration = 0;
-                        node.accurateFrameCount = 0;
-
+                        resetNodeState();
                         if (node.updatePreview) node.updatePreview(p);
-                        if (startTimeWidget) startTimeWidget.value = 0;
-                        if (endTimeWidget) endTimeWidget.value = 0;
-                        if (startFrameWidget) startFrameWidget.value = 0;
-                        if (endFrameWidget) endFrameWidget.value = 0;
-                        
-                        resetSplitWidgets();
-                        
-                        if (node.syncFramesFromTime) node.syncFramesFromTime();
                     }
                 };
 
@@ -456,6 +437,19 @@ app.registerExtension({
 
                 node.toggleWidgetVisibility();
 
+                // 【新增】：Load/Reload 按钮
+                const reloadBtnWidget = this.addWidget("button", "Load/Reload", null, () => {
+                    // 1. 清除缓存与数值
+                    resetNodeState();
+                    
+                    // 2. 获取当前路径并重新载入
+                    let currentPath = videoWidget ? videoWidget.value : "";
+                    if (currentPath && currentPath.trim()) {
+                        node._lastLoadedVideoPath = currentPath;
+                        if (node.updatePreview) node.updatePreview(currentPath);
+                    }
+                });
+
                 const fileInput = document.createElement("input");
                 fileInput.type = "file";
                 fileInput.accept = "video/*";
@@ -467,24 +461,17 @@ app.registerExtension({
                 const uploadFile = async (file) => {
                     try {
                         if (errorMsg) errorMsg.style.display = "none";
-                        if (file.path) {
-                            duration = 0; node.accurateDuration = 0; node.accurateFrameCount = 0;
-                            videoWidget.value = file.path;
-                            const idx = node.widgets.indexOf(videoWidget);
-                            if (idx !== -1 && node.widgets_values) node.widgets_values[idx] = file.path;
-                            
-                            node.updatePreview(file.path);
-                            if (startTimeWidget) startTimeWidget.value = 0;
-                            if (endTimeWidget) endTimeWidget.value = 0;
-                            if (startFrameWidget) startFrameWidget.value = 0;
-                            if (endFrameWidget) endFrameWidget.value = 0;
-                            resetSplitWidgets();
-                            node.syncFramesFromTime();
-                            return;
-                        }
                         btnWidget.name = "Uploading...";
                         node.setDirtyCanvas(true, false);
                         const CHUNK_SIZE = 10 * 1024 * 1024;
+
+                        if (file.path) {
+                            resetNodeState();
+                            videoWidget.value = file.path;
+                            node._lastLoadedVideoPath = file.path;
+                            node.updatePreview(file.path);
+                            return;
+                        }
 
                         if (file.size > CHUNK_SIZE) {
                             const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
@@ -503,18 +490,10 @@ app.registerExtension({
                                 if (resp.status !== 200) throw new Error("Chunk upload failed");
                                 if (i === totalChunks - 1) {
                                     const data = await resp.json();
-                                    duration = 0; node.accurateDuration = 0; node.accurateFrameCount = 0;
+                                    resetNodeState();
                                     videoWidget.value = data.name;
-                                    const idx = node.widgets.indexOf(videoWidget);
-                                    if (idx !== -1 && node.widgets_values) node.widgets_values[idx] = data.name;
-                                    
+                                    node._lastLoadedVideoPath = data.name;
                                     node.updatePreview(data.name);
-                                    if (startTimeWidget) startTimeWidget.value = 0;
-                                    if (endTimeWidget) endTimeWidget.value = 0;
-                                    if (startFrameWidget) startFrameWidget.value = 0;
-                                    if (endFrameWidget) endFrameWidget.value = 0;
-                                    resetSplitWidgets();
-                                    node.syncFramesFromTime();
                                 }
                             }
                         } else {
@@ -524,18 +503,10 @@ app.registerExtension({
                             if (resp.status === 413) throw new Error("File too large.");
                             if (resp.status === 200) {
                                 const data = await resp.json();
-                                duration = 0; node.accurateDuration = 0; node.accurateFrameCount = 0;
+                                resetNodeState();
                                 videoWidget.value = data.name;
-                                const idx = node.widgets.indexOf(videoWidget);
-                                if (idx !== -1 && node.widgets_values) node.widgets_values[idx] = data.name;
-                                
+                                node._lastLoadedVideoPath = data.name;
                                 node.updatePreview(data.name);
-                                if (startTimeWidget) startTimeWidget.value = 0;
-                                if (endTimeWidget) endTimeWidget.value = 0;
-                                if (startFrameWidget) startFrameWidget.value = 0;
-                                if (endFrameWidget) endFrameWidget.value = 0;
-                                resetSplitWidgets();
-                                node.syncFramesFromTime();
                             } else {
                                 throw new Error(`Upload failed: ${resp.statusText}`);
                             }
