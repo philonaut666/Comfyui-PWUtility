@@ -296,18 +296,13 @@ app.registerExtension({
                     let cy = cropYWidget ? parseFloat(cropYWidget.value) || 0 : 0;
                     let cw_val = cropWWidget ? parseFloat(cropWWidget.value) || 1 : 1;
                     let ch_val = cropHWidget ? parseFloat(cropHWidget.value) || 1 : 1;
-                    const actualW = vw ? Math.round(cw_val * vw) : 0;
-                    const actualH = vh ? Math.round(ch_val * vh) : 0;
                     if (!isCropVisible || !vw) {
                         cropBox.style.display = "none";
                         cropEditContainer.style.display = "none";
-                        if (cw_val < 0.999 || ch_val < 0.999 || cx > 0.001 || cy > 0.001) {
-                            cropDims.textContent = `Crop: ${actualW}x${actualH}`;
-                            cropDims.style.display = "inline-block";
-                        } else { cropDims.style.display = "none"; }
                         return;
                     }
-                    cropDims.style.display = "none";
+                    const actualW = Math.round(cw_val * vw);
+                    const actualH = Math.round(ch_val * vh);
                     cropEditContainer.style.display = "flex";
                     cropBox.style.display = "block";
                     if (document.activeElement !== wInput) wInput.value = actualW;
@@ -721,9 +716,6 @@ app.registerExtension({
                 const cropUIContainer = document.createElement("div");
                 Object.assign(cropUIContainer.style, { display: "flex", alignItems: "center", gap: "6px", zIndex: "11" });
 
-                const cropDims = document.createElement("span");
-                Object.assign(cropDims.style, { fontSize: "12px", color: "#38bdf8", fontWeight: "bold", display: "none", padding: "0 6px", pointerEvents: "none" });
-
                 const cropEditContainer = document.createElement("div");
                 Object.assign(cropEditContainer.style, { display: "none", alignItems: "center", gap: "4px" });
 
@@ -758,7 +750,6 @@ app.registerExtension({
                 cropEditContainer.appendChild(hInput);
                 cropEditContainer.appendChild(resetBtn);
 
-                cropUIContainer.appendChild(cropDims);
                 cropUIContainer.appendChild(cropEditContainer);
                 playerTop.appendChild(cropUIContainer);
 
@@ -827,9 +818,23 @@ app.registerExtension({
                     isCropVisible = !isCropVisible;
                     cropBtn.style.background = isCropVisible ? "#38bdf8" : "rgba(255, 255, 255, 0.1)";
                     cropBtn.style.color = isCropVisible ? "black" : "white";
+                    if (isCropVisible) {
+                        videoPreview.pause();
+                        videoPreview.controls = false;
+                    } else {
+                        // 关闭 Crop：恢复原画面，清空裁切参数
+                        if (cropXWidget) cropXWidget.value = 0.0;
+                        if (cropYWidget) cropYWidget.value = 0.0;
+                        if (cropWWidget) cropWWidget.value = 1.0;
+                        if (cropHWidget) cropHWidget.value = 1.0;
+                        currentAspectRatio = 0;
+                        if (arSelect) arSelect.value = "0";
+                        if (wInput) wInput.value = "";
+                        if (hInput) hInput.value = "";
+                        videoPreview.controls = true;
+                        app.graph.setDirtyCanvas(true, false);
+                    }
                     updateCropUI();
-                    if (isCropVisible) { videoPreview.pause(); videoPreview.controls = false; }
-                    else { videoPreview.controls = true; }
                 };
 
                 resetBtn.onclick = () => {
@@ -841,9 +846,6 @@ app.registerExtension({
                     if (arSelect) arSelect.value = "0";
                     if (wInput) wInput.value = "";
                     if (hInput) hInput.value = "";
-                    isCropVisible = false;
-                    cropBtn.style.background = "rgba(255, 255, 255, 0.1)";
-                    cropBtn.style.color = "white";
                     updateCropUI();
                     app.graph.setDirtyCanvas(true, false);
                 };
