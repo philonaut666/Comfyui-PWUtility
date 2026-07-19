@@ -40,10 +40,13 @@ async def upload_chunk(request):
 
 
 class VideoLoaderPW:
-    # path-only cache
+    # path-only source cache
     _source_cache = {}
     _source_cache_order = []
     _max_source_cache_entries = max(1, int(os.environ.get("PW_VIDEO_LOADER_SOURCE_CACHE_ENTRIES", "1")))
+
+    # per-node last path record
+    _node_last_path = {}
 
     @classmethod
     def INPUT_TYPES(s):
@@ -67,6 +70,9 @@ class VideoLoaderPW:
                 "split_green_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "split_green_point_idx": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "select_generate": (["blue", "purple"], {"default": "blue", "tooltip": "Which segment to use as generate when split_count=1"}),
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID"
             }
         }
 
@@ -74,6 +80,60 @@ class VideoLoaderPW:
     RETURN_NAMES = ("images", "audio", "frame_count", "duration", "fps", "video_info", "repeat_last_frame_count", "split_info")
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
+
+    @staticmethod
+    def _resolve_video_path(video_to_load, raise_error=True):
+        if not video_to_load:
+            if raise_error:
+                raise FileNotFoundError("Video path is empty")
+            return ""
+
+        candidates = [video_to_load]
+
+        try:
+            candidates.append(folder_paths.get_annotated_filepath(video_to_load))
+        except Exception:
+            pass
+
+        try:
+            candidates.append(os.path.join(folder_paths.get_input_directory(), video_to_load))
+        except Exception:
+            pass
+
+        for c in candidates:
+            try:
+                if c and os.path.exists(c):
+                    return os.path.abspath(c)
+            except Exception:
+                pass
+
+        if raise_error:
+            raise FileNotFoundError(f"Video file not found: {video_to_load}")
+
+        return video_to_load
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        """
+        Help ComfyUI cache distinguish:
+        - normal execution
+        - path just changed execution, where internal parameters are reset before output
+        """
+        uid = kwargs.get("unique_id", "__global__")
+        if uid is None:
+            uid = "__global__"
+        uid = str(uid)
+
+        path = kwargs.get("path", "")
+        if not path or not isinstance(path, str) or not path.strip():
+            last = cls._node_last_path.get(uid, None)
+            return f"{uid}|empty|{last is not None and last != ''}"
+
+        resolved = cls._resolve_video_path(path.strip(), raise_error=False)
+        last = cls._node_last_path.get(uid, None)
+        path_changed = last is not None and last != resolved
+
+        return f"{uid}|{resolved}|{path_changed}"
 
     @classmethod
     def _get_source_cache(cls, video_path):
@@ -310,6 +370,53 @@ class VideoLoaderPW:
 
         return indices
 
+    @staticmethod
+    def _compute_waveform_peaks(audio_dict):
+        waveform_peaks = []
+
+        if not audio_dict or "waveform" not in audio_dict:
+            return waveform_peaks
+
+        waveform = audio_dict.get("waveform", None)
+        if waveform is None or waveform.numel() == 0:
+            return waveform_peaks
+
+        if waveform.dim() == 3:
+            w_tensor = waveform[0]
+        else:
+            w_tensor = waveform
+
+        if w_tensor.dim() == 2:
+            w_tensor = w_tensor.mean(dim=0)
+
+        num_samples = w_tensor.shape[0]
+        target_peaks = 800
+
+        if num_samples <= 0:
+            return waveform_peaks
+
+        chunk_size = max(1, num_samples // target_peaks)
+        usable_samples = (num_samples // chunk_size) * chunk_size
+
+        if usable_samples <= 0:
+            return waveform_peaks
+
+        w_reshaped = w_tensor[:usable_samples].reshape(-1, chunk_size)
+        mins = w_reshaped.min(dim=1).values
+        maxs = w_reshaped.max(dim=1).values
+
+        global_max = max(float(maxs.max()), abs(float(mins.min())))
+        scale_factor = 1.0
+        if global_max > 0 and global_max < 0.2:
+            scale_factor = 0.2 / global_max
+
+        mins = (mins * scale_factor).clamp(-1.0, 1.0)
+        maxs = (maxs * scale_factor).clamp(-1.0, 1.0)
+
+        waveform_peaks = [[round(mn, 3), round(mx, 3)] for mn, mx in zip(mins.tolist(), maxs.tolist())]
+
+        return waveform_peaks
+
     def load_video(
         self,
         path,
@@ -332,28 +439,50 @@ class VideoLoaderPW:
         **kwargs
     ):
         align_8n_plus_1 = kwargs.get("align_8n+1", True)
+        unique_id = kwargs.get("unique_id", "__global__")
+        if unique_id is None:
+            unique_id = "__global__"
+        node_key = str(unique_id)
 
         video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else ""
+
         if not video_to_load:
+            self.__class__._node_last_path[node_key] = ""
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
             return {
                 "ui": {"video_path": [""], "video_info": ["{}"]},
                 "result": (empty_image, None, 0, 0.0, float(frame_rate), "{}", 0, "{}")
             }
 
-        video_path = video_to_load
-        if not os.path.exists(video_path):
-            video_path_annotated = folder_paths.get_annotated_filepath(video_to_load)
-            if os.path.exists(video_path_annotated):
-                video_path = video_path_annotated
-            else:
-                video_path_input = os.path.join(folder_paths.get_input_directory(), video_to_load)
-                if os.path.exists(video_path_input):
-                    video_path = video_path_input
-                else:
-                    raise FileNotFoundError(f"Video file not found: {video_to_load}")
+        video_path = self._resolve_video_path(video_to_load, raise_error=True)
+        cache_key = os.path.abspath(video_path)
 
-        cache = self._get_source_cache(video_path)
+        last_path = self.__class__._node_last_path.get(node_key, None)
+        path_changed = last_path is not None and last_path != cache_key
+
+        # When path changes, reset adjustable parameters BEFORE computing outputs.
+        # When path does not change, keep current parameters and current cache.
+        if path_changed:
+            start_time = 0.0
+            end_time = 0.0
+            start_frame = 0
+            end_frame = 0
+
+            crop_x = 0.0
+            crop_y = 0.0
+            crop_w = 1.0
+            crop_h = 1.0
+
+            split_count = 0
+            split_purple_point = 0.0
+            split_purple_point_idx = 0
+            split_green_point = 0.0
+            split_green_point_idx = 0
+            select_generate = "blue"
+
+        self.__class__._node_last_path[node_key] = cache_key
+
+        cache = self._get_source_cache(cache_key)
 
         orig_w = int(cache.get("width", 512))
         orig_h = int(cache.get("height", 512))
@@ -420,7 +549,6 @@ class VideoLoaderPW:
             image_tensor = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
 
         audio_dict = None
-        waveform_peaks = []
 
         wave_full = cache.get("audio_waveform", None)
         if wave_full is not None and wave_full.numel() > 0:
@@ -443,59 +571,8 @@ class VideoLoaderPW:
             waveform = wave_full[:, start_sample:end_sample].unsqueeze(0)
             audio_dict = {"waveform": waveform, "sample_rate": sample_rate}
 
-            if waveform.dim() == 3:
-                w_tensor = waveform[0]
-            else:
-                w_tensor = waveform
-
-            if w_tensor.dim() == 2:
-                w_tensor = w_tensor.mean(dim=0)
-
-            num_samples = w_tensor.shape[0]
-            target_peaks = 800
-
-            if num_samples > 0:
-                chunk_size = max(1, num_samples // target_peaks)
-                usable_samples = (num_samples // chunk_size) * chunk_size
-
-                if usable_samples > 0:
-                    w_reshaped = w_tensor[:usable_samples].reshape(-1, chunk_size)
-                    mins = w_reshaped.min(dim=1).values
-                    maxs = w_reshaped.max(dim=1).values
-
-                    global_max = max(float(maxs.max()), abs(float(mins.min())))
-                    scale_factor = 1.0
-                    if global_max > 0 and global_max < 0.2:
-                        scale_factor = 0.2 / global_max
-
-                    mins = (mins * scale_factor).clamp(-1.0, 1.0)
-                    maxs = (maxs * scale_factor).clamp(-1.0, 1.0)
-
-                    waveform_peaks = [[round(mn, 3), round(mx, 3)] for mn, mx in zip(mins.tolist(), maxs.tolist())]
-
         frame_count = image_tensor.shape[0] if frames_loaded > 0 else 0
         final_duration_sec = round(float(frame_count / fr), 2)
-
-        loaded_h = int(image_tensor.shape[1]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
-        loaded_w = int(image_tensor.shape[2]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
-
-        full_frame_count_at_loaded_fps = int(round(source_duration * fr)) if source_duration > 0 else frame_count
-
-        video_info = json.dumps({
-            "source_fps": round(source_fps, 2),
-            "source_frame_count": source_frame_count,
-            "source_duration": round(source_duration, 2),
-            "source_width": orig_w,
-            "source_height": orig_h,
-            "loaded_fps": round(fr, 2),
-            "loaded_frame_count": frame_count,
-            "loaded_duration": final_duration_sec,
-            "loaded_width": loaded_w,
-            "loaded_height": loaded_h,
-            "full_duration": round(source_duration, 2),
-            "full_frame_count_at_loaded_fps": full_frame_count_at_loaded_fps,
-            "waveform_peaks": waveform_peaks,
-        }, indent=4)
 
         if display_mode == "frames":
             g_start_frame = s_frame_0
@@ -513,7 +590,7 @@ class VideoLoaderPW:
         g_start_frame = max(0, g_start_frame)
         g_end_frame = max(g_start_frame, g_end_frame)
 
-        # 使用实际输出帧数作为 local 结束索引，避免 start_frame > 0 时出现负区间
+        # Use actual output frame count as local end index.
         g_end_local = max(0, frame_count - 1)
 
         repeat_last_frame_count = 0
@@ -626,6 +703,31 @@ class VideoLoaderPW:
             split_info_dict["split_back"] = calc_segment(g_local, g_end_local)
 
         split_info_str = json.dumps(split_info_dict)
+
+        # Final waveform peaks after all audio adjustments.
+        waveform_peaks = self._compute_waveform_peaks(audio_dict)
+
+        loaded_h = int(image_tensor.shape[1]) if frame_count > 0 and image_tensor is not None else 0
+        loaded_w = int(image_tensor.shape[2]) if frame_count > 0 and image_tensor is not None else 0
+
+        full_frame_count_at_loaded_fps = int(round(source_duration * fr)) if source_duration > 0 else frame_count
+
+        # Final video_info after all calculations.
+        video_info = json.dumps({
+            "source_fps": round(source_fps, 2),
+            "source_frame_count": source_frame_count,
+            "source_duration": round(source_duration, 2),
+            "source_width": orig_w,
+            "source_height": orig_h,
+            "loaded_fps": round(fr, 2),
+            "loaded_frame_count": frame_count,
+            "loaded_duration": final_duration_sec,
+            "loaded_width": loaded_w,
+            "loaded_height": loaded_h,
+            "full_duration": round(source_duration, 2),
+            "full_frame_count_at_loaded_fps": full_frame_count_at_loaded_fps,
+            "waveform_peaks": waveform_peaks,
+        }, indent=4)
 
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]},
