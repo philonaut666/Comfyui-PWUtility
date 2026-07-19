@@ -66,11 +66,11 @@ class VideoLoaderPW:
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    # 【核心修复 1】：添加 IS_CHANGED，强制基于路径判断是否重新执行，彻底解决 ComfyUI 缓存导致的旧帧数输出问题
+    # 【核心修复】：强制返回 NaN，彻底禁用 ComfyUI 的执行缓存
+    # 确保每次点击 Queue Prompt 都会重新读取视频并输出最新的 frame_count 给下游节点
     @classmethod
-    def IS_CHANGED(s, video, path, **kwargs):
-        p = path.strip() if (path and isinstance(path, str) and path.strip()) else video
-        return p
+    def IS_CHANGED(s, **kwargs):
+        return float("NaN")
 
     def load_video(self, video, frame_rate, display_mode, start_time, end_time, start_frame, end_frame, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_purple_point=0.0, split_purple_point_idx=0, split_green_point=0.0, split_green_point_idx=0, select_generate="blue", path=None, **kwargs):
         align_8n_plus_1 = kwargs.get("align_8n+1", True)
@@ -471,8 +471,7 @@ class VideoLoaderPW:
             
         split_info_str = json.dumps(split_info_dict)
 
-        # 【核心修复 2】：在 frame_count 最终确定（包括 8n+1 补齐）后，再生成 video_info
-        # 确保前端 UI 接收到的 loaded_frame_count 与后端输出的 frame_count 100% 一致
+        # 确保 video_info 包含最终补齐后的 frame_count
         video_info = json.dumps({
             "source_fps": round(source_fps, 2),
             "source_frame_count": source_frame_count,
