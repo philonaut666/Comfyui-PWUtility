@@ -57,6 +57,7 @@ app.registerExtension({
                 const node = this;
                 node.accurateFrameCount = 0;
                 node.accurateDuration = 0;
+                node._backendFrameCountReceived = false; // 【修复点】标记后端是否已返回精确帧数
 
                 const pathWidget = this.widgets.find((w) => w.name === "path");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
@@ -183,6 +184,7 @@ app.registerExtension({
                     node.toggleWidgetVisibility();
                 };
 
+                // 【修复点】：修正 endTimeWidget 的赋值逻辑，确保时间代表该帧的结束时间
                 node.syncFramesFromTime = function () {
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
@@ -193,9 +195,10 @@ app.registerExtension({
                             let endF = Math.round(endTimeWidget.value * fr) - 1;
                             if (node.accurateFrameCount > 0 && endF >= node.accurateFrameCount) {
                                 endF = node.accurateFrameCount - 1;
-                                endTimeWidget.value = parseFloat((endF / fr).toFixed(3));
                             }
                             endFrameWidget.value = Math.max(0, endF);
+                            // 关键修复：endTime 应该是 (endF + 1) / fr，而不是 endF / fr
+                            endTimeWidget.value = parseFloat(((endF + 1) / fr).toFixed(3));
                         } else {
                             endFrameWidget.value = 0;
                         }
@@ -349,6 +352,7 @@ app.registerExtension({
                     }
                 }
 
+                // 【修复点】：在 frames 模式下，直接使用 endFrame - startFrame + 1 计算，避免浮点数反推误差
                 function updateUI(syncPlayer = false) {
                     const activeDur = getActiveDuration();
                     let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
@@ -363,21 +367,21 @@ app.registerExtension({
                     startHandle.style.left = `${pStart}%`;
                     endHandle.style.left = `${pEnd}%`;
                     
+                    const currentDur = parseFloat((visualEnd - s).toFixed(2));
                     const isFrames = displayModeWidget && displayModeWidget.value === "frames";
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
                     
-                    // 【修复 Bug 1】：使用帧数精确计算，避免 HTML5 duration 精度问题导致 122 帧显示为 123 帧
-                    let s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
-                    let e_f = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
-                    if (e_f === 0) {
-                        e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(activeDur * fr) - 1;
+                    if (isFrames) {
+                        let sf = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
+                        let ef = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
+                        if (ef === 0 && node.accurateFrameCount > 0) ef = node.accurateFrameCount - 1;
+                        if (ef < sf) ef = sf;
+                        const trimFrames = ef - sf + 1;
+                        trimLength.textContent = `Trimmed: ${trimFrames} frames`;
+                    } else {
+                        trimLength.textContent = `Trimmed: ${formatTime(currentDur)}`;
                     }
-                    if (e_f < s_f) e_f = s_f;
-                    const trimmedFrames = e_f - s_f + 1;
-                    const trimmedTime = trimmedFrames / fr;
-                    
-                    trimLength.textContent = isFrames ? `Trimmed: ${trimmedFrames} frames` : `Trimmed: ${formatTime(trimmedTime)}`;
-                    
+
                     if (syncPlayer && duration > 0) videoPreview.currentTime = s;
                     const toPct = (val) => Math.max(0, Math.min(100, (val / activeDur) * 100));
                     let pS = 0, pE = 0, bS = 0, bE = 0, gS = 0, gE = 0;
@@ -398,6 +402,7 @@ app.registerExtension({
                     duration = 0;
                     node.accurateDuration = 0;
                     node.accurateFrameCount = 0;
+                    node._backendFrameCountReceived = false;
                     if (startTimeWidget) startTimeWidget.value = 0;
                     if (endTimeWidget) endTimeWidget.value = 0; 
                     if (startFrameWidget) startFrameWidget.value = 0;
@@ -423,21 +428,15 @@ app.registerExtension({
                 const applyVideoPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
-                    
-                    // 【修复 Bug 2】：防止页面初次加载时 _lastLoadedVideoPath 为 undefined 导致误判为新文件并重置参数
-                    if (node._lastLoadedVideoPath === undefined) {
-                        node._lastLoadedVideoPath = p;
-                        if (pathWidget) pathWidget.value = p;
-                        if (node.updatePreview) node.updatePreview(p);
-                        return;
-                    }
-
                     const isNewFile = (p !== node._lastLoadedVideoPath);
                     if (isNewFile) {
                         resetAllParams(); 
                         node._lastLoadedVideoPath = p;
                     }
-                    if (pathWidget) pathWidget.value = p;
+                    if (pathWidget) {
+                        pathWidget.value = p;
+                        node.setDirtyCanvas(true, true);
+                    }
                     if (node.updatePreview) node.updatePreview(p);
                 };
 
@@ -449,30 +448,36 @@ app.registerExtension({
                     };
                 }
 
+                const processVideoInfo = (info) => {
+                    if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
+                    if (info.loaded_frame_count !== undefined && endFrameWidget) {
+                        node.accurateFrameCount = info.loaded_frame_count;
+                        node.accurateDuration = info.loaded_duration || 0;
+                        node._backendFrameCountReceived = true; // 【修复点】标记后端已返回精确值
+                        
+                        let currentEnd = parseFloat(endTimeWidget.value) || 0;
+                        if (currentEnd === 0 || currentEnd > node.accurateDuration) endTimeWidget.value = node.accurateDuration;
+                        let currentEndF = parseInt(endFrameWidget.value) || 0;
+                        if (currentEndF === 0 || currentEndF >= node.accurateFrameCount) endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                        node.syncFramesFromTime();
+                        updateRuler();
+                        updateUI(true);
+                    }
+                    if (info.waveform_peaks && Array.isArray(info.waveform_peaks)) {
+                        currentWaveformPeaks = info.waveform_peaks;
+                        requestAnimationFrame(drawWaveform);
+                    }
+                };
+
                 const _videoExecHandler = ({ detail }) => {
                     if (!detail || String(detail.node) !== String(node.id)) return;
                     const out = detail.output;
-                    // 【修复 Bug 2】：移除 applyVideoPath，后端执行结果不应触发路径变更和参数重置
+                    if (out && out.video_path && out.video_path.length) applyVideoPath(out.video_path[0]);
                     if (out && out.video_info) {
                         try {
                             const infoStr = Array.isArray(out.video_info) ? out.video_info[0] : out.video_info;
                             const info = JSON.parse(infoStr);
-                            if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
-                            if (info.loaded_frame_count !== undefined && endFrameWidget) {
-                                node.accurateFrameCount = info.loaded_frame_count;
-                                node.accurateDuration = info.loaded_duration || 0;
-                                let currentEnd = parseFloat(endTimeWidget.value) || 0;
-                                if (currentEnd > 0 && currentEnd > node.accurateDuration) endTimeWidget.value = node.accurateDuration;
-                                let currentEndF = parseInt(endFrameWidget.value) || 0;
-                                if (currentEndF > 0 && currentEndF >= node.accurateFrameCount) endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
-                                node.syncFramesFromTime();
-                                updateRuler();
-                                updateUI(true);
-                            }
-                            if (info.waveform_peaks && Array.isArray(info.waveform_peaks)) {
-                                currentWaveformPeaks = info.waveform_peaks;
-                                requestAnimationFrame(drawWaveform);
-                            }
+                            processVideoInfo(info);
                         } catch(e) { console.error("Failed to parse video_info", e); }
                     }
                 };
@@ -486,28 +491,12 @@ app.registerExtension({
                 };
 
                 node.onExecuted = function (output) {
-                    // 【修复 Bug 2】：移除 applyVideoPath
+                    if (output && output.video_path && output.video_path.length > 0) applyVideoPath(output.video_path[0]);
                     if (output && output.video_info) {
                         try {
                             const infoStr = Array.isArray(output.video_info) ? output.video_info[0] : output.video_info;
                             const info = JSON.parse(infoStr);
-                            if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
-                            if (info.loaded_frame_count !== undefined && endFrameWidget) {
-                                node.accurateFrameCount = info.loaded_frame_count;
-                                node.accurateDuration = info.loaded_duration || 0;
-                                let currentEnd = parseFloat(endTimeWidget.value) || 0;
-                                // 优化：只有当设置了具体值且超出实际长度时才截断，保留 0 (到结尾) 的语义
-                                if (currentEnd > 0 && currentEnd > node.accurateDuration) endTimeWidget.value = node.accurateDuration;
-                                let currentEndF = parseInt(endFrameWidget.value) || 0;
-                                if (currentEndF > 0 && currentEndF >= node.accurateFrameCount) endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
-                                node.syncFramesFromTime();
-                                updateRuler();
-                                updateUI(true);
-                            }
-                            if (info.waveform_peaks && Array.isArray(info.waveform_peaks)) {
-                                currentWaveformPeaks = info.waveform_peaks;
-                                requestAnimationFrame(drawWaveform);
-                            }
+                            processVideoInfo(info);
                         } catch(e) {}
                     }
                 };
@@ -1127,15 +1116,26 @@ app.registerExtension({
 
                 setTimeout(() => { updateRuler(); updateUI(); }, 50);
 
+                // 【修复点】：防止浏览器的 duration 误差覆盖后端的精确帧数
                 videoPreview.onloadedmetadata = () => {
                     const newDuration = videoPreview.duration;
                     if (!newDuration || newDuration === Infinity || isNaN(newDuration)) return;
                     duration = newDuration;
                     node.accurateDuration = newDuration;
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;  
-                    node.accurateFrameCount = Math.round(newDuration * fr); 
-                    if (endTimeWidget) endTimeWidget.value = newDuration;
-                    if (endFrameWidget) endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                    
+                    let estimatedFrames = Math.round(newDuration * fr);
+                    
+                    if (!node._backendFrameCountReceived) {
+                        node.accurateFrameCount = estimatedFrames;
+                        if (endTimeWidget) endTimeWidget.value = newDuration;
+                        if (endFrameWidget) endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                    } else {
+                        if (node.accurateDuration > 0 && endTimeWidget) {
+                            endTimeWidget.value = node.accurateDuration;
+                        }
+                    }
+                    
                     node.syncFramesFromTime();
                     updateRuler();
                     updateUI(true);
