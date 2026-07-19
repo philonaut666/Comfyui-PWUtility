@@ -18,9 +18,11 @@ app.registerExtension({
 
                 if (this.widgets) {
                     const videoWidget = this.widgets.find(w => w.name === "video");
-                    if (videoWidget && videoWidget.value && this.updatePreview) {
-                        this._lastLoadedVideoPath = videoWidget.value;
-                        this.updatePreview(videoWidget.value);
+                    const pathWidget = this.widgets.find(w => w.name === "path");
+                    const targetWidget = pathWidget || videoWidget;
+                    if (targetWidget && targetWidget.value && this.updatePreview) {
+                        this._lastLoadedVideoPath = targetWidget.value;
+                        this.updatePreview(targetWidget.value);
                     }
                 }
             };
@@ -61,6 +63,7 @@ app.registerExtension({
                 node.accurateDuration = 0;
 
                 const videoWidget = this.widgets.find((w) => w.name === "video");
+                const pathWidget = this.widgets.find((w) => w.name === "path");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
                 const displayModeWidget = this.widgets.find((w) => w.name === "display_mode");
                 const startTimeWidget = this.widgets.find((w) => w.name === "start_time");
@@ -285,119 +288,14 @@ app.registerExtension({
                     if (!filename) return;
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
-                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
-                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
+                    const timestamp = Date.now();
+                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}&t=${timestamp}`);
+                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input&t=${timestamp}`);
+                    
                     if (videoPreview && videoPreview.src !== url) {
                         videoPreview.src = url;
                     }
                 };
-
-                function updateCropUI() {
-                    const vw = videoPreview.videoWidth;
-                    const vh = videoPreview.videoHeight;
-                    let cx = cropXWidget ? parseFloat(cropXWidget.value) || 0 : 0;
-                    let cy = cropYWidget ? parseFloat(cropYWidget.value) || 0 : 0;
-                    let cw_val = cropWWidget ? parseFloat(cropWWidget.value) || 1 : 1;
-                    let ch_val = cropHWidget ? parseFloat(cropHWidget.value) || 1 : 1;
-                    const actualW = vw ? Math.round(cw_val * vw) : 0;
-                    const actualH = vh ? Math.round(ch_val * vh) : 0;
-
-                    if (!isCropVisible || !vw) {
-                        cropBox.style.display = "none";
-                        cropEditContainer.style.display = "none";
-                        if (cw_val < 0.999 || ch_val < 0.999 || cx > 0.001 || cy > 0.001) {
-                            cropDims.textContent = `Crop: ${actualW}x${actualH}`;
-                            cropDims.style.display = "inline-block";
-                        } else { cropDims.style.display = "none"; }
-                        return;
-                    }
-                    cropDims.style.display = "none";
-                    cropEditContainer.style.display = "flex";
-                    cropBox.style.display = "block";
-                    if (document.activeElement !== wInput) wInput.value = actualW;
-                    if (document.activeElement !== hInput) hInput.value = actualH;
-                    const cw = videoPreview.clientWidth;
-                    const ch = videoPreview.clientHeight;
-                    const ratio = Math.min(cw / vw, ch / vh);
-                    const renderedW = vw * ratio;
-                    const renderedH = vh * ratio;
-                    const xOffset = (cw - renderedW) / 2;
-                    const yOffset = (ch - renderedH) / 2;
-                    cropBox.style.left = `${xOffset + cx * renderedW}px`;
-                    cropBox.style.top = `${yOffset + cy * renderedH}px`;
-                    cropBox.style.width = `${cw_val * renderedW}px`;
-                    cropBox.style.height = `${ch_val * renderedH}px`;
-                }
-
-                function updateRuler() {
-                    timeRuler.innerHTML = '';
-                    const activeDur = getActiveDuration();
-                    const numMajorTicks = 5;
-                    const subTicks = 4;
-                    const totalTicks = (numMajorTicks - 1) * subTicks;
-                    const isFrames = displayModeWidget && displayModeWidget.value === "frames";
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
-
-                    for (let i = 0; i <= totalTicks; i++) {
-                        const pct = i / totalTicks;
-                        const t = activeDur * pct;
-                        const isMajor = i % subTicks === 0;
-                        const tickWrapper = document.createElement("div");
-                        Object.assign(tickWrapper.style, { position: "absolute", left: `${pct * 100}%`, top: "0", display: "flex", flexDirection: "column", alignItems: "center", transform: "translateX(-50%)" });
-                        if (i === 0) { tickWrapper.style.transform = "none"; tickWrapper.style.alignItems = "flex-start"; }
-                        if (i === totalTicks) { tickWrapper.style.transform = "translateX(-100%)"; tickWrapper.style.alignItems = "flex-end"; }
-                        const line = document.createElement("div");
-                        Object.assign(line.style, { width: isMajor ? "2px" : "1px", height: isMajor ? "6px" : "4px", background: isMajor ? "#aaa" : "#555", marginBottom: "2px", borderRadius: "1px" });
-                        tickWrapper.appendChild(line);
-                        if (isMajor) {
-                            const label = document.createElement("div");
-                            label.textContent = isFrames ? Math.round(t * fr) : formatTime(t);
-                            tickWrapper.appendChild(label);
-                        }
-                        timeRuler.appendChild(tickWrapper);
-                    }
-                }
-
-                function updateUI(syncPlayer = false) {
-                    const activeDur = getActiveDuration();
-                    let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
-                    let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
-                    let visualEnd = e;
-                    if (visualEnd === 0 || visualEnd > activeDur) visualEnd = activeDur;
-                    if (s > visualEnd) s = visualEnd;
-
-                    let pStart = (s / activeDur) * 100;
-                    let pEnd = (visualEnd / activeDur) * 100;
-                    pStart = Math.max(0, Math.min(pStart, 100));
-                    pEnd = Math.max(0, Math.min(pEnd, 100));
-
-                    startHandle.style.left = `${pStart}%`;
-                    endHandle.style.left = `${pEnd}%`;
-
-                    const currentDur = parseFloat((visualEnd - s).toFixed(2));
-                    const isFrames = displayModeWidget && displayModeWidget.value === "frames";
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
-                    trimLength.textContent = isFrames ? `Trimmed: ${Math.round(currentDur * fr)} frames` : `Trimmed: ${formatTime(currentDur)}`;
-
-                    if (syncPlayer && duration > 0) videoPreview.currentTime = s;
-                    
-                    const toPct = (val) => Math.max(0, Math.min(100, (val / activeDur) * 100));
-                    let pS = 0, pE = 0, bS = 0, bE = 0, gS = 0, gE = 0;
-                    const s_val = s, e_val = visualEnd;
-                    const p_val = splitPurpleWidget ? parseFloat(splitPurpleWidget.value) || 0 : 0;
-                    const g_val = splitGreenWidget ? parseFloat(splitGreenWidget.value) || 0 : 0;
-                    const sc = splitCountWidget ? splitCountWidget.value : 0;
-                    
-                    if (sc === 0) { bS = s_val; bE = e_val; } 
-                    else if (sc === 1) { pS = s_val; pE = p_val; bS = p_val; bE = e_val; } 
-                    else if (sc === 2) { pS = s_val; pE = p_val; bS = p_val; bE = g_val; gS = g_val; gE = e_val; }
-                    
-                    fillPurple.style.left = `${toPct(pS)}%`; fillPurple.style.width = `${Math.max(0, toPct(pE) - toPct(pS))}%`;
-                    fillBlue.style.left = `${toPct(bS)}%`; fillBlue.style.width = `${Math.max(0, toPct(bE) - toPct(bS))}%`;
-                    fillGreen.style.left = `${toPct(gS)}%`; fillGreen.style.width = `${Math.max(0, toPct(gE) - toPct(gS))}%`;
-                    
-                    if (typeof node.updateSplitHandles === 'function') node.updateSplitHandles();
-                }
 
                 const resetAllParams = () => {
                     duration = 0;
@@ -441,6 +339,7 @@ app.registerExtension({
                     }
                     
                     if (videoWidget) videoWidget.value = p;
+                    if (pathWidget) pathWidget.value = p;
                     if (node.updatePreview) node.updatePreview(p);
                 };
 
@@ -461,7 +360,6 @@ app.registerExtension({
                         try {
                             const infoStr = Array.isArray(out.video_info) ? out.video_info[0] : out.video_info;
                             const info = JSON.parse(infoStr);
-                            if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
                             
                             if (info.loaded_frame_count !== undefined && endFrameWidget) {
                                 node.accurateFrameCount = info.loaded_frame_count;
@@ -495,7 +393,6 @@ app.registerExtension({
                         try {
                             const infoStr = Array.isArray(output.video_info) ? output.video_info[0] : output.video_info;
                             const info = JSON.parse(infoStr);
-                            if (info.source_fps !== undefined && typeof fpsDisplay !== 'undefined' && fpsDisplay) fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
                             if (info.loaded_frame_count !== undefined && endFrameWidget) {
                                 node.accurateFrameCount = info.loaded_frame_count;
                                 node.accurateDuration = info.loaded_duration || 0;
@@ -792,24 +689,36 @@ app.registerExtension({
                 };
                 
                 resetBtn.onclick = () => {
-                    if (cropXWidget) cropXWidget.value = 0.0;
-                    if (cropYWidget) cropYWidget.value = 0.0;
-                    if (cropWWidget) cropWWidget.value = 1.0;
-                    if (cropHWidget) cropHWidget.value = 1.0;
-                    currentAspectRatio = 0;
-                    if (arSelect) arSelect.value = "0";
-                    if (wInput) wInput.value = "";
+                    if (cropXWidget) cropY.value .0 0;0
+                   . cropW
+ WidgetWWidget = 00";";
+
+                    if0 if cropWidgetWidget); = 
+0;
+
+                    if
+ cropWWidget.value.value.value  1; 0.0;
+    if cropWidget.value.value
+  ifCropWidget.value crop = cropWidgetWidget.value.value.value.0;2";
+                   
+                    cropWWidget.style.color = = "rgba(030, 255, 255, 255.1) crop
+                    if (cropWidget)) cropHWidget.value = 1.0;
+                    if (hInput)) hInput.value = "";
                     if (hInput) hInput.value = "";
+                    if (hInput
+ hInput.value = "";
                     isCropVisible = false;
-                    cropBtn.style.background = "rgba(255, 255, 255, 0.1)";
+                    cropBtn.style.background = "rgba(255, 255, 255, 0,1)";
+                    cropBtn.style.color = "white";";
                     cropBtn.style.color = "white";
                     updateCropUI();
-                    app.graph.setDirtyCanvas(true, false);
+                    app.setDirtyCanvas(true,, false);
+                };
                 };
 
                 container.appendChild(playerTop);
 
-                const videoWrapper = document.createElement("div");
+                               const videoWrapper = document.createElement("div");
                 Object.assign(videoWrapper.style, { position: "relative", width: "100%", flexGrow: "1", minHeight: "0px", display: "flex", alignItems: "center", justifyContent: "center", background: "#000", borderRadius: "4px", overflow: "hidden" });
 
                 const videoPreview = document.createElement("video");
@@ -980,6 +889,43 @@ app.registerExtension({
                     requestAnimationFrame(drawWaveform);
                 }, 100);
 
+                const updateCropUI = () => {
+                    const vw = videoPreview.videoWidth;
+                    const vh = videoPreview.videoHeight;
+                    let cx = cropXWidget ? parseFloat(cropXWidget.value) || 0 : 0;
+                    let cy = cropYWidget ? parseFloat(cropYWidget.value) || 0 : 0;
+                    let cw_val = cropWWidget ? parseFloat(cropWWidget.value) || 1 : 1;
+                    let ch_val = cropHWidget ? parseFloat(cropHWidget.value) || 1 : 1;
+                    const actualW = vw ? Math.round(cw_val * vw) : 0;
+                    const actualH = vh ? Math.round(ch_val * vh) : 0;
+
+                    if (!isCropVisible || !vw) {
+                        cropBox.style.display = "none";
+                        cropEditContainer.style.display = "none";
+                        if (cw_val < 0.999 || ch_val < 0.999 || cx > 0.001 || cy > 0.001) {
+                            cropDims.textContent = `Crop: ${actualW}x${actualH}`;
+                            cropDims.style.display = "inline-block";
+                        } else { cropDims.style.display = "none"; }
+                        return;
+                    }
+                    cropDims.style.display = "none";
+                    cropEditContainer.style.display = "flex";
+                    cropBox.style.display = "block";
+                    if (document.activeElement !== wInput) wInput.value = actualW;
+                    if (document.activeElement !== hInput) hInput.value = actualH;
+                    const cw = videoPreview.clientWidth;
+                    const ch = videoPreview.clientHeight;
+                    const ratio = Math.min(cw / vw, ch / vh);
+                    const renderedW = vw * ratio;
+                    const renderedH = vh * ratio;
+                    const xOffset = (cw - renderedW) / 2;
+                    const yOffset = (ch - renderedH) / 2;
+                    cropBox.style.left = `${xOffset + cx * renderedW}px`;
+                    cropBox.style.top = `${yOffset + cy * renderedH}px`;
+                    cropBox.style.width = `${cw_val * renderedW}px`;
+                    cropBox.style.height = `${ch_val * renderedH}px`;
+                };
+
                 const onCropPointerDown = (e, handle) => {
                     if (!isCropVisible) return;
                     e.preventDefault(); e.stopPropagation();
@@ -1010,7 +956,7 @@ app.registerExtension({
                     let new_cw = dragStartCropW, new_ch = dragStartCropH, new_cx = dragStartCropX, new_cy = dragStartCropY;
 
                     if (cropDragging === "tl") { new_cw = dragStartCropW - dx; new_ch = dragStartCropH - dy; }
-                    else if (cropDragging === "tr") { new_cw = dragStartCropW + dx; new_ch = dragStartCropH - dy; }
+                    else dxStartCropH - dy; }                    else if (cropDragging === "tr") { new_cw = dragStartCropW + dx; new_ch = dragStartCropH - dy; }
                     else if (cropDragging === "bl") { new_cw = dragStartCropW - dx; new_ch = dragStartCropH + dy; }
                     else if (cropDragging === "br") { new_cw = dragStartCropW + dx; new_ch = dragStartCropH + dy; }
                     else if (cropDragging === "tm") { new_ch = dragStartCropH - dy; }
@@ -1243,7 +1189,8 @@ app.registerExtension({
                     }
                 });
 
-                if (videoWidget && videoWidget.value) applyVideoPath(videoWidget.value);
+                const targetWidget = pathWidget || videoWidget;
+                if (targetWidget && targetWidget.value) applyVideoPath(targetWidget.value);
                 return r;
             };
         }
