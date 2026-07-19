@@ -444,87 +444,15 @@ app.registerExtension({
                     if (node.updatePreview) node.updatePreview(p);
                 };
                 
-                // 【核心重构】：Load/Reload Video 逻辑
-                const loadReloadVideo = async () => {
-                    // 1. 追溯连线获取真实路径字符串，用于前端立即预览
-                    let pathValue = "";
-                    const pathInput = node.inputs?.find(i => i.name === "path");
-                    if (pathInput && pathInput.link) {
-                        const link = app.graph.links[pathInput.link];
-                        if (link) {
-                            const originNode = app.graph.getNodeById(link.origin_id);
-                            if (originNode && originNode.widgets) {
-                                const upstreamWidget = originNode.widgets.find(w => w.name === "path" || w.name === "video" || w.type === "string");
-                                if (upstreamWidget) pathValue = upstreamWidget.value;
-                            }
-                        }
-                    } else {
-                        const pWidget = node.widgets?.find(w => w.name === "path");
-                        if (pWidget) pathValue = pWidget.value;
+                const loadReloadVideo = () => {
+                    let targetPath = "";
+                    if (pathWidget && pathWidget.value && pathWidget.value.trim()) {
+                        targetPath = pathWidget.value.trim();
                     }
-
-                    if (!pathValue) {
-                        console.warn("[VideoLoaderPW] No path found.");
-                        return;
-                    }
-
-                    // 2. 立即清除缓存并强制刷新前端视频预览 (让用户立刻看到视频加载)
-                    node._lastLoadedVideoPath = null; 
-                    applyVideoPath(pathValue); 
-
-                    // 3. 构建子图 Prompt 发送给后端，以获取精确的 video_info (帧数、波形)
-                    const promptDict = {};
-                    const visited = new Set();
                     
-                    const buildSubgraph = (nId) => {
-                        if (visited.has(nId)) return;
-                        visited.add(nId);
-                        const n = app.graph.getNodeById(nId);
-                        if (!n) return;
-                        
-                        const inputs = {};
-                        if (n.inputs) {
-                            for (const inp of n.inputs) {
-                                if (inp.link) {
-                                    const l = app.graph.links[inp.link];
-                                    if (l) {
-                                        buildSubgraph(l.origin_id);
-                                        inputs[inp.name] = [String(l.origin_id), l.origin_slot];
-                                    }
-                                } else {
-                                    const w = n.widgets?.find(w => w.name === inp.name);
-                                    if (w) inputs[inp.name] = w.value;
-                                }
-                            }
-                        }
-                        if (n.widgets) {
-                            for (const w of n.widgets) {
-                                if (!inputs.hasOwnProperty(w.name)) inputs[w.name] = w.value;
-                            }
-                        }
-                        
-                        promptDict[String(nId)] = {
-                            "inputs": inputs,
-                            "class_type": n.comfyClass || n.type,
-                            "_meta": { "title": n.title || n.type }
-                        };
-                    };
-
-                    buildSubgraph(node.id);
-
-                    try {
-                        const body = {
-                            prompt: promptDict,
-                            client_id: api.clientId,
-                            extra_data: { extra_pnginfo: { workflow: app.graph.serialize() } }
-                        };
-                        await api.fetchApi("/prompt", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify(body)
-                        });
-                    } catch (e) {
-                        console.error("[VideoLoaderPW] Local execution error:", e);
+                    if (targetPath) {
+                        node._lastLoadedVideoPath = null; 
+                        applyVideoPath(targetPath);
                     }
                 };
 
