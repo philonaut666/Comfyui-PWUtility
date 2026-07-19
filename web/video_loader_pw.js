@@ -17,10 +17,10 @@ app.registerExtension({
                 if (this.syncToggleVisual) this.syncToggleVisual();
 
                 if (this.widgets) {
-                    const pathWidget = this.widgets.find(w => w.name === "path");
-                    if (pathWidget && pathWidget.value && this.updatePreview) {
-                        this._lastLoadedVideoPath = pathWidget.value;
-                        this.updatePreview(pathWidget.value);
+                    const videoWidget = this.widgets.find(w => w.name === "video");
+                    if (videoWidget && videoWidget.value && this.updatePreview) {
+                        this._lastLoadedVideoPath = videoWidget.value;
+                        this.updatePreview(videoWidget.value);
                     }
                 }
             };
@@ -60,7 +60,7 @@ app.registerExtension({
                 node.accurateFrameCount = 0;
                 node.accurateDuration = 0;
 
-                const pathWidget = this.widgets.find((w) => w.name === "path");
+                const videoWidget = this.widgets.find((w) => w.name === "video");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
                 const displayModeWidget = this.widgets.find((w) => w.name === "display_mode");
                 const startTimeWidget = this.widgets.find((w) => w.name === "start_time");
@@ -440,13 +440,13 @@ app.registerExtension({
                         node._lastLoadedVideoPath = p;
                     }
                     
-                    if (pathWidget) pathWidget.value = p;
+                    if (videoWidget) videoWidget.value = p;
                     if (node.updatePreview) node.updatePreview(p);
                 };
 
-                if (pathWidget) {
-                    const originalCallback = pathWidget.callback;
-                    pathWidget.callback = function () {
+                if (videoWidget) {
+                    const originalCallback = videoWidget.callback;
+                    videoWidget.callback = function () {
                         if (originalCallback) originalCallback.apply(this, arguments);
                         applyVideoPath(this.value);
                     };
@@ -528,14 +528,13 @@ app.registerExtension({
                 const uploadFile = async (file) => {
                     try {
                         if (errorMsg) errorMsg.style.display = "none";
-                        btnWidget.name = "Uploading...";
-                        node.setDirtyCanvas(true, false);
-                        const CHUNK_SIZE = 10 * 1024 * 1024;
-
                         if (file.path) {
                             applyVideoPath(file.path);
                             return;
                         }
+                        btnWidget.name = "Uploading...";
+                        node.setDirtyCanvas(true, false);
+                        const CHUNK_SIZE = 10 * 1024 * 1024;
 
                         if (file.size > CHUNK_SIZE) {
                             const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
@@ -1244,7 +1243,7 @@ app.registerExtension({
                     }
                 });
 
-                if (pathWidget && pathWidget.value) applyVideoPath(pathWidget.value);
+                if (videoWidget && videoWidget.value) applyVideoPath(videoWidget.value);
                 return r;
             };
         }
