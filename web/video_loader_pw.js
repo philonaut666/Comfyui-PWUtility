@@ -443,18 +443,14 @@ app.registerExtension({
                     if (pathWidget) pathWidget.value = p;
                     if (node.updatePreview) node.updatePreview(p);
                 };
-                
-                const loadReloadVideo = () => {
-                    let targetPath = "";
-                    if (pathWidget && pathWidget.value && pathWidget.value.trim()) {
-                        targetPath = pathWidget.value.trim();
-                    }
-                    
-                    if (targetPath) {
-                        node._lastLoadedVideoPath = null; 
-                        applyVideoPath(targetPath);
-                    }
-                };
+
+                if (pathWidget) {
+                    const originalCallback = pathWidget.callback;
+                    pathWidget.callback = function () {
+                        if (originalCallback) originalCallback.apply(this, arguments);
+                        applyVideoPath(this.value);
+                    };
+                }
 
                 const _videoExecHandler = ({ detail }) => {
                     if (!detail || String(detail.node) !== String(node.id)) return;
@@ -520,8 +516,6 @@ app.registerExtension({
                 };
 
                 node.toggleWidgetVisibility();
-
-                this.addWidget("button", "Load/Reload Video", null, loadReloadVideo);
 
                 const fileInput = document.createElement("input");
                 fileInput.type = "file";
