@@ -37,7 +37,7 @@ class VideoLoaderPW:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "video": ("STRING", {"default": ""}),
+                "path": ("STRING", {"default": "", "forceInput": True, "tooltip": "Path to the video file"}),
                 "start_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "end_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
@@ -55,9 +55,6 @@ class VideoLoaderPW:
                 "split_green_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "split_green_point_idx": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "select_generate": (["blue", "purple"], {"default": "blue", "tooltip": "Which segment to use as generate when split_count=1"}),
-            },
-            "optional": {
-                "path": ("STRING", {"forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
             }
         }
 
@@ -66,15 +63,9 @@ class VideoLoaderPW:
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
-    # 【核心修复】：强制返回 NaN，彻底禁用 ComfyUI 的执行缓存
-    # 确保每次点击 Queue Prompt 都会重新读取视频并输出最新的 frame_count 给下游节点
-    @classmethod
-    def IS_CHANGED(s, **kwargs):
-        return float("NaN")
-
-    def load_video(self, video, frame_rate, display_mode, start_time, end_time, start_frame, end_frame, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_purple_point=0.0, split_purple_point_idx=0, split_green_point=0.0, split_green_point_idx=0, select_generate="blue", path=None, **kwargs):
+    def load_video(self, path, frame_rate, display_mode, start_time, end_time, start_frame, end_frame, crop_x=0.0, crop_y=0.0, crop_w=1.0, crop_h=1.0, split_count=0, split_purple_point=0.0, split_purple_point_idx=0, split_green_point=0.0, split_green_point_idx=0, select_generate="blue", **kwargs):
         align_8n_plus_1 = kwargs.get("align_8n+1", True)
-        video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else video
+        video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else ""
 
         if not video_to_load:
             empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
@@ -351,6 +342,20 @@ class VideoLoaderPW:
 
         loaded_h = int(image_tensor.shape[1]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
         loaded_w = int(image_tensor.shape[2]) if image_tensor is not None and image_tensor.shape[0] > 0 else 0
+        
+        video_info = json.dumps({
+            "source_fps": round(source_fps, 2),
+            "source_frame_count": source_frame_count,
+            "source_duration": round(source_duration, 2),
+            "source_width": orig_w,
+            "source_height": orig_h,
+            "loaded_fps": round(fr, 2),
+            "loaded_frame_count": frame_count,
+            "loaded_duration": final_duration_sec,
+            "loaded_width": loaded_w,
+            "loaded_height": loaded_h,
+            "waveform_peaks": waveform_peaks,
+        }, indent=4)
 
         if display_mode == "frames":
             g_start_frame = s_frame_0
@@ -470,21 +475,6 @@ class VideoLoaderPW:
             split_info_dict["split_back"] = calc_segment(g_local, g_end_local)
             
         split_info_str = json.dumps(split_info_dict)
-
-        # 确保 video_info 包含最终补齐后的 frame_count
-        video_info = json.dumps({
-            "source_fps": round(source_fps, 2),
-            "source_frame_count": source_frame_count,
-            "source_duration": round(source_duration, 2),
-            "source_width": orig_w,
-            "source_height": orig_h,
-            "loaded_fps": round(fr, 2),
-            "loaded_frame_count": frame_count,
-            "loaded_duration": final_duration_sec,
-            "loaded_width": loaded_w,
-            "loaded_height": loaded_h,
-            "waveform_peaks": waveform_peaks,
-        }, indent=4)
 
         return {
             "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]},
