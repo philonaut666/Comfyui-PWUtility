@@ -37,8 +37,7 @@ class VideoLoaderPW:
     def INPUT_TYPES(s):
         return {
             "required": {
-                # 彻底移除 video，将 path 作为唯一路径输入
-                "path": ("STRING", {"default": "", "forceInput": True, "tooltip": "Path from LocalMedia Manager to auto-load video"}),
+                "path": ("STRING", {"default": "", "forceInput": True, "tooltip": "Path to the video file"}),
                 "start_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "end_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
