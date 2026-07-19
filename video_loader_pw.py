@@ -64,6 +64,13 @@ class VideoLoaderPW:
                 "crop_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "align_8n+1": ("BOOLEAN", {"default": True, "tooltip": "Align generate segment to 8n+1 frames by adjusting split points or repeating end frames."}),
+                "normalize": ("FLOAT", {
+                    "default": -16.0,
+                    "min": -100.0,
+                    "max": 0.0,
+                    "step": 0.1,
+                    "tooltip": "Normalize audio peak to target dBFS. Example: -16.0 means normalize peak to -16 dB. 0.0 means full scale."
+                }),
                 "split_count": ("INT", {"default": 0, "min": 0, "max": 2, "step": 1, "tooltip": "0: No split, 1: Purple only, 2: Purple & Green"}),
                 "split_purple_point": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "split_purple_point_idx": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
@@ -77,7 +84,7 @@ class VideoLoaderPW:
         }
 
     RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "FLOAT", "FLOAT", "STRING", "INT", "STRING")
-    RETURN_NAMES = ("images", "audio", "frame_count", "duration", "fps", "video_info", "repeat_last_frame_count", "split_info")
+    RETURN_NAMES = ("images", "audio", "frame_count", "duration", "fps", "video_info", "align_8n+1_add_frames", "split_info")
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
@@ -417,6 +424,43 @@ class VideoLoaderPW:
 
         return waveform_peaks
 
+    @staticmethod
+    def _normalize_audio(audio_dict, normalize_db):
+        """
+        Peak normalization in dBFS.
+
+        normalize_db = -16.0  -> target peak = 10^(-16/20)
+        normalize_db = 0.0    -> target peak = 1.0
+        Silent audio is left unchanged.
+        """
+        if audio_dict is None or "waveform" not in audio_dict:
+            return audio_dict
+
+        try:
+            target_db = float(normalize_db)
+        except Exception:
+            return audio_dict
+
+        waveform = audio_dict.get("waveform", None)
+        if waveform is None or waveform.numel() == 0:
+            return audio_dict
+
+        peak = float(waveform.abs().max())
+        if not math.isfinite(peak) or peak <= 1e-12:
+            return audio_dict
+
+        # This widget is intended for negative dB targets up to 0 dB full scale.
+        if target_db > 0.0:
+            target_db = 0.0
+
+        target_peak = 10.0 ** (target_db / 20.0)
+        gain = target_peak / peak
+
+        if math.isfinite(gain) and abs(gain - 1.0) > 1e-9:
+            audio_dict["waveform"] = waveform * gain
+
+        return audio_dict
+
     def load_video(
         self,
         path,
@@ -430,6 +474,7 @@ class VideoLoaderPW:
         crop_y=0.0,
         crop_w=1.0,
         crop_h=1.0,
+        normalize=-16.0,
         split_count=0,
         split_purple_point=0.0,
         split_purple_point_idx=0,
@@ -704,7 +749,10 @@ class VideoLoaderPW:
 
         split_info_str = json.dumps(split_info_dict)
 
-        # Final waveform peaks after all audio adjustments.
+        # Normalize final audio after all frame/audio adjustments.
+        audio_dict = self._normalize_audio(audio_dict, normalize)
+
+        # Final waveform peaks after normalization.
         waveform_peaks = self._compute_waveform_peaks(audio_dict)
 
         loaded_h = int(image_tensor.shape[1]) if frame_count > 0 and image_tensor is not None else 0
