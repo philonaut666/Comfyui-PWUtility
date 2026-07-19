@@ -362,10 +362,22 @@ app.registerExtension({
                     pEnd = Math.max(0, Math.min(pEnd, 100));
                     startHandle.style.left = `${pStart}%`;
                     endHandle.style.left = `${pEnd}%`;
-                    const currentDur = parseFloat((visualEnd - s).toFixed(2));
+                    
                     const isFrames = displayModeWidget && displayModeWidget.value === "frames";
                     const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
-                    trimLength.textContent = isFrames ? `Trimmed: ${Math.round(currentDur * fr)} frames` : `Trimmed: ${formatTime(currentDur)}`;
+                    
+                    // 【修复 Bug 1】：使用帧数精确计算，避免 HTML5 duration 精度问题导致 122 帧显示为 123 帧
+                    let s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
+                    let e_f = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
+                    if (e_f === 0) {
+                        e_f = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : Math.round(activeDur * fr) - 1;
+                    }
+                    if (e_f < s_f) e_f = s_f;
+                    const trimmedFrames = e_f - s_f + 1;
+                    const trimmedTime = trimmedFrames / fr;
+                    
+                    trimLength.textContent = isFrames ? `Trimmed: ${trimmedFrames} frames` : `Trimmed: ${formatTime(trimmedTime)}`;
+                    
                     if (syncPlayer && duration > 0) videoPreview.currentTime = s;
                     const toPct = (val) => Math.max(0, Math.min(100, (val / activeDur) * 100));
                     let pS = 0, pE = 0, bS = 0, bE = 0, gS = 0, gE = 0;
@@ -408,19 +420,24 @@ app.registerExtension({
                     requestAnimationFrame(drawWaveform);
                 };
 
-                // 【修复点】：增加 node.setDirtyCanvas(true, true) 确保路径变更被 ComfyUI 识别
                 const applyVideoPath = (rawPath) => {
                     if (!rawPath || !rawPath.trim()) return;
                     const p = rawPath.trim();
+                    
+                    // 【修复 Bug 2】：防止页面初次加载时 _lastLoadedVideoPath 为 undefined 导致误判为新文件并重置参数
+                    if (node._lastLoadedVideoPath === undefined) {
+                        node._lastLoadedVideoPath = p;
+                        if (pathWidget) pathWidget.value = p;
+                        if (node.updatePreview) node.updatePreview(p);
+                        return;
+                    }
+
                     const isNewFile = (p !== node._lastLoadedVideoPath);
                     if (isNewFile) {
                         resetAllParams(); 
                         node._lastLoadedVideoPath = p;
                     }
-                    if (pathWidget) {
-                        pathWidget.value = p;
-                        node.setDirtyCanvas(true, true);
-                    }
+                    if (pathWidget) pathWidget.value = p;
                     if (node.updatePreview) node.updatePreview(p);
                 };
 
@@ -435,7 +452,7 @@ app.registerExtension({
                 const _videoExecHandler = ({ detail }) => {
                     if (!detail || String(detail.node) !== String(node.id)) return;
                     const out = detail.output;
-                    if (out && out.video_path && out.video_path.length) applyVideoPath(out.video_path[0]);
+                    // 【修复 Bug 2】：移除 applyVideoPath，后端执行结果不应触发路径变更和参数重置
                     if (out && out.video_info) {
                         try {
                             const infoStr = Array.isArray(out.video_info) ? out.video_info[0] : out.video_info;
@@ -445,9 +462,9 @@ app.registerExtension({
                                 node.accurateFrameCount = info.loaded_frame_count;
                                 node.accurateDuration = info.loaded_duration || 0;
                                 let currentEnd = parseFloat(endTimeWidget.value) || 0;
-                                if (currentEnd === 0 || currentEnd > node.accurateDuration) endTimeWidget.value = node.accurateDuration;
+                                if (currentEnd > 0 && currentEnd > node.accurateDuration) endTimeWidget.value = node.accurateDuration;
                                 let currentEndF = parseInt(endFrameWidget.value) || 0;
-                                if (currentEndF === 0 || currentEndF >= node.accurateFrameCount) endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                                if (currentEndF > 0 && currentEndF >= node.accurateFrameCount) endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
                                 node.syncFramesFromTime();
                                 updateRuler();
                                 updateUI(true);
@@ -469,7 +486,7 @@ app.registerExtension({
                 };
 
                 node.onExecuted = function (output) {
-                    if (output && output.video_path && output.video_path.length > 0) applyVideoPath(output.video_path[0]);
+                    // 【修复 Bug 2】：移除 applyVideoPath
                     if (output && output.video_info) {
                         try {
                             const infoStr = Array.isArray(output.video_info) ? output.video_info[0] : output.video_info;
@@ -479,9 +496,10 @@ app.registerExtension({
                                 node.accurateFrameCount = info.loaded_frame_count;
                                 node.accurateDuration = info.loaded_duration || 0;
                                 let currentEnd = parseFloat(endTimeWidget.value) || 0;
-                                if (currentEnd === 0 || currentEnd > node.accurateDuration) endTimeWidget.value = node.accurateDuration;
+                                // 优化：只有当设置了具体值且超出实际长度时才截断，保留 0 (到结尾) 的语义
+                                if (currentEnd > 0 && currentEnd > node.accurateDuration) endTimeWidget.value = node.accurateDuration;
                                 let currentEndF = parseInt(endFrameWidget.value) || 0;
-                                if (currentEndF === 0 || currentEndF >= node.accurateFrameCount) endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
+                                if (currentEndF > 0 && currentEndF >= node.accurateFrameCount) endFrameWidget.value = node.accurateFrameCount > 0 ? node.accurateFrameCount - 1 : 0;
                                 node.syncFramesFromTime();
                                 updateRuler();
                                 updateUI(true);
