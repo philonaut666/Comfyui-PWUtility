@@ -61,7 +61,6 @@ app.registerExtension({
                 node._pwTimingInitialized = false;
                 node._pwSourceDuration = 0;
                 node._pwFullFrameCount = 0;
-                node._pwActiveSourceMode = "";
 
                 const pathWidget = this.widgets.find((w) => w.name === "path");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
@@ -168,7 +167,7 @@ app.registerExtension({
                     }
                     if (sc === 2 && splitGreenIdxWidget && splitGreenWidget) {
                         let g_f = parseInt(splitGreenIdxWidget.value) || 0;
-                        let p_f = splitPurpleIdxWidget ? parseInt(splitPurpleWidget.value) || 0 : s_f;
+                        let p_f = splitPurpleIdxWidget ? parseInt(splitPurpleIdxWidget.value) || 0 : s_f;
                         let min_g = p_f + 1;
                         let max_g = e_f - 1;
                         if (min_g > max_g) min_g = max_g;
@@ -390,7 +389,6 @@ app.registerExtension({
                     node._pwTimingInitialized = false;
                     node._pwSourceDuration = 0;
                     node._pwFullFrameCount = 0;
-                    node._pwActiveSourceMode = "";
 
                     if (startTimeWidget) startTimeWidget.value = 0;
                     if (endTimeWidget) endTimeWidget.value = 0;
@@ -475,106 +473,63 @@ app.registerExtension({
                 const handleVideoOutput = (output) => {
                     if (!output) return;
 
-                    let info = null;
+                    if (output.video_path && output.video_path.length > 0) {
+                        applyVideoPath(output.video_path[0]);
+                    }
+
                     if (output.video_info) {
                         try {
                             const infoStr = Array.isArray(output.video_info) ? output.video_info[0] : output.video_info;
-                            info = JSON.parse(infoStr);
+                            const info = JSON.parse(infoStr);
+
+                            if (info.source_fps !== undefined && typeof fpsDisplay !== "undefined" && fpsDisplay) {
+                                fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
+                            }
+
+                            const fr = info.loaded_fps !== undefined
+                                ? (parseFloat(info.loaded_fps) || 25.0)
+                                : (frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0);
+
+                            let fullDur = 0;
+
+                            if (info.full_duration !== undefined && parseFloat(info.full_duration) > 0) {
+                                fullDur = parseFloat(info.full_duration);
+                            } else if (info.source_duration !== undefined && parseFloat(info.source_duration) > 0) {
+                                fullDur = parseFloat(info.source_duration);
+                            }
+
+                            if (fullDur > 0) {
+                                node._pwSourceDuration = fullDur;
+                                node.accurateDuration = fullDur;
+
+                                node._pwFullFrameCount = info.full_frame_count_at_loaded_fps !== undefined
+                                    ? (parseInt(info.full_frame_count_at_loaded_fps) || getFullFrameCountFromDuration(fullDur, fr))
+                                    : getFullFrameCountFromDuration(fullDur, fr);
+
+                                node.accurateFrameCount = node._pwFullFrameCount;
+                            } else if (!node._pwTimingInitialized && info.loaded_duration !== undefined && parseFloat(info.loaded_duration) > 0) {
+                                node._pwSourceDuration = parseFloat(info.loaded_duration);
+                                node.accurateDuration = node._pwSourceDuration;
+
+                                node._pwFullFrameCount = info.loaded_frame_count !== undefined
+                                    ? (parseInt(info.loaded_frame_count) || getFullFrameCountFromDuration(node._pwSourceDuration, fr))
+                                    : getFullFrameCountFromDuration(node._pwSourceDuration, fr);
+
+                                node.accurateFrameCount = node._pwFullFrameCount;
+                            }
+
+                            initializeTimingWidgetsFromSource(false);
+
+                            if (info.waveform_peaks && Array.isArray(info.waveform_peaks)) {
+                                currentWaveformPeaks = info.waveform_peaks;
+                                requestAnimationFrame(drawWaveform);
+                            }
+
+                            updateRuler();
+                            updateUI(false);
                         } catch (e) {
                             console.error("Failed to parse video_info", e);
                         }
-                    }
-
-                    // Handle source priority and source change.
-                    if (info && info.source_mode !== undefined) {
-                        if (info.source_mode === "images") {
-                            node._pwActiveSourceMode = "images";
-
-                            if (info.source_changed === true) {
-                                resetAllParams();
-                                node._lastLoadedVideoPath = "";
-                                node._pwTimingInitialized = false;
-
-                                // Images source does not use path video preview.
-                                if (videoPreview) {
-                                    videoPreview.removeAttribute("src");
-                                    videoPreview.load();
-                                }
-                            }
-                        } else if (info.source_mode === "path") {
-                            node._pwActiveSourceMode = "path";
-
-                            if (output.video_path && output.video_path.length > 0) {
-                                applyVideoPath(output.video_path[0]);
-                            }
-                        } else {
-                            // empty source
-                            node._pwActiveSourceMode = "";
-
-                            if (info.source_changed === true) {
-                                resetAllParams();
-                                node._lastLoadedVideoPath = "";
-                                node._pwTimingInitialized = false;
-
-                                if (videoPreview) {
-                                    videoPreview.removeAttribute("src");
-                                    videoPreview.load();
-                                }
-                            }
-                        }
-                    } else {
-                        // Backward compatibility for older video_info without source_mode.
-                        if (output.video_path && output.video_path.length > 0) {
-                            applyVideoPath(output.video_path[0]);
-                        }
-                    }
-
-                    if (info) {
-                        if (info.source_fps !== undefined && typeof fpsDisplay !== "undefined" && fpsDisplay) {
-                            fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
-                        }
-
-                        const fr = info.loaded_fps !== undefined
-                            ? (parseFloat(info.loaded_fps) || 25.0)
-                            : (frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0);
-
-                        let fullDur = 0;
-
-                        if (info.full_duration !== undefined && parseFloat(info.full_duration) > 0) {
-                            fullDur = parseFloat(info.full_duration);
-                        } else if (info.source_duration !== undefined && parseFloat(info.source_duration) > 0) {
-                            fullDur = parseFloat(info.source_duration);
-                        }
-
-                        if (fullDur > 0) {
-                            node._pwSourceDuration = fullDur;
-                            node.accurateDuration = fullDur;
-
-                            node._pwFullFrameCount = info.full_frame_count_at_loaded_fps !== undefined
-                                ? (parseInt(info.full_frame_count_at_loaded_fps) || getFullFrameCountFromDuration(fullDur, fr))
-                                : getFullFrameCountFromDuration(fullDur, fr);
-
-                            node.accurateFrameCount = node._pwFullFrameCount;
-                        } else if (!node._pwTimingInitialized && info.loaded_duration !== undefined && parseFloat(info.loaded_duration) > 0) {
-                            node._pwSourceDuration = parseFloat(info.loaded_duration);
-                            node.accurateDuration = node._pwSourceDuration;
-
-                            node._pwFullFrameCount = info.loaded_frame_count !== undefined
-                                ? (parseInt(info.loaded_frame_count) || getFullFrameCountFromDuration(node._pwSourceDuration, fr))
-                                : getFullFrameCountFromDuration(node._pwSourceDuration, fr);
-
-                            node.accurateFrameCount = node._pwFullFrameCount;
-                        }
-
-                        initializeTimingWidgetsFromSource(false);
-
-                        if (info.waveform_peaks && Array.isArray(info.waveform_peaks)) {
-                            currentWaveformPeaks = info.waveform_peaks;
-                            requestAnimationFrame(drawWaveform);
-                        }
-
-                        updateRuler();
-                        updateUI(false);
                     }
                 };
 
