@@ -45,14 +45,25 @@ class VideoLoaderPW:
     _source_cache_order = []
     _max_source_cache_entries = max(1, int(os.environ.get("PW_VIDEO_LOADER_SOURCE_CACHE_ENTRIES", "1")))
 
-    # per-node last path record
-    _node_last_path = {}
+    # per-node last source inputs record: video + path
+    _node_last_sources = {}
 
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
-                "path": ("STRING", {"default": "", "forceInput": True, "tooltip": "Path to the video file"}),
+                "path": ("STRING", {
+                    "default": "",
+                    "forceInput": True,
+                    "optional": True,
+                    "tooltip": "Path to the video file. Optional if video is provided."
+                }),
+                "video": ("STRING", {
+                    "default": "",
+                    "forceInput": True,
+                    "optional": True,
+                    "tooltip": "Video input. Higher priority than path."
+                }),
                 "start_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "end_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
@@ -89,6 +100,65 @@ class VideoLoaderPW:
     CATEGORY = "🔮PWUtility/Video"
 
     @staticmethod
+    def _coerce_source_string(value):
+        """
+        Convert an input value into a usable path string.
+        Supports normal strings, lists/tuples, and some dict-like video objects.
+        """
+        if value is None:
+            return ""
+
+        if isinstance(value, str):
+            return value.strip()
+
+        if isinstance(value, bytes):
+            try:
+                return value.decode("utf-8", "ignore").strip()
+            except Exception:
+                return ""
+
+        # Do not try to interpret tensors/arrays as file paths.
+        if hasattr(value, "shape"):
+            return ""
+
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                s = VideoLoaderPW._coerce_source_string(item)
+                if s:
+                    return s
+            return ""
+
+        if isinstance(value, dict):
+            for key in ("video_path", "path", "filename", "file", "filepath", "src", "source", "url", "video"):
+                if key in value:
+                    s = VideoLoaderPW._coerce_source_string(value[key])
+                    if s:
+                        return s
+            return ""
+
+        try:
+            s = str(value).strip()
+            if s and not s.startswith("<") and not s.startswith("tensor("):
+                return s
+        except Exception:
+            pass
+
+        return ""
+
+    @staticmethod
+    def _select_effective_source(video, path):
+        video_str = VideoLoaderPW._coerce_source_string(video)
+        path_str = VideoLoaderPW._coerce_source_string(path)
+
+        if video_str:
+            return video_str, "video"
+
+        if path_str:
+            return path_str, "path"
+
+        return "", ""
+
+    @staticmethod
     def _resolve_video_path(video_to_load, raise_error=True):
         if not video_to_load:
             if raise_error:
@@ -122,25 +192,29 @@ class VideoLoaderPW:
     @classmethod
     def IS_CHANGED(cls, **kwargs):
         """
-        Help ComfyUI cache distinguish:
-        - normal execution
-        - path just changed execution, where internal parameters are reset before output
+        ComfyUI cache helper.
+        Detect changes on both video and path inputs.
         """
         uid = kwargs.get("unique_id", "__global__")
         if uid is None:
             uid = "__global__"
         uid = str(uid)
 
-        path = kwargs.get("path", "")
-        if not path or not isinstance(path, str) or not path.strip():
-            last = cls._node_last_path.get(uid, None)
-            return f"{uid}|empty|{last is not None and last != ''}"
+        raw_video = cls._coerce_source_string(kwargs.get("video", ""))
+        raw_path = cls._coerce_source_string(kwargs.get("path", ""))
 
-        resolved = cls._resolve_video_path(path.strip(), raise_error=False)
-        last = cls._node_last_path.get(uid, None)
-        path_changed = last is not None and last != resolved
+        last = cls._node_last_sources.get(uid, None)
+        source_changed = last is not None and (
+            last.get("video", "") != raw_video or
+            last.get("path", "") != raw_path
+        )
 
-        return f"{uid}|{resolved}|{path_changed}"
+        effective_source, _ = cls._select_effective_source(raw_video, raw_path)
+        resolved = ""
+        if effective_source:
+            resolved = cls._resolve_video_path(effective_source, raise_error=False)
+
+        return f"{uid}|v={raw_video}|p={raw_path}|eff={resolved}|changed={source_changed}"
 
     @classmethod
     def _get_source_cache(cls, video_path):
@@ -463,13 +537,14 @@ class VideoLoaderPW:
 
     def load_video(
         self,
-        path,
-        frame_rate,
-        display_mode,
-        start_time,
-        end_time,
-        start_frame,
-        end_frame,
+        path="",
+        video="",
+        start_time=0.0,
+        end_time=0.0,
+        start_frame=0,
+        end_frame=0,
+        frame_rate=25.0,
+        display_mode="frames",
         crop_x=0.0,
         crop_y=0.0,
         crop_w=1.0,
@@ -484,30 +559,64 @@ class VideoLoaderPW:
         **kwargs
     ):
         align_8n_plus_1 = kwargs.get("align_8n+1", True)
+
         unique_id = kwargs.get("unique_id", "__global__")
         if unique_id is None:
             unique_id = "__global__"
         node_key = str(unique_id)
 
-        video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else ""
+        raw_video = self._coerce_source_string(video)
+        raw_path = self._coerce_source_string(path)
+        effective_source, active_source = self._select_effective_source(raw_video, raw_path)
 
-        if not video_to_load:
-            self.__class__._node_last_path[node_key] = ""
-            empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
-            return {
-                "ui": {"video_path": [""], "video_info": ["{}"]},
-                "result": (empty_image, None, 0, 0.0, float(frame_rate), "{}", 0, "{}")
+        last_sources = self.__class__._node_last_sources.get(node_key, None)
+        source_changed = last_sources is not None and (
+            last_sources.get("video", "") != raw_video or
+            last_sources.get("path", "") != raw_path
+        )
+
+        # No usable source.
+        if not effective_source:
+            self.__class__._node_last_sources[node_key] = {
+                "video": raw_video,
+                "path": raw_path
             }
 
-        video_path = self._resolve_video_path(video_to_load, raise_error=True)
+            empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
+            empty_info = json.dumps({
+                "active_source": active_source,
+                "source_changed": source_changed,
+                "source_fps": 0,
+                "source_frame_count": 0,
+                "source_duration": 0,
+                "source_width": 0,
+                "source_height": 0,
+                "loaded_fps": round(float(frame_rate) if frame_rate > 0 else 25.0, 2),
+                "loaded_frame_count": 0,
+                "loaded_duration": 0,
+                "loaded_width": 0,
+                "loaded_height": 0,
+                "full_duration": 0,
+                "full_frame_count_at_loaded_fps": 0,
+                "waveform_peaks": [],
+            }, indent=4)
+
+            return {
+                "ui": {"video_path": [""], "video_info": [empty_info]},
+                "result": (empty_image, None, 0, 0.0, float(frame_rate), empty_info, 0, "{}")
+            }
+
+        video_path = self._resolve_video_path(effective_source, raise_error=True)
         cache_key = os.path.abspath(video_path)
 
-        last_path = self.__class__._node_last_path.get(node_key, None)
-        path_changed = last_path is not None and last_path != cache_key
+        # If either video or path input changed, reload source and reset adjustable parameters.
+        if source_changed:
+            if cache_key in self.__class__._source_cache:
+                self.__class__._source_cache.pop(cache_key, None)
+                if cache_key in self.__class__._source_cache_order:
+                    self.__class__._source_cache_order.remove(cache_key)
+                gc.collect()
 
-        # When path changes, reset adjustable parameters BEFORE computing outputs.
-        # When path does not change, keep current parameters and current cache.
-        if path_changed:
             start_time = 0.0
             end_time = 0.0
             start_frame = 0
@@ -525,7 +634,11 @@ class VideoLoaderPW:
             split_green_point_idx = 0
             select_generate = "blue"
 
-        self.__class__._node_last_path[node_key] = cache_key
+        # Store current source inputs after successful resolve.
+        self.__class__._node_last_sources[node_key] = {
+            "video": raw_video,
+            "path": raw_path
+        }
 
         cache = self._get_source_cache(cache_key)
 
@@ -762,6 +875,8 @@ class VideoLoaderPW:
 
         # Final video_info after all calculations.
         video_info = json.dumps({
+            "active_source": active_source,
+            "source_changed": source_changed,
             "source_fps": round(source_fps, 2),
             "source_frame_count": source_frame_count,
             "source_duration": round(source_duration, 2),
@@ -778,7 +893,7 @@ class VideoLoaderPW:
         }, indent=4)
 
         return {
-            "ui": {"video_path": [str(video_to_load)], "video_info": [video_info]},
+            "ui": {"video_path": [str(effective_source)], "video_info": [video_info]},
             "result": (
                 image_tensor,
                 audio_dict,
