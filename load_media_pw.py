@@ -365,30 +365,325 @@ class LMMSelectImagePW:
             print(f"PW Utility: Error converting image item to tensor: {e}")
             return None
 
-    def _metadata_from_dict(self, data):
-        metadata = {}
+    def _is_single_image_like(self, obj):
+        return isinstance(obj, (torch.Tensor, np.ndarray, Image.Image, str, os.PathLike))
 
-        if not isinstance(data, dict):
-            return metadata
+    def _looks_like_path_string(self, s):
+        if not isinstance(s, str):
+            return False
 
-        md = data.get("metadata", {})
+        s = s.strip()
+        if not s:
+            return False
+
+        lower = s.lower()
+        if lower.endswith(('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tiff', '.tif')):
+            return True
+
+        try:
+            return os.path.exists(s)
+        except Exception:
+            return False
+
+    def _normalize_metadata_item(self, md):
+        """
+        将单个 metadata 规范化为 dict。
+        支持：
+        - dict
+        - JSON 字符串
+        - A1111 parameters 字符串
+        - 普通 positive prompt 字符串
+        - int/float 作为 seed
+        - [positive, negative, seed] 形式
+        """
+        if md is None:
+            return {}
+
         if isinstance(md, dict):
-            metadata.update(md)
+            return dict(md)
 
-        for k in ("parameters", "prompt", "workflow"):
-            if k in data and k not in metadata:
-                metadata[k] = data[k]
+        if isinstance(md, str):
+            s = md.strip()
+            if not s:
+                return {}
 
-        return metadata
+            # 尝试 JSON metadata / workflow
+            if s.startswith('{') or s.startswith('['):
+                try:
+                    obj = json.loads(s)
+                    if isinstance(obj, dict):
+                        return obj
+                    if isinstance(obj, list):
+                        return {"workflow": s}
+                except Exception:
+                    pass
+
+            # A1111 / WebUI parameters
+            if re.search(r'Negative prompt:|Steps:|Sampler:|CFG scale:|Seed:', s, re.IGNORECASE):
+                return {"parameters": s}
+
+            # 普通正向提示词
+            return {"positive_prompt": s}
+
+        if isinstance(md, (int, float)) and not isinstance(md, bool):
+            return {"seed": int(md)}
+
+        if isinstance(md, (list, tuple)):
+            if len(md) == 0:
+                return {}
+
+            # 支持 [positive, negative, seed]
+            if len(md) <= 3 and all(not isinstance(x, (dict, list, tuple, torch.Tensor, np.ndarray, Image.Image)) for x in md):
+                positive = md[0] if len(md) > 0 else ""
+                negative = md[1] if len(md) > 1 else ""
+                seed = md[2] if len(md) > 2 else 0
+                return {
+                    "positive_prompt": str(positive or ""),
+                    "negative_prompt": str(negative or ""),
+                    "seed": seed,
+                }
+
+            return {}
+
+        return {}
+
+    def _looks_like_prompt_triple(self, seq, allow_list=False):
+        """
+        判断是否像 [positive, negative, seed] 或 (positive, negative, seed)。
+        """
+        if not isinstance(seq, (list, tuple)):
+            return False
+
+        if len(seq) == 0 or len(seq) > 3:
+            return False
+
+        if any(isinstance(x, (dict, list, tuple, torch.Tensor, np.ndarray, Image.Image)) for x in seq):
+            return False
+
+        if not isinstance(seq[0], str):
+            return False
+
+        if len(seq) == 1:
+            return isinstance(seq, tuple) or allow_list
+
+        if not isinstance(seq[1], str):
+            return False
+
+        if len(seq) == 2:
+            # list of two strings 更可能是两个 metadata item，不视为 triple
+            return isinstance(seq, tuple)
+
+        # len == 3
+        if isinstance(seq[2], (int, float)) and not isinstance(seq[2], bool):
+            return True
+
+        return isinstance(seq, tuple) and isinstance(seq[2], str)
+
+    def _normalize_metadata_sequence(self, seq):
+        """
+        规范化 metadata list。
+        返回值一定是 list[dict] 或 None。
+        """
+        if seq is None:
+            return None
+
+        if isinstance(seq, dict):
+            return [self._normalize_metadata_item(seq)]
+
+        if isinstance(seq, (list, tuple)):
+            # 如果是明显的 prompt triple，则视为单个 metadata
+            if self._looks_like_prompt_triple(seq, allow_list=True):
+                return [self._normalize_metadata_item(seq)]
+
+            return [self._normalize_metadata_item(x) for x in seq]
+
+        return [self._normalize_metadata_item(seq)]
+
+    def _looks_like_metadata_payload(self, obj):
+        """
+        判断一个对象是否更像 metadata，而不是图片对象。
+        """
+        if isinstance(obj, dict):
+            return True
+
+        if isinstance(obj, bool):
+            return False
+
+        if isinstance(obj, str):
+            return not self._looks_like_path_string(obj)
+
+        if isinstance(obj, (int, float)):
+            return True
+
+        if isinstance(obj, (list, tuple)):
+            if len(obj) == 0:
+                return True
+
+            if self._looks_like_prompt_triple(obj, allow_list=True):
+                return True
+
+            # 如果全是路径字符串，更像图片列表，不是 metadata list
+            if all(isinstance(x, str) and self._looks_like_path_string(x) for x in obj):
+                return False
+
+            # 含图片对象，不是 metadata
+            if any(isinstance(x, (torch.Tensor, np.ndarray, Image.Image, os.PathLike)) for x in obj):
+                return False
+
+            # 全是 dict / str / number，视为 metadata list
+            if all(isinstance(x, (dict, str, int, float)) and not isinstance(x, bool) for x in obj):
+                return True
+
+            # 含 dict，且没有图片对象，也视为 metadata list
+            if any(isinstance(x, dict) for x in obj):
+                return True
+
+            return False
+
+        return False
+
+    def _extract_metadata_from_dict(self, data):
+        """
+        从 dict 中拆分：
+        - single metadata
+        - metadata list
+        """
+        if not isinstance(data, dict):
+            return self._normalize_metadata_item(data), None
+
+        single = {}
+        meta_list = None
+
+        # 直接写在 dict 里的 metadata 字段
+        direct = {}
+        direct_keys = (
+            "positive_prompt", "positive", "pos",
+            "negative_prompt", "negative", "neg",
+            "seed", "noise_seed",
+            "parameters", "prompt", "workflow"
+        )
+        for k in direct_keys:
+            if k in data and data[k] is not None:
+                direct[k] = data[k]
+
+        if direct:
+            single = self._merge_metadata(single, self._normalize_metadata_item(direct))
+
+        # 单个 metadata 字段
+        for key in ("metadata", "meta", "info", "image_metadata"):
+            if key in data and data[key] is not None:
+                val = data[key]
+                s_single, s_list = self._split_metadata_payload(val)
+                if s_single:
+                    single = self._merge_metadata(single, s_single)
+                if s_list is not None:
+                    meta_list = s_list if meta_list is None else meta_list + s_list
+
+        # 明确的 metadata list 字段
+        for key in (
+            "metadatas", "metas", "infos",
+            "image_metadatas", "metadata_list", "metadatas_list", "metadata_items"
+        ):
+            if key in data and data[key] is not None:
+                s_list = self._normalize_metadata_sequence(data[key])
+                if s_list is not None:
+                    meta_list = s_list if meta_list is None else meta_list + s_list
+
+        return single, meta_list
+
+    def _split_metadata_payload(self, payload):
+        """
+        将一个 metadata payload 分成:
+        - single metadata dict
+        - metadata list
+        """
+        if isinstance(payload, dict):
+            return self._extract_metadata_from_dict(payload)
+
+        if isinstance(payload, (list, tuple)):
+            if self._looks_like_prompt_triple(payload, allow_list=True):
+                return self._normalize_metadata_item(payload), None
+
+            if self._looks_like_metadata_payload(payload):
+                return {}, self._normalize_metadata_sequence(payload)
+
+            return self._normalize_metadata_item(payload), None
+
+        return self._normalize_metadata_item(payload), None
+
+    def _extract_prompts_and_seed_from_metadata(self, metadata):
+        """
+        从 metadata 中提取 positive_prompt / negative_prompt / seed。
+        优先使用显式字段，其次回退到原有 extract_prompts_and_seed。
+        """
+        md = self._normalize_metadata_item(metadata)
+        if not isinstance(md, dict) or not md:
+            return "", "", 0
+
+        positive = None
+        negative = None
+        seed = None
+
+        for k in ("positive_prompt", "positive", "pos"):
+            if k in md and md[k] is not None:
+                positive = str(md[k])
+                break
+
+        for k in ("negative_prompt", "negative", "neg"):
+            if k in md and md[k] is not None:
+                negative = str(md[k])
+                break
+
+        for k in ("seed", "noise_seed", "seed_value"):
+            if k in md and md[k] is not None:
+                try:
+                    seed = int(md[k])
+                    break
+                except Exception:
+                    seed = None
+
+        # 复用原有解析逻辑，处理 parameters / workflow / prompt JSON
+        g_positive, g_negative, g_seed = extract_prompts_and_seed(md)
+
+        if positive is None:
+            plain_prompt = None
+            prompt_val = md.get("prompt")
+            if isinstance(prompt_val, str):
+                s = prompt_val.strip()
+                if s:
+                    try:
+                        json.loads(s)
+                    except Exception:
+                        plain_prompt = s
+
+            if g_positive:
+                positive = g_positive
+            elif plain_prompt is not None:
+                positive = plain_prompt
+            else:
+                positive = ""
+
+        if negative is None:
+            negative = g_negative
+
+        if seed is None:
+            seed = g_seed
+
+        try:
+            seed = int(seed) if seed is not None else 0
+        except Exception:
+            seed = 0
+
+        return str(positive or ""), str(negative or ""), seed
 
     def _load_tensor_and_metadata_from_path(self, path, metadata=None):
         if isinstance(path, os.PathLike):
             path = os.fspath(path)
 
-        if not isinstance(path, str) or not path or not os.path.exists(path):
-            return None, (metadata if isinstance(metadata, dict) else {})
+        provided_metadata = self._normalize_metadata_item(metadata)
 
-        metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        if not isinstance(path, str) or not path or not os.path.exists(path):
+            return None, provided_metadata
 
         try:
             with Image.open(path) as img:
@@ -396,22 +691,24 @@ class LMMSelectImagePW:
                 img_array = np.array(img_out).astype(np.float32) / 255.0
                 image_tensor = torch.from_numpy(img_array)[None, ]
 
-                if not metadata:
-                    try:
-                        if 'parameters' in img.info:
-                            metadata['parameters'] = img.info['parameters']
-                        if 'prompt' in img.info:
-                            metadata['prompt'] = img.info['prompt']
-                        if 'workflow' in img.info:
-                            metadata['workflow'] = img.info['workflow']
-                    except Exception:
-                        pass
+                file_metadata = {}
+                try:
+                    if 'parameters' in img.info:
+                        file_metadata['parameters'] = img.info['parameters']
+                    if 'prompt' in img.info:
+                        file_metadata['prompt'] = img.info['prompt']
+                    if 'workflow' in img.info:
+                        file_metadata['workflow'] = img.info['workflow']
+                except Exception:
+                    pass
 
-                return image_tensor, metadata
+                # 文件内 metadata 作为底，外部传入 metadata 优先覆盖
+                merged_metadata = self._merge_metadata(file_metadata, provided_metadata)
+                return image_tensor, merged_metadata
 
         except Exception as e:
             print(f"PW Utility: Error loading or processing image {path}: {e}")
-            return None, metadata
+            return None, provided_metadata
 
     def _load_image_result_from_path(self, path, metadata=None):
         tensor, md = self._load_tensor_and_metadata_from_path(path, metadata)
@@ -434,60 +731,64 @@ class LMMSelectImagePW:
         H_orig = int(tensor.shape[1])
         W_orig = int(tensor.shape[2])
 
-        if not isinstance(metadata, dict):
-            metadata = {}
-
-        positive_prompt, negative_prompt, seed = extract_prompts_and_seed(metadata)
+        positive_prompt, negative_prompt, seed = self._extract_prompts_and_seed_from_metadata(metadata)
         return (tensor, W_orig, H_orig, positive_prompt, negative_prompt, seed,)
 
-    def _is_single_image_like(self, obj):
-        return isinstance(obj, (torch.Tensor, np.ndarray, Image.Image, str, os.PathLike))
-
-    def _iter_image_items(self, image_input, metadata=None, depth=0):
+    def _iter_image_items(self, image_input, metadata=None, metadata_list=None, depth=0):
         """
-        将 image(list) 输入展平为单张图片序列。
-        支持：
-        - 单张 IMAGE tensor
-        - IMAGE batch tensor
-        - list / tuple of IMAGE
-        - 嵌套 list / tuple
-        - dict 包装的 image / images / tensor / path
-        - (image, metadata_dict) 结构
-        - 路径字符串 / PathLike
+        将 image(list) 输入展平为单张图片序列，并尽量为每张图片绑定对应 metadata。
         """
         if depth > 8 or image_input is None:
             return
 
-        if not isinstance(metadata, dict):
-            metadata = {}
+        base_md = self._normalize_metadata_item(metadata)
+        meta_list = self._normalize_metadata_sequence(metadata_list) if metadata_list is not None else None
 
         # dict 包装结构
         if isinstance(image_input, dict):
-            metadata = self._merge_metadata(metadata, self._metadata_from_dict(image_input))
+            single_md, container_meta_list = self._extract_metadata_from_dict(image_input)
+            base_md = self._merge_metadata(base_md, single_md)
 
-            for key in ("image", "images", "image_list", "tensor", "frames", "items", "list"):
+            if container_meta_list is not None:
+                meta_list = container_meta_list
+
+            for key in ("image", "images", "image_list", "tensor", "frames", "items", "list", "data"):
                 if key in image_input:
-                    yield from self._iter_image_items(image_input[key], metadata, depth + 1)
+                    yield from self._iter_image_items(image_input[key], base_md, meta_list, depth + 1)
                     return
 
             if "path" in image_input:
-                tensor, md = self._load_tensor_and_metadata_from_path(image_input["path"], metadata)
+                md = base_md
+                if meta_list and len(meta_list) > 0:
+                    md = self._merge_metadata(base_md, meta_list[0])
+
+                tensor, md2 = self._load_tensor_and_metadata_from_path(image_input["path"], md)
                 if tensor is not None and tensor.shape[0] > 0:
                     for i in range(tensor.shape[0]):
-                        yield tensor[i:i + 1], md
+                        item_md = md2
+                        if meta_list and i < len(meta_list):
+                            item_md = self._merge_metadata(base_md, meta_list[i])
+                        yield tensor[i:i + 1], item_md
                 return
 
             return
 
-        # (payload, metadata_dict) 结构
+        # (payload, metadata) 结构
         if (
             isinstance(image_input, (list, tuple))
             and len(image_input) == 2
-            and isinstance(image_input[1], dict)
             and not isinstance(image_input[0], dict)
+            and self._looks_like_metadata_payload(image_input[1])
+            and not (isinstance(image_input[0], str) and isinstance(image_input[1], str))
+            and not (isinstance(image_input[1], str) and self._looks_like_path_string(image_input[1]))
         ):
-            metadata = self._merge_metadata(metadata, self._metadata_from_dict(image_input[1]))
-            yield from self._iter_image_items(image_input[0], metadata, depth + 1)
+            single_md, payload_meta_list = self._split_metadata_payload(image_input[1])
+            base_md = self._merge_metadata(base_md, single_md)
+
+            if payload_meta_list is not None:
+                meta_list = payload_meta_list
+
+            yield from self._iter_image_items(image_input[0], base_md, meta_list, depth + 1)
             return
 
         # torch.Tensor：单张或 batch
@@ -497,16 +798,31 @@ class LMMSelectImagePW:
                 return
 
             for i in range(normalized.shape[0]):
-                yield normalized[i:i + 1], metadata
+                item_md = base_md
+                if meta_list is not None:
+                    if i < len(meta_list):
+                        item_md = self._merge_metadata(base_md, meta_list[i])
+                    elif len(meta_list) == 1:
+                        item_md = self._merge_metadata(base_md, meta_list[0])
+
+                yield normalized[i:i + 1], item_md
             return
 
         # 路径字符串 / PathLike
         if isinstance(image_input, (str, os.PathLike)):
             path = image_input if isinstance(image_input, str) else os.fspath(image_input)
-            tensor, md = self._load_tensor_and_metadata_from_path(path, metadata)
+
+            md = base_md
+            if meta_list and len(meta_list) > 0:
+                md = self._merge_metadata(base_md, meta_list[0])
+
+            tensor, md2 = self._load_tensor_and_metadata_from_path(path, md)
             if tensor is not None and tensor.shape[0] > 0:
                 for i in range(tensor.shape[0]):
-                    yield tensor[i:i + 1], md
+                    item_md = md2
+                    if meta_list and i < len(meta_list):
+                        item_md = self._merge_metadata(base_md, meta_list[i])
+                    yield tensor[i:i + 1], item_md
             return
 
         # list / tuple / 其它可迭代对象
@@ -520,15 +836,30 @@ class LMMSelectImagePW:
                 seq = None
 
         if seq is not None:
-            for item in seq:
-                yield from self._iter_image_items(item, metadata, depth + 1)
+            for i, item in enumerate(seq):
+                item_md = base_md
+
+                if meta_list is not None:
+                    if i < len(meta_list):
+                        item_md = self._merge_metadata(base_md, meta_list[i])
+                    elif len(meta_list) == 1:
+                        item_md = self._merge_metadata(base_md, meta_list[0])
+
+                yield from self._iter_image_items(item, item_md, None, depth + 1)
             return
 
         # 单张图片对象 / ndarray / PIL.Image 等
+        md = base_md
+        if meta_list and len(meta_list) > 0:
+            md = self._merge_metadata(base_md, meta_list[0])
+
         tensor = self._tensor_from_image_item(image_input)
         if tensor is not None and tensor.shape[0] > 0:
             for i in range(tensor.shape[0]):
-                yield tensor[i:i + 1], metadata
+                item_md = md
+                if meta_list and i < len(meta_list):
+                    item_md = self._merge_metadata(base_md, meta_list[i])
+                yield tensor[i:i + 1], item_md
 
     def _get_image_from_image_input(self, image_input, index):
         empty_return = self._empty_return()
