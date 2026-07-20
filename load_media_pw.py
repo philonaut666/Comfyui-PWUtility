@@ -381,18 +381,17 @@ class LMMSelectImagePW:
 
         return metadata
 
-    def _load_image_result_from_path(self, path, metadata=None):
-        empty_return = self._empty_return()
+    def _load_tensor_and_metadata_from_path(self, path, metadata=None):
+        if isinstance(path, os.PathLike):
+            path = os.fspath(path)
 
-        if not path or not os.path.exists(path):
-            return empty_return
+        if not isinstance(path, str) or not path or not os.path.exists(path):
+            return None, (metadata if isinstance(metadata, dict) else {})
 
-        if not isinstance(metadata, dict):
-            metadata = {}
+        metadata = dict(metadata) if isinstance(metadata, dict) else {}
 
         try:
             with Image.open(path) as img:
-                H_orig, W_orig = img.height, img.width
                 img_out = img.convert("RGBA") if 'A' in img.getbands() else img.convert("RGB")
                 img_array = np.array(img_out).astype(np.float32) / 255.0
                 image_tensor = torch.from_numpy(img_array)[None, ]
@@ -408,12 +407,15 @@ class LMMSelectImagePW:
                     except Exception:
                         pass
 
-                positive_prompt, negative_prompt, seed = extract_prompts_and_seed(metadata)
-                return (image_tensor, W_orig, H_orig, positive_prompt, negative_prompt, seed,)
+                return image_tensor, metadata
 
         except Exception as e:
             print(f"PW Utility: Error loading or processing image {path}: {e}")
-            return empty_return
+            return None, metadata
+
+    def _load_image_result_from_path(self, path, metadata=None):
+        tensor, md = self._load_tensor_and_metadata_from_path(path, metadata)
+        return self._result_from_tensor(tensor, md)
 
     def _result_from_tensor(self, tensor, metadata=None):
         empty_return = self._empty_return()
@@ -438,85 +440,112 @@ class LMMSelectImagePW:
         positive_prompt, negative_prompt, seed = extract_prompts_and_seed(metadata)
         return (tensor, W_orig, H_orig, positive_prompt, negative_prompt, seed,)
 
-    def _get_image_from_image_input(self, image_input, index):
-        if image_input is None:
-            return self._empty_return()
+    def _is_single_image_like(self, obj):
+        return isinstance(obj, (torch.Tensor, np.ndarray, Image.Image, str, os.PathLike))
 
-        return self._get_image_from_image_input_with_metadata(image_input, index, {})
+    def _iter_image_items(self, image_input, metadata=None, depth=0):
+        """
+        将 image(list) 输入展平为单张图片序列。
+        支持：
+        - 单张 IMAGE tensor
+        - IMAGE batch tensor
+        - list / tuple of IMAGE
+        - 嵌套 list / tuple
+        - dict 包装的 image / images / tensor / path
+        - (image, metadata_dict) 结构
+        - 路径字符串 / PathLike
+        """
+        if depth > 8 or image_input is None:
+            return
 
-    def _get_image_from_image_input_with_metadata(self, image_input, index, metadata):
-        empty_return = self._empty_return()
+        if not isinstance(metadata, dict):
+            metadata = {}
 
-        # 顶层 dict，例如 {"image": IMAGE, "metadata": {...}}
+        # dict 包装结构
         if isinstance(image_input, dict):
             metadata = self._merge_metadata(metadata, self._metadata_from_dict(image_input))
 
-            if "image" in image_input:
-                return self._get_image_from_image_input_with_metadata(image_input["image"], index, metadata)
-            if "tensor" in image_input:
-                return self._get_image_from_image_input_with_metadata(image_input["tensor"], index, metadata)
+            for key in ("image", "images", "image_list", "tensor", "frames", "items", "list"):
+                if key in image_input:
+                    yield from self._iter_image_items(image_input[key], metadata, depth + 1)
+                    return
+
             if "path" in image_input:
-                return self._load_image_result_from_path(image_input["path"], metadata)
+                tensor, md = self._load_tensor_and_metadata_from_path(image_input["path"], metadata)
+                if tensor is not None and tensor.shape[0] > 0:
+                    for i in range(tensor.shape[0]):
+                        yield tensor[i:i + 1], md
+                return
 
-            return empty_return
+            return
 
-        # image list / image batch list
-        if isinstance(image_input, (list, tuple)):
-            if not (0 <= index < len(image_input)):
-                return empty_return
+        # (payload, metadata_dict) 结构
+        if (
+            isinstance(image_input, (list, tuple))
+            and len(image_input) == 2
+            and isinstance(image_input[1], dict)
+            and not isinstance(image_input[0], dict)
+        ):
+            metadata = self._merge_metadata(metadata, self._metadata_from_dict(image_input[1]))
+            yield from self._iter_image_items(image_input[0], metadata, depth + 1)
+            return
 
-            item = image_input[index]
-
-            # list 中的 dict 项
-            if isinstance(item, dict):
-                metadata = self._merge_metadata(metadata, self._metadata_from_dict(item))
-
-                if "image" in item:
-                    return self._get_image_from_image_input_with_metadata(item["image"], 0, metadata)
-                if "tensor" in item:
-                    return self._get_image_from_image_input_with_metadata(item["tensor"], 0, metadata)
-                if "path" in item:
-                    return self._load_image_result_from_path(item["path"], metadata)
-
-                return empty_return
-
-            # list 中的 tuple/list 项，例如 (image, metadata_dict)
-            if isinstance(item, (list, tuple)) and len(item) > 0:
-                if len(item) >= 2 and isinstance(item[1], dict):
-                    metadata = self._merge_metadata(metadata, self._metadata_from_dict(item[1]))
-                return self._get_image_from_image_input_with_metadata(item[0], 0, metadata)
-
-            # list 中的路径字符串
-            if isinstance(item, str):
-                return self._load_image_result_from_path(item, metadata)
-
-            # list 中的普通 IMAGE / tensor / ndarray / PIL.Image
-            tensor = self._tensor_from_image_item(item)
-            return self._result_from_tensor(tensor, metadata)
-
-        # 单个 IMAGE tensor / batch tensor
+        # torch.Tensor：单张或 batch
         if isinstance(image_input, torch.Tensor):
             normalized = self._normalize_image_tensor(image_input)
             if normalized is None or normalized.shape[0] == 0:
-                return empty_return
+                return
 
-            if not (0 <= index < normalized.shape[0]):
-                return empty_return
+            for i in range(normalized.shape[0]):
+                yield normalized[i:i + 1], metadata
+            return
 
-            return self._result_from_tensor(normalized[index:index + 1], metadata)
+        # 路径字符串 / PathLike
+        if isinstance(image_input, (str, os.PathLike)):
+            path = image_input if isinstance(image_input, str) else os.fspath(image_input)
+            tensor, md = self._load_tensor_and_metadata_from_path(path, metadata)
+            if tensor is not None and tensor.shape[0] > 0:
+                for i in range(tensor.shape[0]):
+                    yield tensor[i:i + 1], md
+            return
 
-        # 单个路径字符串
-        if isinstance(image_input, str):
-            if index != 0:
-                return empty_return
-            return self._load_image_result_from_path(image_input, metadata)
+        # list / tuple / 其它可迭代对象
+        seq = None
+        if isinstance(image_input, (list, tuple)):
+            seq = image_input
+        elif not isinstance(image_input, (bytes, dict, np.ndarray, Image.Image)) and hasattr(image_input, "__iter__"):
+            try:
+                seq = list(image_input)
+            except Exception:
+                seq = None
+
+        if seq is not None:
+            for item in seq:
+                yield from self._iter_image_items(item, metadata, depth + 1)
+            return
 
         # 单张图片对象 / ndarray / PIL.Image 等
-        if index != 0:
+        tensor = self._tensor_from_image_item(image_input)
+        if tensor is not None and tensor.shape[0] > 0:
+            for i in range(tensor.shape[0]):
+                yield tensor[i:i + 1], metadata
+
+    def _get_image_from_image_input(self, image_input, index):
+        empty_return = self._empty_return()
+
+        try:
+            index = int(index)
+        except Exception:
+            index = 0
+
+        if index < 0 or image_input is None:
             return empty_return
 
-        tensor = self._tensor_from_image_item(image_input)
-        return self._result_from_tensor(tensor, metadata)
+        for current_index, (tensor, md) in enumerate(self._iter_image_items(image_input, {})):
+            if current_index == index:
+                return self._result_from_tensor(tensor, md)
+
+        return empty_return
 
     def get_original_image(self, index, paths=None, **kwargs):
         image_input = kwargs.get("image(list)", None)
