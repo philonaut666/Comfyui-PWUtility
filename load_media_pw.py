@@ -273,9 +273,9 @@ def cv_frame_generator(video_path, force_rate, frame_load_cap, skip_first_frames
 
 
 class LMMSelectImagePW:
-    # 顺序对应：index, paths, image(list), metadata(list)
+    # 顺序对应：index, paths, image(list)
     # image(list) 需要作为 list 输入接收 Image Loader PW 的 image_list
-    INPUT_IS_LIST = (False, False, True, False)
+    INPUT_IS_LIST = (False, False, True)
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -286,7 +286,6 @@ class LMMSelectImagePW:
             "optional": {
                 "paths": ("LMM_ALL_PATHS",),
                 "image(list)": ("IMAGE",),
-                "metadata(list)": ("LMM_METADATA_LIST",),
             },
         }
 
@@ -952,29 +951,15 @@ class LMMSelectImagePW:
                     item_md = self._merge_metadata(base_md, meta_list[i])
                 yield tensor[i:i + 1], item_md
 
-    def _get_image_from_image_input(self, image_input, index, external_metadata_list=None):
+    def _get_image_from_image_input(self, image_input, index):
         empty_return = self._empty_return()
         index = self._normalize_index(index)
 
         if image_input is None or self._is_empty_image_input(image_input):
             return empty_return
 
-        external_meta_list = self._normalize_metadata_sequence(external_metadata_list) if external_metadata_list is not None else None
-
         for current_index, (tensor, md) in enumerate(self._iter_image_items(image_input, {}, None)):
             if current_index == index:
-                # 外部 metadata(list) 按展平后的图片索引绑定
-                if external_meta_list:
-                    if len(external_meta_list) == 1:
-                        ext_md = external_meta_list[0]
-                    elif current_index < len(external_meta_list):
-                        ext_md = external_meta_list[current_index]
-                    else:
-                        ext_md = {}
-
-                    # 外部显式 metadata 优先
-                    md = self._merge_metadata(md, ext_md)
-
                 return self._result_from_tensor(tensor, md)
 
         return empty_return
@@ -987,11 +972,10 @@ class LMMSelectImagePW:
             paths = paths[0] if len(paths) > 0 else None
 
         image_input = kwargs.get("image(list)", None)
-        metadata_input = kwargs.get("metadata(list)", None)
 
         # image(list) 优先级更高：只要该端口有有效输入，就忽略 paths
         if image_input is not None and not self._is_empty_image_input(image_input):
-            return self._get_image_from_image_input(image_input, index, metadata_input)
+            return self._get_image_from_image_input(image_input, index)
 
         # 回退到 paths 模式
         selected_item = parse_selection_and_get_item(paths, index, "image")
@@ -1002,12 +986,6 @@ class LMMSelectImagePW:
 
         selected_path = selected_item['path']
         metadata = selected_item.get('metadata', {})
-
-        # 如果额外接了 metadata(list)，也允许在 paths 模式下按 index 补充分 metadata
-        if metadata_input is not None:
-            meta_seq = self._normalize_metadata_sequence(metadata_input)
-            if meta_seq and index < len(meta_seq):
-                metadata = self._merge_metadata(meta_seq[index], metadata)
 
         return self._load_image_result_from_path(selected_path, metadata)
 
