@@ -72,7 +72,7 @@ class ImageLoaderPW:
         return {
             "required": {
                 "image_paths": ("STRING", {"default": "", "multiline": True}),
-                "scale_mode": (["scale dimensions", "scale longer", "scale shorter"],),
+                "scale_mode": (["none", "scale dimensions", "scale longer", "scale shorter"],),
                 "width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1}),
                 "height": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1}),
                 "longer_size": ("INT", {"default": 1024, "min": 0, "max": 8192, "step": 1}),
@@ -90,7 +90,7 @@ class ImageLoaderPW:
     RETURN_NAMES = ("image_list",) + tuple(f"image_{i+1}" for i in range(50))
     OUTPUT_IS_LIST = (True,) + (False,) * 50 
     FUNCTION = "load_images"
-    CATEGORY = "🔮PWUtility/Image"
+    CATEGORY = "PWUtility/Image"
 
     def resize_image(self, image, width, height, resize_method="keep proportion", interpolation="nearest", multiple_of=0, pad_color=(0.0, 0.0, 0.0), crop_position="center"):
         MAX_RESOLUTION = 8192
@@ -134,7 +134,6 @@ class ImageLoaderPW:
             new_width = round(ow * ratio)
             new_height = round(oh * ratio)
             
-            # Calculate crop position (Only center, top, bottom, left, right)
             if crop_position == "center":
                 x = (new_width - width) // 2
                 y = (new_height - height) // 2
@@ -254,43 +253,45 @@ class ImageLoaderPW:
                 
                 _, oh, ow, _ = image_tensor.shape
                 
-                target_w, target_h = width, height
-                actual_resize_method = resize_method
-                use_internal_multiple = multiple_of
+                # When scale_mode is "none", skip all resizing and keep the original dimensions
+                if scale_mode != "none":
+                    target_w, target_h = width, height
+                    actual_resize_method = resize_method
+                    use_internal_multiple = multiple_of
 
-                if scale_mode == "scale longer":
-                    base_size = longer_size if longer_size > 0 else max(oh, ow)
-                    if oh >= ow:
-                        target_h = align_to_multiple(base_size, multiple_of)
-                        target_w = align_to_multiple(ow * (target_h / oh), multiple_of)
-                    else:
-                        target_w = align_to_multiple(base_size, multiple_of)
-                        target_h = align_to_multiple(oh * (target_w / ow), multiple_of)
-                    target_w, target_h = int(max(1, target_w)), int(max(1, target_h))
-                    
-                    if resize_method == "keep proportion":
-                        actual_resize_method = "stretch"
-                    use_internal_multiple = 0
-                    
-                elif scale_mode == "scale shorter":
-                    base_size = shorter_size if shorter_size > 0 else min(oh, ow)
-                    if oh <= ow:
-                        target_h = align_to_multiple(base_size, multiple_of)
-                        target_w = align_to_multiple(ow * (target_h / oh), multiple_of)
-                    else:
-                        target_w = align_to_multiple(base_size, multiple_of)
-                        target_h = align_to_multiple(oh * (target_w / ow), multiple_of)
-                    target_w, target_h = int(max(1, target_w)), int(max(1, target_h))
-                    
-                    if resize_method == "keep proportion":
-                        actual_resize_method = "stretch"
-                    use_internal_multiple = 0
-
-                elif scale_mode == "scale dimensions":
-                    if width == 0 and height == 0:
+                    if scale_mode == "scale longer":
+                        base_size = longer_size if longer_size > 0 else max(oh, ow)
+                        if oh >= ow:
+                            target_h = align_to_multiple(base_size, multiple_of)
+                            target_w = align_to_multiple(ow * (target_h / oh), multiple_of)
+                        else:
+                            target_w = align_to_multiple(base_size, multiple_of)
+                            target_h = align_to_multiple(oh * (target_w / ow), multiple_of)
+                        target_w, target_h = int(max(1, target_w)), int(max(1, target_h))
+                        
+                        if resize_method == "keep proportion":
+                            actual_resize_method = "stretch"
+                        use_internal_multiple = 0
+                        
+                    elif scale_mode == "scale shorter":
+                        base_size = shorter_size if shorter_size > 0 else min(oh, ow)
+                        if oh <= ow:
+                            target_h = align_to_multiple(base_size, multiple_of)
+                            target_w = align_to_multiple(ow * (target_h / oh), multiple_of)
+                        else:
+                            target_w = align_to_multiple(base_size, multiple_of)
+                            target_h = align_to_multiple(oh * (target_w / ow), multiple_of)
+                        target_w, target_h = int(max(1, target_w)), int(max(1, target_h))
+                        
+                        if resize_method == "keep proportion":
+                            actual_resize_method = "stretch"
                         use_internal_multiple = 0
 
-                image_tensor = self.resize_image(image_tensor, target_w, target_h, actual_resize_method, interpolation, use_internal_multiple, pad_color_rgb, crop_position)
+                    elif scale_mode == "scale dimensions":
+                        if width == 0 and height == 0:
+                            use_internal_multiple = 0
+
+                    image_tensor = self.resize_image(image_tensor, target_w, target_h, actual_resize_method, interpolation, use_internal_multiple, pad_color_rgb, crop_position)
      
                 if img_compression > 0:
                     img_np = (image_tensor[0].numpy() * 255).clip(0, 255).astype(np.uint8)
