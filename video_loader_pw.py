@@ -45,8 +45,10 @@ class VideoLoaderPW:
     _source_cache_order = []
     _max_source_cache_entries = max(1, int(os.environ.get("PW_VIDEO_LOADER_SOURCE_CACHE_ENTRIES", "1")))
 
-    # per-node last source inputs record: video + path
-    _node_last_sources = {}
+    # per-node last active source record:
+    # value format: (source_mode, source_signature)
+    # source_mode: "path" / "images" / "empty"
+    _node_last_source = {}
 
     @classmethod
     def INPUT_TYPES(s):
@@ -55,14 +57,7 @@ class VideoLoaderPW:
                 "path": ("STRING", {
                     "default": "",
                     "forceInput": True,
-                    "optional": True,
-                    "tooltip": "Path to the video file. Optional if video is provided."
-                }),
-                "video": ("STRING", {
-                    "default": "",
-                    "forceInput": True,
-                    "optional": True,
-                    "tooltip": "Video input. Higher priority than path."
+                    "tooltip": "Path to the video file. Can be empty if images input is used."
                 }),
                 "start_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "end_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
@@ -89,6 +84,11 @@ class VideoLoaderPW:
                 "split_green_point_idx": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "select_generate": (["blue", "purple"], {"default": "blue", "tooltip": "Which segment to use as generate when split_count=1"}),
             },
+            "optional": {
+                "images": ("IMAGE", {
+                    "tooltip": "Image sequence input. If connected, it has higher priority than path and path will be ignored."
+                }),
+            },
             "hidden": {
                 "unique_id": "UNIQUE_ID"
             }
@@ -98,65 +98,6 @@ class VideoLoaderPW:
     RETURN_NAMES = ("images", "audio", "frame_count", "duration", "fps", "video_info", "align_8n+1_add_frames", "split_info")
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
-
-    @staticmethod
-    def _coerce_source_string(value):
-        """
-        Convert an input value into a usable path string.
-        Supports normal strings, lists/tuples, and some dict-like video objects.
-        """
-        if value is None:
-            return ""
-
-        if isinstance(value, str):
-            return value.strip()
-
-        if isinstance(value, bytes):
-            try:
-                return value.decode("utf-8", "ignore").strip()
-            except Exception:
-                return ""
-
-        # Do not try to interpret tensors/arrays as file paths.
-        if hasattr(value, "shape"):
-            return ""
-
-        if isinstance(value, (list, tuple, set)):
-            for item in value:
-                s = VideoLoaderPW._coerce_source_string(item)
-                if s:
-                    return s
-            return ""
-
-        if isinstance(value, dict):
-            for key in ("video_path", "path", "filename", "file", "filepath", "src", "source", "url", "video"):
-                if key in value:
-                    s = VideoLoaderPW._coerce_source_string(value[key])
-                    if s:
-                        return s
-            return ""
-
-        try:
-            s = str(value).strip()
-            if s and not s.startswith("<") and not s.startswith("tensor("):
-                return s
-        except Exception:
-            pass
-
-        return ""
-
-    @staticmethod
-    def _select_effective_source(video, path):
-        video_str = VideoLoaderPW._coerce_source_string(video)
-        path_str = VideoLoaderPW._coerce_source_string(path)
-
-        if video_str:
-            return video_str, "video"
-
-        if path_str:
-            return path_str, "path"
-
-        return "", ""
 
     @staticmethod
     def _resolve_video_path(video_to_load, raise_error=True):
@@ -189,32 +130,98 @@ class VideoLoaderPW:
 
         return video_to_load
 
+    @staticmethod
+    def _images_has_frames(images):
+        if images is None:
+            return False
+        if not torch.is_tensor(images):
+            return False
+        if images.numel() == 0:
+            return False
+        if images.dim() == 3:
+            return True
+        if images.dim() == 4:
+            return int(images.shape[0]) > 0
+        return False
+
+    @staticmethod
+    def _images_signature(images):
+        """
+        Lightweight signature for detecting images input changes.
+
+        It uses:
+        - shape
+        - dtype
+        - device
+        - data_ptr
+        - a small sampled statistic
+
+        This is not a full content hash, but is enough for normal ComfyUI execution/cache scenarios.
+        """
+        if images is None:
+            return "none"
+
+        if not torch.is_tensor(images):
+            return f"nontensor_{type(images).__name__}"
+
+        try:
+            t = images.detach()
+            shape = tuple(int(x) for x in t.shape)
+            dtype = str(t.dtype)
+            device = str(t.device)
+            ptr = t.data_ptr() if t.numel() > 0 else 0
+
+            sample = 0.0
+            if t.numel() > 0:
+                flat = t.reshape(-1)
+                n = int(flat.numel())
+                steps = min(32, n)
+                idx = torch.linspace(0, n - 1, steps=steps, dtype=torch.long, device=t.device)
+                vals = flat[idx].float()
+                sample = float(vals.sum().item()) + float(vals.min().item()) * 0.123 + float(vals.max().item()) * 0.456
+
+            return f"{shape}|{dtype}|{device}|{ptr}|{round(sample, 6)}"
+        except Exception:
+            return f"id_{id(images)}"
+
     @classmethod
     def IS_CHANGED(cls, **kwargs):
         """
-        ComfyUI cache helper.
-        Detect changes on both video and path inputs.
+        Help ComfyUI cache distinguish:
+        - normal execution
+        - source just changed execution, where internal parameters are reset before output
+
+        Source priority:
+        1. images input, if connected
+        2. path input
+        3. empty
         """
         uid = kwargs.get("unique_id", "__global__")
         if uid is None:
             uid = "__global__"
         uid = str(uid)
 
-        raw_video = cls._coerce_source_string(kwargs.get("video", ""))
-        raw_path = cls._coerce_source_string(kwargs.get("path", ""))
+        images = kwargs.get("images", None)
+        path = kwargs.get("path", "")
 
-        last = cls._node_last_sources.get(uid, None)
-        source_changed = last is not None and (
-            last.get("video", "") != raw_video or
-            last.get("path", "") != raw_path
-        )
+        images_connected = images is not None
+        path_str = path.strip() if isinstance(path, str) else ""
 
-        effective_source, _ = cls._select_effective_source(raw_video, raw_path)
-        resolved = ""
-        if effective_source:
-            resolved = cls._resolve_video_path(effective_source, raise_error=False)
+        if images_connected:
+            mode = "images"
+            sig = cls._images_signature(images)
+        elif path_str:
+            mode = "path"
+            sig = cls._resolve_video_path(path_str, raise_error=False)
+        else:
+            mode = "empty"
+            sig = ""
 
-        return f"{uid}|v={raw_video}|p={raw_path}|eff={resolved}|changed={source_changed}"
+        last = cls._node_last_source.get(uid, None)
+        current = (mode, sig)
+        source_changed = last is not None and last != current
+
+        return f"{uid}|{mode}|{sig}|{source_changed}"
 
     @classmethod
     def _get_source_cache(cls, video_path):
@@ -537,14 +544,13 @@ class VideoLoaderPW:
 
     def load_video(
         self,
-        path="",
-        video="",
-        start_time=0.0,
-        end_time=0.0,
-        start_frame=0,
-        end_frame=0,
-        frame_rate=25.0,
-        display_mode="frames",
+        path,
+        frame_rate,
+        display_mode,
+        start_time,
+        end_time,
+        start_frame,
+        end_frame,
         crop_x=0.0,
         crop_y=0.0,
         crop_w=1.0,
@@ -556,6 +562,7 @@ class VideoLoaderPW:
         split_green_point=0.0,
         split_green_point_idx=0,
         select_generate="blue",
+        images=None,
         **kwargs
     ):
         align_8n_plus_1 = kwargs.get("align_8n+1", True)
@@ -565,58 +572,39 @@ class VideoLoaderPW:
             unique_id = "__global__"
         node_key = str(unique_id)
 
-        raw_video = self._coerce_source_string(video)
-        raw_path = self._coerce_source_string(path)
-        effective_source, active_source = self._select_effective_source(raw_video, raw_path)
+        try:
+            fr = float(frame_rate)
+        except Exception:
+            fr = 25.0
+        if fr <= 0:
+            fr = 25.0
 
-        last_sources = self.__class__._node_last_sources.get(node_key, None)
-        source_changed = last_sources is not None and (
-            last_sources.get("video", "") != raw_video or
-            last_sources.get("path", "") != raw_path
-        )
+        video_to_load = path.strip() if (path and isinstance(path, str) and path.strip()) else ""
 
-        # No usable source.
-        if not effective_source:
-            self.__class__._node_last_sources[node_key] = {
-                "video": raw_video,
-                "path": raw_path
-            }
+        # Source priority:
+        # 1. images input, if connected
+        # 2. path input
+        # 3. empty
+        images_connected = images is not None
 
-            empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
-            empty_info = json.dumps({
-                "active_source": active_source,
-                "source_changed": source_changed,
-                "source_fps": 0,
-                "source_frame_count": 0,
-                "source_duration": 0,
-                "source_width": 0,
-                "source_height": 0,
-                "loaded_fps": round(float(frame_rate) if frame_rate > 0 else 25.0, 2),
-                "loaded_frame_count": 0,
-                "loaded_duration": 0,
-                "loaded_width": 0,
-                "loaded_height": 0,
-                "full_duration": 0,
-                "full_frame_count_at_loaded_fps": 0,
-                "waveform_peaks": [],
-            }, indent=4)
+        if images_connected:
+            source_mode = "images"
+            source_sig = self._images_signature(images)
+        elif video_to_load:
+            source_mode = "path"
+            resolved_path = self._resolve_video_path(video_to_load, raise_error=True)
+            source_sig = os.path.abspath(resolved_path)
+        else:
+            source_mode = "empty"
+            source_sig = ""
 
-            return {
-                "ui": {"video_path": [""], "video_info": [empty_info]},
-                "result": (empty_image, None, 0, 0.0, float(frame_rate), empty_info, 0, "{}")
-            }
+        last_source = self.__class__._node_last_source.get(node_key, None)
+        current_source = (source_mode, source_sig)
+        source_changed = last_source is not None and last_source != current_source
 
-        video_path = self._resolve_video_path(effective_source, raise_error=True)
-        cache_key = os.path.abspath(video_path)
-
-        # If either video or path input changed, reload source and reset adjustable parameters.
+        # When active source changes, reset adjustable parameters BEFORE computing outputs.
+        # When active source does not change, keep current parameters.
         if source_changed:
-            if cache_key in self.__class__._source_cache:
-                self.__class__._source_cache.pop(cache_key, None)
-                if cache_key in self.__class__._source_cache_order:
-                    self.__class__._source_cache_order.remove(cache_key)
-                gc.collect()
-
             start_time = 0.0
             end_time = 0.0
             start_frame = 0
@@ -634,122 +622,262 @@ class VideoLoaderPW:
             split_green_point_idx = 0
             select_generate = "blue"
 
-        # Store current source inputs after successful resolve.
-        self.__class__._node_last_sources[node_key] = {
-            "video": raw_video,
-            "path": raw_path
-        }
+        self.__class__._node_last_source[node_key] = current_source
 
-        cache = self._get_source_cache(cache_key)
+        # Empty source.
+        if source_mode == "empty":
+            empty_image = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
+            empty_info = json.dumps({
+                "source_mode": "empty",
+                "source_changed": source_changed,
+                "waveform_peaks": [],
+            }, indent=4)
+            return {
+                "ui": {"video_path": [""], "video_info": [empty_info]},
+                "result": (empty_image, None, 0, 0.0, float(fr), empty_info, 0, "{}")
+            }
 
-        orig_w = int(cache.get("width", 512))
-        orig_h = int(cache.get("height", 512))
-        source_fps = float(cache.get("source_fps", 0.0))
-        source_duration = float(cache.get("duration", 0.0))
-        source_frame_count = int(cache.get("source_frame_count", 0))
-
-        fr = float(frame_rate) if frame_rate > 0 else 25.0
-
-        manual_crop_left = int(orig_w * crop_x)
-        manual_crop_top = int(orig_h * crop_y)
-        manual_crop_right = orig_w - int(orig_w * (crop_x + crop_w))
-        manual_crop_bottom = orig_h - int(orig_h * (crop_y + crop_h))
-
-        manual_crop_left = max(0, min(manual_crop_left, orig_w - 1))
-        manual_crop_top = max(0, min(manual_crop_top, orig_h - 1))
-        manual_crop_right = max(0, min(manual_crop_right, orig_w - manual_crop_left - 1))
-        manual_crop_bottom = max(0, min(manual_crop_bottom, orig_h - manual_crop_top - 1))
-
-        s_frame_0 = max(0, int(start_frame))
-        e_frame_0 = int(end_frame) if end_frame > 0 else 0
-
-        if display_mode == "frames":
-            actual_start_time = float(s_frame_0) / fr
-            actual_end_time = float(e_frame_0 + 1) / fr if e_frame_0 > 0 else (source_duration if source_duration > 0 else float("inf"))
-        else:
-            actual_start_time = float(start_time)
-            actual_end_time = float(end_time) if (end_time > 0 and end_time > start_time) else (source_duration if source_duration > 0 else float("inf"))
-
-        if actual_end_time <= 0:
-            actual_end_time = float("inf")
-
-        target_frame_count = -1
-        if display_mode == "frames" and e_frame_0 > 0:
-            target_frame_count = e_frame_0 - s_frame_0 + 1
-            if target_frame_count < 0:
-                target_frame_count = 0
-
-        frame_times_np = cache.get("frame_times", np.asarray([], dtype=np.float64))
-        indices = self._sample_frame_indices(
-            frame_times_np,
-            actual_start_time,
-            actual_end_time,
-            fr,
-            target_frame_count
-        )
-
-        frames_loaded = 0
-        if len(indices) > 0:
-            idx_tensor = torch.from_numpy(np.asarray(indices, dtype=np.int64))
-            frames_uint = cache["frames"].index_select(0, idx_tensor)
-
-            if manual_crop_left > 0 or manual_crop_top > 0 or manual_crop_right > 0 or manual_crop_bottom > 0:
-                frames_uint = frames_uint[
-                    :,
-                    manual_crop_top:orig_h - manual_crop_bottom,
-                    manual_crop_left:orig_w - manual_crop_right,
-                    :
-                ]
-
-            image_tensor = frames_uint.float().div_(255.0)
-            frames_loaded = int(image_tensor.shape[0])
-        else:
-            image_tensor = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
-
+        # Common output variables.
         audio_dict = None
+        image_tensor = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
+        frames_loaded = 0
+        frame_count = 0
 
-        wave_full = cache.get("audio_waveform", None)
-        if wave_full is not None and wave_full.numel() > 0:
-            sample_rate = int(cache.get("audio_sample_rate", 44100))
-            first_frame_time = float(cache.get("audio_first_time", 0.0))
+        source_fps = 0.0
+        source_duration = 0.0
+        source_frame_count = 0
 
-            offset_sec = max(0.0, actual_start_time - first_frame_time)
-            start_sample = int(offset_sec * sample_rate)
+        orig_w = 512
+        orig_h = 512
 
-            if actual_end_time == float("inf"):
-                end_sample = wave_full.shape[1]
+        g_start_frame = 0
+        g_end_local = 0
+
+        ui_video_path = ""
+
+        #################################################################
+        # IMAGES SOURCE
+        #################################################################
+        if source_mode == "images":
+            ui_video_path = ""
+
+            if self._images_has_frames(images):
+                img = images.detach()
+
+                if img.dim() == 3:
+                    img = img.unsqueeze(0)
+
+                # If input accidentally comes as NCHW, convert to NHWC.
+                if img.dim() == 4 and img.shape[-1] not in (1, 3, 4) and img.shape[1] in (1, 3, 4):
+                    img = img.permute(0, 2, 3, 1)
+
+                if img.dtype == torch.uint8:
+                    img = img.float().div_(255.0)
+                else:
+                    img = img.float().clamp(0.0, 1.0)
+
+                if img.shape[-1] == 1:
+                    img = img.repeat(1, 1, 1, 3)
+                elif img.shape[-1] == 4:
+                    img = img[..., :3]
+                elif img.shape[-1] != 3:
+                    if img.shape[-1] > 3:
+                        img = img[..., :3]
+                    else:
+                        pad = 3 - int(img.shape[-1])
+                        img = torch.nn.functional.pad(img, (0, pad))
+
+                n_frames = int(img.shape[0])
+                orig_h = int(img.shape[1])
+                orig_w = int(img.shape[2])
+
+                source_fps = fr
+                source_duration = float(n_frames) / fr if fr > 0 else 0.0
+                source_frame_count = n_frames
+
+                manual_crop_left = int(orig_w * crop_x)
+                manual_crop_top = int(orig_h * crop_y)
+                manual_crop_right = orig_w - int(orig_w * (crop_x + crop_w))
+                manual_crop_bottom = orig_h - int(orig_h * (crop_y + crop_h))
+
+                manual_crop_left = max(0, min(manual_crop_left, orig_w - 1))
+                manual_crop_top = max(0, min(manual_crop_top, orig_h - 1))
+                manual_crop_right = max(0, min(manual_crop_right, orig_w - manual_crop_left - 1))
+                manual_crop_bottom = max(0, min(manual_crop_bottom, orig_h - manual_crop_top - 1))
+
+                if display_mode == "frames":
+                    start_idx = max(0, int(start_frame))
+                    if int(end_frame) > 0:
+                        end_idx = int(end_frame)
+                    else:
+                        end_idx = n_frames - 1
+                else:
+                    start_idx = int(round(float(start_time) * fr))
+                    if float(end_time) > 0 and float(end_time) > float(start_time):
+                        end_idx = int(round(float(end_time) * fr)) - 1
+                    else:
+                        end_idx = n_frames - 1
+
+                if n_frames > 0:
+                    start_idx = max(0, min(start_idx, n_frames - 1))
+                    end_idx = max(0, min(end_idx, n_frames - 1))
+                else:
+                    start_idx = 0
+                    end_idx = -1
+
+                if n_frames > 0 and end_idx >= start_idx:
+                    image_tensor = img[start_idx:end_idx + 1].clone()
+
+                    if manual_crop_left > 0 or manual_crop_top > 0 or manual_crop_right > 0 or manual_crop_bottom > 0:
+                        image_tensor = image_tensor[
+                            :,
+                            manual_crop_top:orig_h - manual_crop_bottom,
+                            manual_crop_left:orig_w - manual_crop_right,
+                            :
+                        ]
+
+                    frames_loaded = int(image_tensor.shape[0])
+                    frame_count = frames_loaded
+                else:
+                    image_tensor = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
+                    frames_loaded = 0
+                    frame_count = 0
+
+                g_start_frame = start_idx if n_frames > 0 else 0
+                g_end_local = max(0, frame_count - 1)
+
             else:
-                duration_sec_audio = actual_end_time - actual_start_time
-                end_sample = start_sample + int(duration_sec_audio * sample_rate)
+                # images input connected but has no usable frames.
+                image_tensor = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
+                frames_loaded = 0
+                frame_count = 0
 
-            total_samples = wave_full.shape[1]
-            start_sample = max(0, min(start_sample, total_samples))
-            end_sample = max(start_sample, min(end_sample, total_samples))
+                source_fps = fr
+                source_duration = 0.0
+                source_frame_count = 0
 
-            waveform = wave_full[:, start_sample:end_sample].unsqueeze(0)
-            audio_dict = {"waveform": waveform, "sample_rate": sample_rate}
+                orig_w = 512
+                orig_h = 512
 
-        frame_count = image_tensor.shape[0] if frames_loaded > 0 else 0
-        final_duration_sec = round(float(frame_count / fr), 2)
+                g_start_frame = 0
+                g_end_local = 0
 
-        if display_mode == "frames":
-            g_start_frame = s_frame_0
-            if e_frame_0 > 0:
-                g_end_frame = e_frame_0
-            else:
-                g_end_frame = g_start_frame + max(0, frame_count - 1)
+        #################################################################
+        # PATH SOURCE
+        #################################################################
         else:
-            g_start_frame = int(round(actual_start_time * fr))
-            if actual_end_time == float("inf"):
-                g_end_frame = g_start_frame + max(0, frame_count - 1)
+            ui_video_path = str(video_to_load)
+
+            cache = self._get_source_cache(source_sig)
+
+            orig_w = int(cache.get("width", 512))
+            orig_h = int(cache.get("height", 512))
+            source_fps = float(cache.get("source_fps", 0.0))
+            source_duration = float(cache.get("duration", 0.0))
+            source_frame_count = int(cache.get("source_frame_count", 0))
+
+            manual_crop_left = int(orig_w * crop_x)
+            manual_crop_top = int(orig_h * crop_y)
+            manual_crop_right = orig_w - int(orig_w * (crop_x + crop_w))
+            manual_crop_bottom = orig_h - int(orig_h * (crop_y + crop_h))
+
+            manual_crop_left = max(0, min(manual_crop_left, orig_w - 1))
+            manual_crop_top = max(0, min(manual_crop_top, orig_h - 1))
+            manual_crop_right = max(0, min(manual_crop_right, orig_w - manual_crop_left - 1))
+            manual_crop_bottom = max(0, min(manual_crop_bottom, orig_h - manual_crop_top - 1))
+
+            s_frame_0 = max(0, int(start_frame))
+            e_frame_0 = int(end_frame) if end_frame > 0 else 0
+
+            if display_mode == "frames":
+                actual_start_time = float(s_frame_0) / fr
+                actual_end_time = float(e_frame_0 + 1) / fr if e_frame_0 > 0 else (source_duration if source_duration > 0 else float("inf"))
             else:
-                g_end_frame = max(g_start_frame, int(round(actual_end_time * fr)) - 1)
+                actual_start_time = float(start_time)
+                actual_end_time = float(end_time) if (end_time > 0 and end_time > start_time) else (source_duration if source_duration > 0 else float("inf"))
 
-        g_start_frame = max(0, g_start_frame)
-        g_end_frame = max(g_start_frame, g_end_frame)
+            if actual_end_time <= 0:
+                actual_end_time = float("inf")
 
-        # Use actual output frame count as local end index.
-        g_end_local = max(0, frame_count - 1)
+            target_frame_count = -1
+            if display_mode == "frames" and e_frame_0 > 0:
+                target_frame_count = e_frame_0 - s_frame_0 + 1
+                if target_frame_count < 0:
+                    target_frame_count = 0
+
+            frame_times_np = cache.get("frame_times", np.asarray([], dtype=np.float64))
+            indices = self._sample_frame_indices(
+                frame_times_np,
+                actual_start_time,
+                actual_end_time,
+                fr,
+                target_frame_count
+            )
+
+            if len(indices) > 0:
+                idx_tensor = torch.from_numpy(np.asarray(indices, dtype=np.int64))
+                frames_uint = cache["frames"].index_select(0, idx_tensor)
+
+                if manual_crop_left > 0 or manual_crop_top > 0 or manual_crop_right > 0 or manual_crop_bottom > 0:
+                    frames_uint = frames_uint[
+                        :,
+                        manual_crop_top:orig_h - manual_crop_bottom,
+                        manual_crop_left:orig_w - manual_crop_right,
+                        :
+                    ]
+
+                image_tensor = frames_uint.float().div_(255.0)
+                frames_loaded = int(image_tensor.shape[0])
+                frame_count = frames_loaded
+            else:
+                image_tensor = torch.zeros((1, 512, 512, 3), dtype=torch.float32)
+                frames_loaded = 0
+                frame_count = 0
+
+            wave_full = cache.get("audio_waveform", None)
+            if wave_full is not None and wave_full.numel() > 0:
+                sample_rate = int(cache.get("audio_sample_rate", 44100))
+                first_frame_time = float(cache.get("audio_first_time", 0.0))
+
+                offset_sec = max(0.0, actual_start_time - first_frame_time)
+                start_sample = int(offset_sec * sample_rate)
+
+                if actual_end_time == float("inf"):
+                    end_sample = wave_full.shape[1]
+                else:
+                    duration_sec_audio = actual_end_time - actual_start_time
+                    end_sample = start_sample + int(duration_sec_audio * sample_rate)
+
+                total_samples = wave_full.shape[1]
+                start_sample = max(0, min(start_sample, total_samples))
+                end_sample = max(start_sample, min(end_sample, total_samples))
+
+                waveform = wave_full[:, start_sample:end_sample].unsqueeze(0)
+                audio_dict = {"waveform": waveform, "sample_rate": sample_rate}
+
+            if display_mode == "frames":
+                g_start_frame = s_frame_0
+                if e_frame_0 > 0:
+                    g_end_frame = e_frame_0
+                else:
+                    g_end_frame = g_start_frame + max(0, frame_count - 1)
+            else:
+                g_start_frame = int(round(actual_start_time * fr))
+                if actual_end_time == float("inf"):
+                    g_end_frame = g_start_frame + max(0, frame_count - 1)
+                else:
+                    g_end_frame = max(g_start_frame, int(round(actual_end_time * fr)) - 1)
+
+            g_start_frame = max(0, g_start_frame)
+            g_end_frame = max(g_start_frame, g_end_frame)
+
+            # Use actual output frame count as local end index.
+            g_end_local = max(0, frame_count - 1)
+
+        #################################################################
+        # COMMON FINAL PROCESSING
+        #################################################################
+        final_duration_sec = round(float(frame_count / fr), 2) if fr > 0 else 0.0
 
         repeat_last_frame_count = 0
 
@@ -863,6 +991,7 @@ class VideoLoaderPW:
         split_info_str = json.dumps(split_info_dict)
 
         # Normalize final audio after all frame/audio adjustments.
+        # For images source audio_dict is None, so this does nothing.
         audio_dict = self._normalize_audio(audio_dict, normalize)
 
         # Final waveform peaks after normalization.
@@ -871,11 +1000,14 @@ class VideoLoaderPW:
         loaded_h = int(image_tensor.shape[1]) if frame_count > 0 and image_tensor is not None else 0
         loaded_w = int(image_tensor.shape[2]) if frame_count > 0 and image_tensor is not None else 0
 
-        full_frame_count_at_loaded_fps = int(round(source_duration * fr)) if source_duration > 0 else frame_count
+        if source_mode == "images":
+            full_frame_count_at_loaded_fps = source_frame_count
+        else:
+            full_frame_count_at_loaded_fps = int(round(source_duration * fr)) if source_duration > 0 else frame_count
 
         # Final video_info after all calculations.
         video_info = json.dumps({
-            "active_source": active_source,
+            "source_mode": source_mode,
             "source_changed": source_changed,
             "source_fps": round(source_fps, 2),
             "source_frame_count": source_frame_count,
@@ -893,13 +1025,13 @@ class VideoLoaderPW:
         }, indent=4)
 
         return {
-            "ui": {"video_path": [str(effective_source)], "video_info": [video_info]},
+            "ui": {"video_path": [ui_video_path], "video_info": [video_info]},
             "result": (
                 image_tensor,
                 audio_dict,
                 frame_count,
                 final_duration_sec,
-                float(frame_rate),
+                float(fr),
                 video_info,
                 repeat_last_frame_count,
                 split_info_str
