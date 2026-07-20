@@ -481,9 +481,10 @@ app.registerExtension({
         }
 
         const container = document.createElement("div");
+        // NOTE: removed fixed "min-height: 250px" to prevent overflow after refresh.
+        // The minimum gallery height is now enforced through the node sizing logic instead.
         container.style.cssText = `
             width: 100%;
-            min-height: 250px; 
             min-width: 100px; 
             background: #222222;
             border: 1px solid #353545;
@@ -591,13 +592,16 @@ app.registerExtension({
         const heightWidget = node.widgets.find(w => w.name === "height");
         const longerWidget = node.widgets.find(w => w.name === "longer_size");
         const shorterWidget = node.widgets.find(w => w.name === "shorter_size");
+        const interpolationWidget = node.widgets.find(w => w.name === "interpolation");
         const resizeMethodWidget = node.widgets.find(w => w.name === "resize_method");
         const padColorWidget = node.widgets.find(w => w.name === "pad_color");
         const cropPositionWidget = node.widgets.find(w => w.name === "crop_position");
+        const multipleOfWidget = node.widgets.find(w => w.name === "multiple_of");
 
         function updateResizeWidgetsVisibility() {
-            const mode = scaleModeWidget ? scaleModeWidget.value : "scale dimensions";
+            const mode = scaleModeWidget ? scaleModeWidget.value : "none";
             const rMode = resizeMethodWidget ? resizeMethodWidget.value : "keep proportion";
+            const isNone = mode === "none";
             
             const setHidden = (widget, isHidden) => {
                 if (!widget) return;
@@ -614,12 +618,16 @@ app.registerExtension({
                 }
             };
 
-            setHidden(widthWidget, mode !== "scale dimensions");
-            setHidden(heightWidget, mode !== "scale dimensions");
-            setHidden(longerWidget, mode !== "scale longer");
-            setHidden(shorterWidget, mode !== "scale shorter");
-            setHidden(padColorWidget, rMode !== "pad");
-            setHidden(cropPositionWidget, rMode !== "crop");
+            // When "none" is selected, hide all resize-related fields
+            setHidden(widthWidget, isNone || mode !== "scale dimensions");
+            setHidden(heightWidget, isNone || mode !== "scale dimensions");
+            setHidden(longerWidget, isNone || mode !== "scale longer");
+            setHidden(shorterWidget, isNone || mode !== "scale shorter");
+            setHidden(interpolationWidget, isNone);
+            setHidden(resizeMethodWidget, isNone);
+            setHidden(multipleOfWidget, isNone);
+            setHidden(padColorWidget, isNone || rMode !== "pad");
+            setHidden(cropPositionWidget, isNone || rMode !== "crop");
 
             if (node.graph) node.graph.setDirtyCanvas(true, true);
         }
@@ -699,7 +707,6 @@ app.registerExtension({
         }
 
         function optimizeGrid(gridW, gridH) {
-            // FIX: Changed split(/\n|,/) to split('\n') to support filenames with commas
             const paths = (pathsWidget?.value || "").split('\n').map(s => s.trim()).filter(s => s);
             const N = paths.length;
             
@@ -791,7 +798,8 @@ app.registerExtension({
                 app.graph.setDirtyCanvas(true, true);
             }
 
-            const availableGalleryHeight = targetH - galleryY - paddingBottom;
+            // Clamp the gallery height so it never exceeds the node's bottom edge
+            const availableGalleryHeight = Math.max(targetH - galleryY - paddingBottom, 60);
             container.style.height = availableGalleryHeight + "px";
 
             isLayouting = false;
@@ -816,7 +824,7 @@ app.registerExtension({
             node.min_size = [minW, absoluteMinHeight];
             enforceV3CSS(); 
             
-            const availableGalleryHeight = size[1] - galleryY - paddingBottom;
+            const availableGalleryHeight = Math.max(size[1] - galleryY - paddingBottom, 60);
             container.style.height = availableGalleryHeight + "px";
         };
 
@@ -887,7 +895,6 @@ app.registerExtension({
 
         function refreshGallery(isRearranging = false) {
             grid.innerHTML = "";
-            // FIX: Changed split(/\n|,/) to split('\n') to support filenames with commas
             const paths = (pathsWidget?.value || "").split('\n').map(s => s.trim()).filter(s => s);
             
             if (!isRearranging) {
@@ -1195,6 +1202,28 @@ app.registerExtension({
                 });
             }
         };
+
+        // --- FIX: Re-sync layout after the graph is fully loaded (browser refresh) ---
+        // During deserialization the gallery widget's last_y is not yet finalized,
+        // which previously caused the gallery container to overflow the node bounds.
+        node._pwUpdateLayout = () => updateLayout();
+        if (!window._pwImageLoaderGraphHooked) {
+            window._pwImageLoaderGraphHooked = true;
+            const _origAfterGraphConfigured = app.graph.afterGraphConfigured;
+            app.graph.afterGraphConfigured = function() {
+                if (_origAfterGraphConfigured) _origAfterGraphConfigured.apply(this, arguments);
+                setTimeout(() => {
+                    const nodes = app.graph._nodes || [];
+                    for (const n of nodes) {
+                        if (n.comfyClass === "ImageLoaderPW" && typeof n._pwUpdateLayout === "function") {
+                            n._pwUpdateLayout();
+                        }
+                    }
+                }, 100);
+            };
+        }
+        // Additional delayed re-syncs to cover late layout finalization
+        [200, 500, 900].forEach(delay => setTimeout(() => updateLayout(), delay));
 
         setTimeout(() => refreshGallery(), 100);
     }
