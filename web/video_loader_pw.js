@@ -61,6 +61,7 @@ app.registerExtension({
                 node._pwTimingInitialized = false;
                 node._pwSourceDuration = 0;
                 node._pwFullFrameCount = 0;
+                node._pwActiveSourceMode = "";
 
                 const pathWidget = this.widgets.find((w) => w.name === "path");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
@@ -167,7 +168,7 @@ app.registerExtension({
                     }
                     if (sc === 2 && splitGreenIdxWidget && splitGreenWidget) {
                         let g_f = parseInt(splitGreenIdxWidget.value) || 0;
-                        let p_f = splitPurpleIdxWidget ? parseInt(splitPurpleIdxWidget.value) || 0 : s_f;
+                        let p_f = splitPurpleIdxWidget ? parseInt(splitPurpleWidget.value) || 0 : s_f;
                         let min_g = p_f + 1;
                         let max_g = e_f - 1;
                         if (min_g > max_g) min_g = max_g;
@@ -389,6 +390,7 @@ app.registerExtension({
                     node._pwTimingInitialized = false;
                     node._pwSourceDuration = 0;
                     node._pwFullFrameCount = 0;
+                    node._pwActiveSourceMode = "";
 
                     if (startTimeWidget) startTimeWidget.value = 0;
                     if (endTimeWidget) endTimeWidget.value = 0;
@@ -474,51 +476,56 @@ app.registerExtension({
                     if (!output) return;
 
                     let info = null;
-                    let activeSource = "";
-                    let sourceChanged = false;
-                    let hasSourceChangedField = false;
-
                     if (output.video_info) {
                         try {
                             const infoStr = Array.isArray(output.video_info) ? output.video_info[0] : output.video_info;
                             info = JSON.parse(infoStr);
-
-                            if (info && typeof info === "object") {
-                                activeSource = info.active_source || "";
-
-                                if (Object.prototype.hasOwnProperty.call(info, "source_changed")) {
-                                    hasSourceChangedField = true;
-                                    sourceChanged = info.source_changed === true;
-                                }
-                            }
                         } catch (e) {
                             console.error("Failed to parse video_info", e);
-                            info = null;
                         }
                     }
 
-                    const effectivePath = (output.video_path && output.video_path.length > 0) ? output.video_path[0] : "";
+                    // Handle source priority and source change.
+                    if (info && info.source_mode !== undefined) {
+                        if (info.source_mode === "images") {
+                            node._pwActiveSourceMode = "images";
 
-                    if (hasSourceChangedField) {
-                        if (sourceChanged) {
-                            resetAllParams();
-                            node._lastLoadedVideoPath = effectivePath;
-                            node._pwTimingInitialized = false;
-                        } else if (effectivePath !== node._lastLoadedVideoPath) {
-                            node._lastLoadedVideoPath = effectivePath;
-                        }
+                            if (info.source_changed === true) {
+                                resetAllParams();
+                                node._lastLoadedVideoPath = "";
+                                node._pwTimingInitialized = false;
 
-                        if (pathWidget && activeSource !== "video") {
-                            pathWidget.value = effectivePath;
-                        }
+                                // Images source does not use path video preview.
+                                if (videoPreview) {
+                                    videoPreview.removeAttribute("src");
+                                    videoPreview.load();
+                                }
+                            }
+                        } else if (info.source_mode === "path") {
+                            node._pwActiveSourceMode = "path";
 
-                        if (effectivePath && node.updatePreview) {
-                            node.updatePreview(effectivePath);
+                            if (output.video_path && output.video_path.length > 0) {
+                                applyVideoPath(output.video_path[0]);
+                            }
+                        } else {
+                            // empty source
+                            node._pwActiveSourceMode = "";
+
+                            if (info.source_changed === true) {
+                                resetAllParams();
+                                node._lastLoadedVideoPath = "";
+                                node._pwTimingInitialized = false;
+
+                                if (videoPreview) {
+                                    videoPreview.removeAttribute("src");
+                                    videoPreview.load();
+                                }
+                            }
                         }
                     } else {
-                        // Fallback for older backend without source_changed.
-                        if (effectivePath) {
-                            applyVideoPath(effectivePath);
+                        // Backward compatibility for older video_info without source_mode.
+                        if (output.video_path && output.video_path.length > 0) {
+                            applyVideoPath(output.video_path[0]);
                         }
                     }
 
