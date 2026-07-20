@@ -273,6 +273,10 @@ def cv_frame_generator(video_path, force_rate, frame_load_cap, skip_first_frames
 
 
 class LMMSelectImagePW:
+    # 顺序对应：index, paths, image(list), metadata(list)
+    # image(list) 需要作为 list 输入接收 Image Loader PW 的 image_list
+    INPUT_IS_LIST = (False, False, True, False)
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -281,10 +285,8 @@ class LMMSelectImagePW:
             },
             "optional": {
                 "paths": ("LMM_ALL_PATHS",),
-                # 使用 * 更好兼容 Image Loader PW 的 image_list 输出
-                "image(list)": ("*",),
-                # 可选：外部 metadata list，例如 Image Loader PW 如果输出 metadata_list，可接这里
-                "metadata(list)": ("*",),
+                "image(list)": ("IMAGE",),
+                "metadata(list)": ("LMM_METADATA_LIST",),
             },
         }
 
@@ -301,6 +303,37 @@ class LMMSelectImagePW:
         if isinstance(extra, dict) and extra:
             merged.update(extra)
         return merged
+
+    def _normalize_index(self, index):
+        if isinstance(index, (list, tuple)):
+            index = index[0] if len(index) > 0 else 0
+
+        try:
+            index = int(index)
+        except Exception:
+            index = 0
+
+        return max(0, index)
+
+    def _is_empty_image_input(self, x):
+        if x is None:
+            return True
+
+        if isinstance(x, (list, tuple)):
+            if len(x) == 0:
+                return True
+            return all(self._is_empty_image_input(i) for i in x)
+
+        if isinstance(x, dict):
+            if not x:
+                return True
+            payload_keys = (
+                "image", "images", "image_list", "tensor", "frames",
+                "items", "list", "data", "path"
+            )
+            return not any(k in x for k in payload_keys)
+
+        return False
 
     def _normalize_image_tensor(self, tensor):
         if tensor is None or tensor.numel() == 0:
@@ -377,6 +410,10 @@ class LMMSelectImagePW:
 
         s = s.strip()
         if not s:
+            return False
+
+        # 过长或包含换行，通常是 prompt，不视为路径
+        if len(s) > 512 or "\n" in s or "\r" in s:
             return False
 
         lower = s.lower()
@@ -560,11 +597,10 @@ class LMMSelectImagePW:
         # 直接写在 dict 里的 metadata 字段
         direct = {}
         direct_keys = (
-            "positive_prompt", "positive", "pos",
-            "negative_prompt", "negative", "neg",
-            "seed", "noise_seed",
-            "parameters", "prompt", "workflow",
-            "pnginfo", "exif"
+            "positive_prompt", "positive", "pos", "positivePrompt",
+            "negative_prompt", "negative", "neg", "negativePrompt",
+            "seed", "noise_seed", "noiseSeed", "seed_value",
+            "parameters", "prompt", "workflow"
         )
         for k in direct_keys:
             if k in data and data[k] is not None:
@@ -595,70 +631,6 @@ class LMMSelectImagePW:
 
         return single, meta_list
 
-    def _extract_metadata_from_object(self, obj):
-        """
-        从自定义对象的属性中提取 metadata。
-        """
-        single = {}
-        meta_list = None
-
-        if obj is None:
-            return single, meta_list
-
-        # 直接 prompt / seed 属性
-        direct = {}
-        direct_attrs = (
-            "positive_prompt", "positive", "pos",
-            "negative_prompt", "negative", "neg",
-            "seed", "noise_seed",
-            "parameters", "prompt", "workflow",
-            "pnginfo", "exif"
-        )
-        for attr in direct_attrs:
-            if hasattr(obj, attr):
-                try:
-                    val = getattr(obj, attr)
-                    if not callable(val) and val is not None:
-                        direct[attr] = val
-                except Exception:
-                    pass
-
-        if direct:
-            single = self._merge_metadata(single, self._normalize_metadata_item(direct))
-
-        # 单个 metadata 属性
-        for attr in ("metadata", "meta", "info", "image_metadata"):
-            if hasattr(obj, attr):
-                try:
-                    val = getattr(obj, attr)
-                    if callable(val) or val is None:
-                        continue
-                    s_single, s_list = self._split_metadata_payload(val)
-                    if s_single:
-                        single = self._merge_metadata(single, s_single)
-                    if s_list is not None:
-                        meta_list = s_list if meta_list is None else meta_list + s_list
-                except Exception:
-                    pass
-
-        # metadata list 属性
-        for attr in (
-            "metadatas", "metas", "infos",
-            "image_metadatas", "metadata_list", "metadatas_list", "metadata_items"
-        ):
-            if hasattr(obj, attr):
-                try:
-                    val = getattr(obj, attr)
-                    if callable(val) or val is None:
-                        continue
-                    s_list = self._normalize_metadata_sequence(val)
-                    if s_list is not None:
-                        meta_list = s_list if meta_list is None else meta_list + s_list
-                except Exception:
-                    pass
-
-        return single, meta_list
-
     def _split_metadata_payload(self, payload):
         """
         将一个 metadata payload 分成:
@@ -679,6 +651,43 @@ class LMMSelectImagePW:
 
         return self._normalize_metadata_item(payload), None
 
+    def _extract_attached_metadata(self, obj):
+        """
+        读取对象上挂载的 metadata。
+        例如 ImageLoaderPW 会给每张图的 tensor 设置 _metadata。
+        """
+        if obj is None:
+            return {}, None
+
+        val = None
+
+        for attr in ("_metadata", "metadata", "meta", "image_metadata", "pw_metadata"):
+            try:
+                if hasattr(obj, attr):
+                    candidate = getattr(obj, attr)
+                    if candidate is None:
+                        continue
+                    if callable(candidate):
+                        continue
+                    val = candidate
+                    break
+            except Exception:
+                pass
+
+        # PIL.Image 的 info 也作为 metadata 兜底
+        if val is None and isinstance(obj, Image.Image):
+            try:
+                info = getattr(obj, "info", None)
+                if info:
+                    val = dict(info)
+            except Exception:
+                val = None
+
+        if val is None:
+            return {}, None
+
+        return self._split_metadata_payload(val)
+
     def _extract_prompts_and_seed_from_metadata(self, metadata):
         """
         从 metadata 中提取 positive_prompt / negative_prompt / seed。
@@ -692,17 +701,17 @@ class LMMSelectImagePW:
         negative = None
         seed = None
 
-        for k in ("positive_prompt", "positive", "pos"):
+        for k in ("positive_prompt", "positive", "pos", "positivePrompt"):
             if k in md and md[k] is not None:
                 positive = str(md[k])
                 break
 
-        for k in ("negative_prompt", "negative", "neg"):
+        for k in ("negative_prompt", "negative", "neg", "negativePrompt"):
             if k in md and md[k] is not None:
                 negative = str(md[k])
                 break
 
-        for k in ("seed", "noise_seed", "seed_value"):
+        for k in ("seed", "noise_seed", "seed_value", "noiseSeed"):
             if k in md and md[k] is not None:
                 try:
                     seed = int(md[k])
@@ -710,16 +719,8 @@ class LMMSelectImagePW:
                 except Exception:
                     seed = None
 
-        # 如果 metadata 本身就是一个 ComfyUI workflow dict，包装成 workflow 字符串再解析
-        workflow_md = None
-        if "nodes" in md and "links" in md:
-            try:
-                workflow_md = {"workflow": json.dumps(md)}
-            except Exception:
-                workflow_md = None
-
         # 复用原有解析逻辑，处理 parameters / workflow / prompt JSON
-        g_positive, g_negative, g_seed = extract_prompts_and_seed(workflow_md or md)
+        g_positive, g_negative, g_seed = extract_prompts_and_seed(md)
 
         if positive is None:
             plain_prompt = None
@@ -751,35 +752,6 @@ class LMMSelectImagePW:
             seed = 0
 
         return str(positive or ""), str(negative or ""), seed
-
-    def _load_metadata_from_path(self, path, metadata=None):
-        provided_metadata = self._normalize_metadata_item(metadata)
-
-        if isinstance(path, os.PathLike):
-            path = os.fspath(path)
-
-        if not isinstance(path, str) or not path or not os.path.exists(path):
-            return provided_metadata
-
-        try:
-            with Image.open(path) as img:
-                file_metadata = {}
-                try:
-                    if 'parameters' in img.info:
-                        file_metadata['parameters'] = img.info['parameters']
-                    if 'prompt' in img.info:
-                        file_metadata['prompt'] = img.info['prompt']
-                    if 'workflow' in img.info:
-                        file_metadata['workflow'] = img.info['workflow']
-                except Exception:
-                    pass
-
-                # 文件内 metadata 作为底，外部传入 metadata 优先覆盖
-                return self._merge_metadata(file_metadata, provided_metadata)
-
-        except Exception as e:
-            print(f"PW Utility: Error reading metadata from image {path}: {e}")
-            return provided_metadata
 
     def _load_tensor_and_metadata_from_path(self, path, metadata=None):
         if isinstance(path, os.PathLike):
@@ -839,18 +811,6 @@ class LMMSelectImagePW:
         positive_prompt, negative_prompt, seed = self._extract_prompts_and_seed_from_metadata(metadata)
         return (tensor, W_orig, H_orig, positive_prompt, negative_prompt, seed,)
 
-    def _yield_sequence_items(self, seq, base_md, meta_list, depth):
-        for i, item in enumerate(seq):
-            item_md = base_md
-
-            if meta_list is not None:
-                if i < len(meta_list):
-                    item_md = self._merge_metadata(base_md, meta_list[i])
-                elif len(meta_list) == 1:
-                    item_md = self._merge_metadata(base_md, meta_list[0])
-
-            yield from self._iter_image_items(item, item_md, None, depth + 1)
-
     def _iter_image_items(self, image_input, metadata=None, metadata_list=None, depth=0):
         """
         将 image(list) 输入展平为单张图片序列，并尽量为每张图片绑定对应 metadata。
@@ -861,52 +821,41 @@ class LMMSelectImagePW:
         base_md = self._normalize_metadata_item(metadata)
         meta_list = self._normalize_metadata_sequence(metadata_list) if metadata_list is not None else None
 
+        # 读取对象自身挂载的 metadata，例如 tensor._metadata
+        attached_single, attached_list = self._extract_attached_metadata(image_input)
+        if attached_single:
+            # 外部传入 metadata 优先于 attached metadata
+            base_md = self._merge_metadata(attached_single, base_md)
+
+        if attached_list is not None and meta_list is None:
+            meta_list = attached_list
+
         # dict 包装结构
         if isinstance(image_input, dict):
-            # 如果 dict 中带 path，可先读文件 metadata 作为 fallback
-            path_keys = (
-                "path", "image_path", "filepath", "file_path",
-                "img_path", "source_path", "image_file", "file"
-            )
-            path_md = {}
-            for key in path_keys:
-                if key in image_input and image_input[key] is not None:
-                    path_md = self._load_metadata_from_path(image_input[key], {})
-                    if path_md:
-                        break
-
-            # 顺序：path metadata -> 外部 base_md -> dict 内 single metadata
-            base_md = self._merge_metadata(path_md, base_md)
-
             single_md, container_meta_list = self._extract_metadata_from_dict(image_input)
             base_md = self._merge_metadata(base_md, single_md)
 
             if container_meta_list is not None:
                 meta_list = container_meta_list
 
-            payload_keys = (
-                "image", "images", "image_list", "tensor", "frames",
-                "items", "list", "data", "pixels", "img", "image_tensor"
-            )
-            for key in payload_keys:
+            for key in ("image", "images", "image_list", "tensor", "frames", "items", "list", "data"):
                 if key in image_input:
                     yield from self._iter_image_items(image_input[key], base_md, meta_list, depth + 1)
                     return
 
-            for key in path_keys:
-                if key in image_input and image_input[key] is not None:
-                    md = base_md
-                    if meta_list and len(meta_list) > 0:
-                        md = self._merge_metadata(base_md, meta_list[0])
+            if "path" in image_input:
+                md = base_md
+                if meta_list and len(meta_list) > 0:
+                    md = self._merge_metadata(base_md, meta_list[0])
 
-                    tensor, md2 = self._load_tensor_and_metadata_from_path(image_input[key], md)
-                    if tensor is not None and tensor.shape[0] > 0:
-                        for i in range(tensor.shape[0]):
-                            item_md = md2
-                            if meta_list and i < len(meta_list):
-                                item_md = self._merge_metadata(base_md, meta_list[i])
-                            yield tensor[i:i + 1], item_md
-                    return
+                tensor, md2 = self._load_tensor_and_metadata_from_path(image_input["path"], md)
+                if tensor is not None and tensor.shape[0] > 0:
+                    for i in range(tensor.shape[0]):
+                        item_md = md2
+                        if meta_list and i < len(meta_list):
+                            item_md = self._merge_metadata(base_md, meta_list[i])
+                        yield tensor[i:i + 1], item_md
+                return
 
             return
 
@@ -962,34 +911,6 @@ class LMMSelectImagePW:
                     yield tensor[i:i + 1], item_md
             return
 
-        # 自定义对象：优先读取 .image_list / .images / .frames 等属性
-        if not isinstance(image_input, (bytes, dict, list, tuple, torch.Tensor, np.ndarray, Image.Image, str, os.PathLike)):
-            obj_single, obj_meta_list = self._extract_metadata_from_object(image_input)
-            if obj_single:
-                base_md = self._merge_metadata(base_md, obj_single)
-            if obj_meta_list is not None:
-                meta_list = obj_meta_list
-
-            for attr in ("image_list", "images", "frames", "items", "data", "image", "tensor", "pixels"):
-                if hasattr(image_input, attr):
-                    try:
-                        payload = getattr(image_input, attr)
-                    except Exception:
-                        continue
-
-                    if payload is not None and payload is not image_input:
-                        yield from self._iter_image_items(payload, base_md, meta_list, depth + 1)
-                        return
-
-            # 支持自定义序列对象：len + getitem
-            if hasattr(image_input, "__len__") and hasattr(image_input, "__getitem__"):
-                try:
-                    seq = [image_input[i] for i in range(len(image_input))]
-                    yield from self._yield_sequence_items(seq, base_md, meta_list, depth)
-                    return
-                except Exception:
-                    pass
-
         # list / tuple / 其它可迭代对象
         seq = None
         if isinstance(image_input, (list, tuple)):
@@ -1001,7 +922,21 @@ class LMMSelectImagePW:
                 seq = None
 
         if seq is not None:
-            yield from self._yield_sequence_items(seq, base_md, meta_list, depth)
+            # 单元素容器直接展开，避免 ComfyUI 把 list 再包一层导致 index / metadata 错位
+            if len(seq) == 1:
+                yield from self._iter_image_items(seq[0], base_md, meta_list, depth + 1)
+                return
+
+            for i, item in enumerate(seq):
+                item_md = base_md
+
+                if meta_list is not None:
+                    if i < len(meta_list):
+                        item_md = self._merge_metadata(base_md, meta_list[i])
+                    elif len(meta_list) == 1:
+                        item_md = self._merge_metadata(base_md, meta_list[0])
+
+                yield from self._iter_image_items(item, item_md, None, depth + 1)
             return
 
         # 单张图片对象 / ndarray / PIL.Image 等
@@ -1017,97 +952,62 @@ class LMMSelectImagePW:
                     item_md = self._merge_metadata(base_md, meta_list[i])
                 yield tensor[i:i + 1], item_md
 
-    def _select_image_and_metadata_from_image_input(self, image_input, index, external_metadata=None):
-        try:
-            index = int(index)
-        except Exception:
-            index = 0
-
-        if index < 0 or image_input is None:
-            return None, {}
-
-        external_single = {}
-        external_list = None
-
-        if external_metadata is not None:
-            external_single, external_list = self._split_metadata_payload(external_metadata)
-
-        for current_index, (tensor, md) in enumerate(
-            self._iter_image_items(image_input, external_single, external_list)
-        ):
-            if current_index == index:
-                return tensor, md
-
-        return None, {}
-
-    def _get_metadata_from_paths(self, paths, index):
-        try:
-            index = int(index)
-        except Exception:
-            index = 0
-
-        selected_item = parse_selection_and_get_item(paths, index, "image")
-        if not selected_item or 'path' not in selected_item:
-            return {}
-
-        selected_path = selected_item['path']
-        metadata = selected_item.get('metadata', {})
-        return self._load_metadata_from_path(selected_path, metadata)
-
-    def get_original_image(self, index, paths=None, image_list=None, metadata_list=None, **kwargs):
-        # 兼容输入名 image(list)
-        image_input = kwargs.get("image(list)", image_list)
-        metadata_input = kwargs.get("metadata(list)", metadata_list)
-
+    def _get_image_from_image_input(self, image_input, index, external_metadata_list=None):
         empty_return = self._empty_return()
+        index = self._normalize_index(index)
 
-        # image(list) 优先级更高：只要该端口有输入，就使用它作为图片来源
-        if image_input is not None:
-            selected_tensor, selected_md = self._select_image_and_metadata_from_image_input(
-                image_input,
-                index,
-                metadata_input
-            )
+        if image_input is None or self._is_empty_image_input(image_input):
+            return empty_return
 
-            if selected_tensor is None:
-                return empty_return
+        external_meta_list = self._normalize_metadata_sequence(external_metadata_list) if external_metadata_list is not None else None
 
-            # 如果同时连接了 paths，则用 paths 的同 index metadata 作为补全
-            # 注意：这里只补 metadata，不改变图片来源
-            path_md = {}
-            if paths is not None:
-                path_md = self._get_metadata_from_paths(paths, index)
+        for current_index, (tensor, md) in enumerate(self._iter_image_items(image_input, {}, None)):
+            if current_index == index:
+                # 外部 metadata(list) 按展平后的图片索引绑定
+                if external_meta_list:
+                    if len(external_meta_list) == 1:
+                        ext_md = external_meta_list[0]
+                    elif current_index < len(external_meta_list):
+                        ext_md = external_meta_list[current_index]
+                    else:
+                        ext_md = {}
 
-            # image(list) 自带 metadata 优先，paths metadata 作为 fallback
-            merged_md = self._merge_metadata(path_md, selected_md)
-            return self._result_from_tensor(selected_tensor, merged_md)
+                    # 外部显式 metadata 优先
+                    md = self._merge_metadata(md, ext_md)
+
+                return self._result_from_tensor(tensor, md)
+
+        return empty_return
+
+    def get_original_image(self, index, paths=None, **kwargs):
+        index = self._normalize_index(index)
+
+        # 防止某些情况下 paths 被包成 list
+        if isinstance(paths, (list, tuple)):
+            paths = paths[0] if len(paths) > 0 else None
+
+        image_input = kwargs.get("image(list)", None)
+        metadata_input = kwargs.get("metadata(list)", None)
+
+        # image(list) 优先级更高：只要该端口有有效输入，就忽略 paths
+        if image_input is not None and not self._is_empty_image_input(image_input):
+            return self._get_image_from_image_input(image_input, index, metadata_input)
 
         # 回退到 paths 模式
         selected_item = parse_selection_and_get_item(paths, index, "image")
+        empty_return = self._empty_return()
+
         if not selected_item or 'path' not in selected_item or not os.path.exists(selected_item['path']):
             return empty_return
 
         selected_path = selected_item['path']
         metadata = selected_item.get('metadata', {})
 
-        # 如果此时还接了 metadata(list)，也允许补全 paths 模式
+        # 如果额外接了 metadata(list)，也允许在 paths 模式下按 index 补充分 metadata
         if metadata_input is not None:
-            external_single, external_list = self._split_metadata_payload(metadata_input)
-            try:
-                idx = int(index)
-            except Exception:
-                idx = 0
-
-            extra_md = {}
-            if external_list is not None:
-                if idx < len(external_list):
-                    extra_md = external_list[idx]
-                elif len(external_list) == 1:
-                    extra_md = external_list[0]
-            elif external_single:
-                extra_md = external_single
-
-            metadata = self._merge_metadata(metadata, extra_md)
+            meta_seq = self._normalize_metadata_sequence(metadata_input)
+            if meta_seq and index < len(meta_seq):
+                metadata = self._merge_metadata(meta_seq[index], metadata)
 
         return self._load_image_result_from_path(selected_path, metadata)
 
