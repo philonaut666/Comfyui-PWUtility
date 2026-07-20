@@ -213,6 +213,7 @@ class ImageLoaderPW:
 
     def load_images(self, image_paths, scale_mode, width, height, longer_size, shorter_size, interpolation, resize_method, pad_color, crop_position, multiple_of, img_compression):
         results = []
+        metadata_list = []  # Store metadata for each image
         valid_paths = [p.strip() for p in image_paths.split("\n") if p.strip()]
 
         def align_to_multiple(val, multiple):
@@ -245,6 +246,18 @@ class ImageLoaderPW:
                     continue
 
                 image = Image.open(full_path)
+                
+                # Read metadata from the image file
+                image_metadata = {}
+                if hasattr(image, 'info') and image.info:
+                    # Convert metadata to a serializable format
+                    for key, value in image.info.items():
+                        try:
+                            # Try to convert to string for serialization
+                            image_metadata[str(key)] = str(value)
+                        except Exception:
+                            pass
+                
                 image = ImageOps.exif_transpose(image)
                 image = image.convert("RGB")
 
@@ -301,7 +314,13 @@ class ImageLoaderPW:
                     img_pil = Image.open(img_byte_arr)
                     image_tensor = torch.from_numpy(np.array(img_pil).astype(np.float32) / 255.0)[None,]
 
+                # Attach metadata to the tensor
+                if image_metadata:
+                    image_tensor._metadata = image_metadata
+                
                 results.append(image_tensor)
+                metadata_list.append(image_metadata)
+                
             except Exception as e:
                 print(f"Error loading {path}: {e}")
 
@@ -314,7 +333,12 @@ class ImageLoaderPW:
 
         padded_results = results + [torch.zeros((1, 64, 64, 3))] * (50 - len(results))
 
-        return (image_list, *padded_results[:50])
+        # Prepare UI data with metadata
+        ui_data = {
+            "metadata": metadata_list
+        }
+
+        return (image_list, *padded_results[:50], {"ui": ui_data})
 
 NODE_CLASS_MAPPINGS = {
     "ImageLoaderPW": ImageLoaderPW
