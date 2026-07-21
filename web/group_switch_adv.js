@@ -764,9 +764,31 @@ app.registerExtension({
                 return allGroupsFlat.find(g => g._pwUniqueId === gid);
             };
 
+            // =========================================================
+            // 优先级系统：
+            // 1. 用户主动开关
+            // 2. 主动开关触发的 linkage
+            // 3. Max One / Always One 限制本身
+            // 4. 被限制关闭的组触发的 linkage
+            // 5. Always One 保底
+            // 6. 保底触发的 linkage
+            // =========================================================
+            const PRIORITY = {
+                MANUAL: 1000,
+                RESTRICTION: 950,
+                LINKAGE_MANUAL: 900,
+                LINKAGE_RESTRICTION: 500,
+                FALLBACK: 300,
+                LINKAGE_FALLBACK: 200
+            };
+
             const activeMap = new Map();
             const activeMetas = new Map();
-            const queue = [];
+            const statePriority = new Map();
+            const stateDepth = new Map();
+
+            const requests = [];
+            let nextRequestId = 0;
             const MAX_DEPTH = 100;
 
             const getActive = (gid) => {
@@ -802,57 +824,37 @@ app.registerExtension({
                 syncEnabledGlobal(gid, active);
             };
 
+            const metaFromRequest = (req) => {
+                return {
+                    ownerNodeId: req.ownerNodeId,
+                    parent: req.parent,
+                    depth: req.depth,
+                    skipRestriction: !!req.skipRestriction,
+                    priority: req.priority
+                };
+            };
+
+            const addActiveMeta = (gid, req) => {
+                const metas = activeMetas.get(gid) || [];
+                metas.push(metaFromRequest(req));
+                activeMetas.set(gid, metas);
+            };
+
             const requestState = (gid, active, meta = {}) => {
-                if ((meta.depth || 0) > MAX_DEPTH) return false;
+                if ((meta.depth || 0) > MAX_DEPTH) return;
 
-                const current = getActive(gid);
-
-                if (active === current) {
-                    if (active) {
-                        if (meta.ownerNodeId || meta.parent) {
-                            const metas = activeMetas.get(gid) || [];
-                            metas.push({
-                                ownerNodeId: meta.ownerNodeId,
-                                parent: meta.parent,
-                                depth: meta.depth || 0,
-                                skipRestriction: !!meta.skipRestriction
-                            });
-                            activeMetas.set(gid, metas);
-                        }
-                    } else if (meta.offMode !== undefined) {
-                        setGroupMode(gid, false, meta.offMode);
-                    }
-
-                    return false;
-                }
-
-                setGroupMode(gid, active, meta.offMode);
-                activeMap.set(gid, active);
-
-                if (active) {
-                    const metas = activeMetas.get(gid) || [];
-                    metas.push({
-                        ownerNodeId: meta.ownerNodeId,
-                        parent: meta.parent,
-                        depth: meta.depth || 0,
-                        skipRestriction: !!meta.skipRestriction
-                    });
-                    activeMetas.set(gid, metas);
-                } else {
-                    activeMetas.delete(gid);
-                }
-
-                queue.push({
+                requests.push({
+                    id: nextRequestId++,
                     gid,
                     active,
+                    priority: meta.priority || 0,
+                    linkagePriority: meta.linkagePriority ?? meta.priority ?? 0,
                     depth: meta.depth || 0,
-                    parent: meta.parent,
-                    ownerNodeId: meta.ownerNodeId,
+                    parent: meta.parent ?? null,
+                    ownerNodeId: meta.ownerNodeId ?? null,
                     skipRestriction: !!meta.skipRestriction,
                     offMode: meta.offMode
                 });
-
-                return true;
             };
 
             const globalRules = {};
@@ -891,29 +893,113 @@ app.registerExtension({
                     panelHasGroup(panel, gid);
             };
 
-            const isEventExemptInPanel = (evt, panel) => {
-                return isMetaExemptInPanel(evt, panel, evt.gid);
+            const isRequestExemptInPanel = (req, panel) => {
+                return isMetaExemptInPanel(req, panel, req.gid);
             };
 
-            const processQueue = () => {
-                while (queue.length) {
-                    const evt = queue.shift();
+            const getRestrictionMeta = (req) => {
+                // 主动操作或主动操作 linkage 引发的限制关闭，优先级较高。
+                if (req.priority >= PRIORITY.MANUAL || req.linkagePriority >= PRIORITY.LINKAGE_MANUAL) {
+                    return {
+                        priority: PRIORITY.RESTRICTION,
+                        linkagePriority: PRIORITY.LINKAGE_RESTRICTION
+                    };
+                }
 
-                    if (evt.depth > MAX_DEPTH) continue;
+                // 被限制关闭的组再次触发 linkage 后，如果又引发限制关闭。
+                if (req.linkagePriority >= PRIORITY.LINKAGE_RESTRICTION) {
+                    return {
+                        priority: PRIORITY.LINKAGE_RESTRICTION + 50,
+                        linkagePriority: PRIORITY.LINKAGE_RESTRICTION
+                    };
+                }
+
+                // Always One 保底链。
+                if (req.linkagePriority >= PRIORITY.LINKAGE_FALLBACK) {
+                    return {
+                        priority: PRIORITY.FALLBACK - 50,
+                        linkagePriority: PRIORITY.LINKAGE_FALLBACK
+                    };
+                }
+
+                return {
+                    priority: Math.max(1, req.priority - 10),
+                    linkagePriority: Math.max(1, (req.linkagePriority || 0) - 10)
+                };
+            };
+
+            const processRequests = () => {
+                while (requests.length) {
+                    requests.sort((a, b) => {
+                        if (b.priority !== a.priority) return b.priority - a.priority;
+                        if (a.depth !== b.depth) return a.depth - b.depth;
+                        return a.id - b.id;
+                    });
+
+                    const req = requests.shift();
+
+                    if (req.depth > MAX_DEPTH) continue;
+
+                    const current = getActive(req.gid);
+                    const currentPriority = statePriority.get(req.gid) ?? 0;
+                    const currentDepth = stateDepth.get(req.gid) ?? Number.MAX_SAFE_INTEGER;
+
+                    // 如果目标状态和当前状态一致，不触发 linkage，
+                    // 但可以用更高优先级“确认”该状态，防止被低优先级联动关闭。
+                    if (req.active === current) {
+                        const shouldStrengthen =
+                            req.priority > currentPriority ||
+                            (req.priority === currentPriority && req.depth < currentDepth);
+
+                        if (shouldStrengthen) {
+                            statePriority.set(req.gid, req.priority);
+                            stateDepth.set(req.gid, req.depth);
+                        }
+
+                        if (req.active) {
+                            if (req.priority >= currentPriority) {
+                                addActiveMeta(req.gid, req);
+                            }
+                        } else if (req.offMode !== undefined && req.priority >= currentPriority) {
+                            setGroupMode(req.gid, false, req.offMode);
+                        }
+
+                        continue;
+                    }
+
+                    // 低优先级请求不能覆盖高优先级状态。
+                    if (req.priority < currentPriority) continue;
+
+                    // 同优先级下，深度更浅的优先；如果当前已有同优先级状态，后来的同优先级请求不覆盖。
+                    if (req.priority === currentPriority && currentPriority > 0 && req.depth >= currentDepth) {
+                        continue;
+                    }
+
+                    setGroupMode(req.gid, req.active, req.offMode);
+                    activeMap.set(req.gid, req.active);
+                    statePriority.set(req.gid, req.priority);
+                    stateDepth.set(req.gid, req.depth);
+
+                    if (req.active) {
+                        activeMetas.set(req.gid, [metaFromRequest(req)]);
+                    } else {
+                        activeMetas.delete(req.gid);
+                    }
 
                     // =====================================================
-                    // 无论组是通过什么方式开启 / 关闭，
-                    // 只要状态发生切换，就触发对应的 When Group ON / OFF。
+                    // 状态真正发生切换后，触发 When Group ON / OFF。
                     // =====================================================
                     if (!opts.skipLinkage) {
-                        const rules = globalRules[evt.gid]?.[evt.active ? 'on_enable' : 'on_disable'] || [];
+                        const rules = globalRules[req.gid]?.[req.active ? 'on_enable' : 'on_disable'] || [];
 
                         for (const rule of rules) {
                             const targetActive = (rule.action || 'active') === 'active';
 
                             requestState(rule.target_group, targetActive, {
-                                depth: evt.depth + 1,
-                                parent: evt.gid,
+                                priority: req.linkagePriority,
+                                linkagePriority: req.linkagePriority,
+                                depth: req.depth + 1,
+                                parent: req.gid,
                                 ownerNodeId: rule.ownerNodeId,
                                 offMode: rule.action === 'mute' ? 2 : rule.action === 'bypass' ? 4 : undefined
                             });
@@ -922,25 +1008,24 @@ app.registerExtension({
 
                     // =====================================================
                     // 如果这是一个开启事件，则执行 Max One / Always One 限制。
-                    // 被限制关闭的组也会进入队列，因此也会触发 When Group OFF。
                     // =====================================================
-                    if (evt.active) {
+                    if (req.active && !req.skipRestriction) {
                         for (const panel of allAdvNodesGlobal) {
-                            if (!panelHasGroup(panel, evt.gid)) continue;
+                            if (!panelHasGroup(panel, req.gid)) continue;
 
                             const panelRestriction = panel.properties?.toggleRestriction || 'unlimited';
                             if (panelRestriction !== 'always_one' && panelRestriction !== 'max_one') continue;
 
                             const filteredIds = getPanelFilteredIds(panel);
-                            if (!filteredIds.has(evt.gid)) continue;
+                            if (!filteredIds.has(req.gid)) continue;
 
-                            if (isEventExemptInPanel(evt, panel)) continue;
+                            if (isRequestExemptInPanel(req, panel)) continue;
 
                             const groupCfgs = (panel.properties?.groups || []).filter(g => filteredIds.has(g.group_name));
 
                             for (const cfg of groupCfgs) {
                                 const otherGid = cfg.group_name;
-                                if (otherGid === evt.gid) continue;
+                                if (otherGid === req.gid) continue;
 
                                 if (!getActive(otherGid)) continue;
 
@@ -949,9 +1034,13 @@ app.registerExtension({
 
                                 if (otherExempt) continue;
 
+                                const restrictionMeta = getRestrictionMeta(req);
+
                                 requestState(otherGid, false, {
-                                    depth: evt.depth + 1,
-                                    parent: evt.gid,
+                                    priority: restrictionMeta.priority,
+                                    linkagePriority: restrictionMeta.linkagePriority,
+                                    depth: req.depth + 1,
+                                    parent: req.gid,
                                     ownerNodeId: panel._gsaId,
                                     offMode: offModeForPanel(panel),
                                     skipRestriction: false
@@ -968,6 +1057,8 @@ app.registerExtension({
             const sourceOffMode = ((this.properties?.switchMode || 'bypass') === 'bypass') ? 4 : 2;
 
             requestState(uniqueId, enable, {
+                priority: PRIORITY.MANUAL,
+                linkagePriority: PRIORITY.LINKAGE_MANUAL,
                 depth: 0,
                 parent: null,
                 ownerNodeId: this._gsaId,
@@ -975,12 +1066,11 @@ app.registerExtension({
                 skipRestriction: !!opts.skipRestriction
             });
 
-            processQueue();
+            processRequests();
 
             // =====================================================
             // Always One Active 保底：
             // 只对本次受影响的面板执行。
-            // 保底开启默认组时，也会触发 When Group ON。
             // =====================================================
             const fallbackDone = new Set();
             let fallbackIterations = 0;
@@ -1016,20 +1106,22 @@ app.registerExtension({
 
                         fallbackDone.add(panel._gsaId);
 
-                        const changed = requestState(targetGroup._pwUniqueId, true, {
+                        requestState(targetGroup._pwUniqueId, true, {
+                            priority: PRIORITY.FALLBACK,
+                            linkagePriority: PRIORITY.LINKAGE_FALLBACK,
                             depth: 1,
                             parent: null,
                             ownerNodeId: panel._gsaId,
                             skipRestriction: false
                         });
 
-                        if (changed) anyFallback = true;
+                        anyFallback = true;
                     }
                 }
 
                 if (!anyFallback) break;
 
-                processQueue();
+                processRequests();
             }
 
             if (!opts.skipUIUpdate) {
