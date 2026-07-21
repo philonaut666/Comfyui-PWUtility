@@ -853,8 +853,7 @@ app.registerExtension({
                     parent: meta.parent ?? null,
                     ownerNodeId: meta.ownerNodeId ?? null,
                     skipRestriction: !!meta.skipRestriction,
-                    offMode: meta.offMode,
-                    force: !!meta.force
+                    offMode: meta.offMode
                 });
             };
 
@@ -884,21 +883,35 @@ app.registerExtension({
                 }
             }
 
-            // =========================================================
-            // 豁免判断：
-            // 只要 parent 组和 target 组同时存在于某个面板中，
-            // 那么 target 在这个面板中就可以豁免 Max One / Always One。
-            // =========================================================
             const isMetaExemptInPanel = (meta, panel, gid) => {
                 if (!meta) return false;
                 if (meta.skipRestriction) return true;
                 if (!meta.parent || meta.parent === gid) return false;
 
-                return panelHasGroup(panel, meta.parent) && panelHasGroup(panel, gid);
+                return meta.ownerNodeId === panel._gsaId &&
+                    panelHasGroup(panel, meta.parent) &&
+                    panelHasGroup(panel, gid);
             };
 
             const isRequestExemptInPanel = (req, panel) => {
                 return isMetaExemptInPanel(req, panel, req.gid);
+            };
+
+            // =========================================================
+            // 修复豁免机制：
+            // 如果一个组已经在请求队列中被“同面板 linkage”请求激活，
+            // 那么即使这个激活请求还没有正式执行，
+            // 当前 Max One / Always One 限制也不应该关闭它。
+            // =========================================================
+            const hasPendingExemptActive = (gid, panel) => {
+                const currentPriority = statePriority.get(gid) ?? 0;
+
+                return requests.some(r => {
+                    return r.gid === gid &&
+                        r.active &&
+                        r.priority >= currentPriority &&
+                        isRequestExemptInPanel(r, panel);
+                });
             };
 
             const getRestrictionMeta = (req) => {
@@ -949,46 +962,39 @@ app.registerExtension({
                     const currentDepth = stateDepth.get(req.gid) ?? Number.MAX_SAFE_INTEGER;
 
                     // 如果目标状态和当前状态一致，不触发 linkage，
-                    // 但可以用更高优先级或 force “确认”该状态。
+                    // 但可以用更高优先级“确认”该状态，防止被低优先级联动关闭。
                     if (req.active === current) {
                         const shouldStrengthen =
-                            req.force ||
                             req.priority > currentPriority ||
                             (req.priority === currentPriority && req.depth < currentDepth);
 
                         if (shouldStrengthen) {
-                            statePriority.set(req.gid, req.force ? Math.max(req.priority, currentPriority) : req.priority);
+                            statePriority.set(req.gid, req.priority);
                             stateDepth.set(req.gid, req.depth);
                         }
 
                         if (req.active) {
-                            if (req.force || req.priority >= currentPriority) {
+                            if (req.priority >= currentPriority) {
                                 addActiveMeta(req.gid, req);
                             }
-                        } else if (req.offMode !== undefined && (req.force || req.priority >= currentPriority)) {
+                        } else if (req.offMode !== undefined && req.priority >= currentPriority) {
                             setGroupMode(req.gid, false, req.offMode);
                         }
 
                         continue;
                     }
 
-                    // 非 force 请求不能覆盖更高优先级状态。
-                    if (!req.force) {
-                        if (req.priority < currentPriority) continue;
+                    // 低优先级请求不能覆盖高优先级状态。
+                    if (req.priority < currentPriority) continue;
 
-                        // 同优先级下，深度更浅的优先。
-                        if (req.priority === currentPriority && currentPriority > 0 && req.depth >= currentDepth) {
-                            continue;
-                        }
+                    // 同优先级下，深度更浅的优先；如果当前已有同优先级状态，后来的同优先级请求不覆盖。
+                    if (req.priority === currentPriority && currentPriority > 0 && req.depth >= currentDepth) {
+                        continue;
                     }
 
                     setGroupMode(req.gid, req.active, req.offMode);
                     activeMap.set(req.gid, req.active);
-
-                    statePriority.set(
-                        req.gid,
-                        req.force ? Math.max(req.priority, currentPriority) : req.priority
-                    );
+                    statePriority.set(req.gid, req.priority);
                     stateDepth.set(req.gid, req.depth);
 
                     if (req.active) {
@@ -1019,7 +1025,6 @@ app.registerExtension({
 
                     // =====================================================
                     // 如果这是一个开启事件，则执行 Max One / Always One 限制。
-                    // 同面板联动组会被豁免。
                     // =====================================================
                     if (req.active && !req.skipRestriction) {
                         for (const panel of allAdvNodesGlobal) {
@@ -1031,7 +1036,6 @@ app.registerExtension({
                             const filteredIds = getPanelFilteredIds(panel);
                             if (!filteredIds.has(req.gid)) continue;
 
-                            // 当前激活请求本身在这个面板中豁免，则不在这个面板中触发互斥关闭。
                             if (isRequestExemptInPanel(req, panel)) continue;
 
                             const groupCfgs = (panel.properties?.groups || []).filter(g => filteredIds.has(g.group_name));
@@ -1043,9 +1047,11 @@ app.registerExtension({
                                 if (!getActive(otherGid)) continue;
 
                                 const metas = activeMetas.get(otherGid) || [];
-                                const otherExempt = metas.some(m => isMetaExemptInPanel(m, panel, otherGid));
 
-                                // 已经处于激活状态的同面板豁免组不能被关闭。
+                                const otherExempt =
+                                    metas.some(m => isMetaExemptInPanel(m, panel, otherGid)) ||
+                                    hasPendingExemptActive(otherGid, panel);
+
                                 if (otherExempt) continue;
 
                                 const restrictionMeta = getRestrictionMeta(req);
@@ -1085,8 +1091,6 @@ app.registerExtension({
             // =====================================================
             // Always One Active 保底：
             // 只对本次受影响的面板执行。
-            // 保底使用 force，避免高优先级 OFF 状态导致 Always One 失效。
-            // 但仍会优先避免重新打开刚刚手动关闭的组，如果还有其它可用组。
             // =====================================================
             const fallbackDone = new Set();
             let fallbackIterations = 0;
@@ -1106,18 +1110,9 @@ app.registerExtension({
                     const anyActive = filteredGroups.some(g => getActive(g._pwUniqueId));
 
                     if (!anyActive) {
-                        // 优先选择默认组，但尽量避免立即重新打开刚手动关闭的组。
                         let targetGroup = filteredGroups.find(
-                            g => g._pwUniqueId === panel.properties.defaultGroup &&
-                                 g._pwUniqueId !== uniqueId
+                            g => g._pwUniqueId === panel.properties.defaultGroup
                         );
-
-                        // 如果默认组就是刚关闭的组，且没有其它组可用，则仍然允许保底。
-                        if (!targetGroup) {
-                            targetGroup = filteredGroups.find(
-                                g => g._pwUniqueId === panel.properties.defaultGroup
-                            );
-                        }
 
                         if (!targetGroup) {
                             targetGroup = filteredGroups.find(g => g._pwUniqueId !== uniqueId);
@@ -1137,8 +1132,7 @@ app.registerExtension({
                             depth: 1,
                             parent: null,
                             ownerNodeId: panel._gsaId,
-                            skipRestriction: false,
-                            force: true
+                            skipRestriction: false
                         });
 
                         anyFallback = true;
