@@ -74,7 +74,7 @@ class AudioLoaderPW:
             }
         }
 
-    CATEGORY = "PWUtility/Audio"
+    CATEGORY = "🔮PWUtility/Audio"
     # 新增两个 AUDIO 输出端口
     RETURN_TYPES = ("AUDIO", "FLOAT", "INT", "AUDIO", "AUDIO")
     RETURN_NAMES = ("audio", "duration", "frame_count", "trimed_front_audio", "trimed_back_audio")
