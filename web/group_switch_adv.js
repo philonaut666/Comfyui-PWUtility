@@ -709,11 +709,6 @@ app.registerExtension({
             if (nodes.length === 0) return;
 
             const sourceNode = opts.sourceNode || this;
-            const restriction = this.properties.toggleRestriction;
-            const isRestricted = restriction === 'always_one' || restriction === 'max_one';
-
-            const config = this.properties.groups.find(g => g.group_name === uniqueId);
-            if (config) config.enabled = enable;
 
             const collectAdvNodes = (graph) => {
                 let result = [];
@@ -765,12 +760,38 @@ app.registerExtension({
                 return ((panel.properties?.switchMode || 'bypass') === 'bypass') ? 4 : 2;
             };
 
-            const setGroupModeByGid = (gid, mode, syncEnabled = true) => {
-                const gi = allGroupsFlat.find(g => g._pwUniqueId === gid);
+            const getGroupInfo = (gid) => {
+                return allGroupsFlat.find(g => g._pwUniqueId === gid);
+            };
+
+            const activeMap = new Map();
+            const activeMetas = new Map();
+            const queue = [];
+            const MAX_DEPTH = 100;
+
+            const getActive = (gid) => {
+                if (activeMap.has(gid)) return activeMap.get(gid);
+
+                const gi = getGroupInfo(gid);
+                const active = gi ? this.isGroupEnabled(gi) : false;
+
+                activeMap.set(gid, active);
+
+                if (active && !activeMetas.has(gid)) {
+                    activeMetas.set(gid, []);
+                }
+
+                return active;
+            };
+
+            const setGroupMode = (gid, active, offMode) => {
+                const gi = getGroupInfo(gid);
                 if (!gi) return;
 
                 const ns = getNodesInGroupGlobal(gi);
                 if (!ns.length) return;
+
+                const mode = active ? 0 : (offMode === 2 ? 2 : 4);
 
                 changeModeOfNodes(ns, mode);
 
@@ -778,295 +799,239 @@ app.registerExtension({
                     gi._pwTopSubgraphNode.setDirtyCanvas(true, true);
                 }
 
-                if (syncEnabled) {
-                    syncEnabledGlobal(gid, mode === 0);
-                }
-
-                markPanelsForGroup(gid);
+                syncEnabledGlobal(gid, active);
             };
 
-            const runAlwaysOneFallback = (panel, excludeGroupId) => {
-                if ((panel.properties?.toggleRestriction || 'unlimited') !== 'always_one') return;
+            const requestState = (gid, active, meta = {}) => {
+                if ((meta.depth || 0) > MAX_DEPTH) return false;
 
-                const filteredGroups = panel.filterGroups(panel.getAllGroupsFlat()) || [];
-                if (!filteredGroups.length) return;
+                const current = getActive(gid);
 
-                const filteredIds = new Set(filteredGroups.map(g => g._pwUniqueId));
+                if (active === current) {
+                    if (active) {
+                        if (meta.ownerNodeId || meta.parent) {
+                            const metas = activeMetas.get(gid) || [];
+                            metas.push({
+                                ownerNodeId: meta.ownerNodeId,
+                                parent: meta.parent,
+                                depth: meta.depth || 0,
+                                skipRestriction: !!meta.skipRestriction
+                            });
+                            activeMetas.set(gid, metas);
+                        }
+                    } else if (meta.offMode !== undefined) {
+                        setGroupMode(gid, false, meta.offMode);
+                    }
 
-                const anyEnabled = (panel.properties?.groups || []).some(
-                    g => g.enabled && filteredIds.has(g.group_name)
-                );
-
-                if (anyEnabled) return;
-
-                let targetGroup = filteredGroups.find(
-                    g => g._pwUniqueId === panel.properties.defaultGroup &&
-                         g._pwUniqueId !== excludeGroupId
-                );
-
-                if (!targetGroup) {
-                    targetGroup = filteredGroups.find(g => g._pwUniqueId !== excludeGroupId);
+                    return false;
                 }
 
-                if (!targetGroup) {
-                    targetGroup = filteredGroups[0];
+                setGroupMode(gid, active, meta.offMode);
+                activeMap.set(gid, active);
+
+                if (active) {
+                    const metas = activeMetas.get(gid) || [];
+                    metas.push({
+                        ownerNodeId: meta.ownerNodeId,
+                        parent: meta.parent,
+                        depth: meta.depth || 0,
+                        skipRestriction: !!meta.skipRestriction
+                    });
+                    activeMetas.set(gid, metas);
+                } else {
+                    activeMetas.delete(gid);
                 }
 
-                if (!targetGroup) return;
+                queue.push({
+                    gid,
+                    active,
+                    depth: meta.depth || 0,
+                    parent: meta.parent,
+                    ownerNodeId: meta.ownerNodeId,
+                    skipRestriction: !!meta.skipRestriction,
+                    offMode: meta.offMode
+                });
 
-                const tNodes = getNodesInGroupGlobal(targetGroup);
-                if (!tNodes.length) return;
-
-                changeModeOfNodes(tNodes, 0);
-
-                if (targetGroup._pwTopSubgraphNode && targetGroup._pwTopSubgraphNode.setDirtyCanvas) {
-                    targetGroup._pwTopSubgraphNode.setDirtyCanvas(true, true);
-                }
-
-                syncEnabledGlobal(targetGroup._pwUniqueId, true);
+                return true;
             };
 
-            // =========================================================
-            // 当前面板内启用源组时，先执行本面板的互斥限制。
-            // 这里不再触发被关组的 on_disable linkage，
-            // 避免“开启一个组时，被关组联动出默认组”。
-            // =========================================================
-            if (enable && isRestricted && !opts.skipRestriction) {
-                const filteredIds = getPanelFilteredIds(this);
-                const enabledOthers = (this.properties.groups || []).filter(
-                    g => g.enabled &&
-                         g.group_name !== uniqueId &&
-                         filteredIds.has(g.group_name)
-                );
+            const globalRules = {};
 
-                const offMode = offModeForPanel(this);
+            for (const panel of allAdvNodesGlobal) {
+                if (!panel.properties?.groups) continue;
 
-                for (const other of enabledOthers) {
-                    setGroupModeByGid(other.group_name, offMode, true);
-                }
-            }
-
-            // =========================================================
-            // 设置当前组模式
-            // =========================================================
-            const switchMode = this.properties.switchMode || 'bypass';
-            const mode = enable ? 0 : (switchMode === 'bypass' ? 4 : 2);
-
-            changeModeOfNodes(nodes, mode);
-
-            if (groupInfo._pwTopSubgraphNode && groupInfo._pwTopSubgraphNode.setDirtyCanvas) {
-                groupInfo._pwTopSubgraphNode.setDirtyCanvas(true, true);
-            }
-
-            syncEnabledGlobal(uniqueId, enable);
-
-            // =========================================================
-            // Linkage 联动
-            // =========================================================
-            if (!opts.skipLinkage) {
-
-                // 收集全局 linkage 规则，并记录规则所属面板
-                const globalRules = {};
-
-                for (const panel of allAdvNodesGlobal) {
-                    if (!panel.properties?.groups) continue;
-
-                    for (const cfg of panel.properties.groups) {
-                        if (!globalRules[cfg.group_name]) {
-                            globalRules[cfg.group_name] = {
-                                on_enable: [],
-                                on_disable: []
-                            };
-                        }
-
-                        if (cfg.linkage) {
-                            for (const type of ['on_enable', 'on_disable']) {
-                                for (const rule of (cfg.linkage[type] || [])) {
-                                    globalRules[cfg.group_name][type].push({
-                                        ...rule,
-                                        ownerNodeId: panel._gsaId
-                                    });
-                                }
-                            }
-                        }
+                for (const cfg of panel.properties.groups) {
+                    if (!globalRules[cfg.group_name]) {
+                        globalRules[cfg.group_name] = {
+                            on_enable: [],
+                            on_disable: []
+                        };
                     }
-                }
 
-                // BFS 计算最终联动状态
-                const finalStates = {};
-                const queue = [];
-
-                const sourceRules = globalRules[uniqueId];
-                if (sourceRules) {
-                    const rules = enable ? sourceRules.on_enable : sourceRules.on_disable;
-
-                    for (const rule of rules) {
-                        queue.push({
-                            name: rule.target_group,
-                            action: rule.action || 'active',
-                            depth: 1,
-                            parent: uniqueId,
-                            ownerId: rule.ownerNodeId
-                        });
-                    }
-                }
-
-                let head = 0;
-
-                while (head < queue.length) {
-                    const act = queue[head++];
-                    const existing = finalStates[act.name];
-
-                    if (existing) {
-                        if (existing.depth < act.depth) {
-                            continue;
-                        }
-
-                        if (existing.depth === act.depth) {
-                            if (existing.action === act.action) {
-                                existing.edges.push({
-                                    parent: act.parent,
-                                    ownerId: act.ownerId
+                    if (cfg.linkage) {
+                        for (const type of ['on_enable', 'on_disable']) {
+                            for (const rule of (cfg.linkage[type] || [])) {
+                                globalRules[cfg.group_name][type].push({
+                                    ...rule,
+                                    ownerNodeId: panel._gsaId
                                 });
                             }
-                            continue;
                         }
                     }
+                }
+            }
 
-                    finalStates[act.name] = {
-                        action: act.action,
-                        depth: act.depth,
-                        edges: [{
-                            parent: act.parent,
-                            ownerId: act.ownerId
-                        }]
-                    };
+            const isMetaExemptInPanel = (meta, panel, gid) => {
+                if (!meta) return false;
+                if (meta.skipRestriction) return true;
+                if (!meta.parent || meta.parent === gid) return false;
 
-                    const rules = globalRules[act.name];
-                    if (rules) {
-                        const nextRules = (act.action === 'active') ? rules.on_enable : rules.on_disable;
+                return meta.ownerNodeId === panel._gsaId &&
+                    panelHasGroup(panel, meta.parent) &&
+                    panelHasGroup(panel, gid);
+            };
 
-                        for (const rule of nextRules) {
-                            queue.push({
-                                name: rule.target_group,
-                                action: rule.action || 'active',
-                                depth: act.depth + 1,
-                                parent: act.name,
-                                ownerId: rule.ownerNodeId
+            const isEventExemptInPanel = (evt, panel) => {
+                return isMetaExemptInPanel(evt, panel, evt.gid);
+            };
+
+            const processQueue = () => {
+                while (queue.length) {
+                    const evt = queue.shift();
+
+                    if (evt.depth > MAX_DEPTH) continue;
+
+                    // =====================================================
+                    // 无论组是通过什么方式开启 / 关闭，
+                    // 只要状态发生切换，就触发对应的 When Group ON / OFF。
+                    // =====================================================
+                    if (!opts.skipLinkage) {
+                        const rules = globalRules[evt.gid]?.[evt.active ? 'on_enable' : 'on_disable'] || [];
+
+                        for (const rule of rules) {
+                            const targetActive = (rule.action || 'active') === 'active';
+
+                            requestState(rule.target_group, targetActive, {
+                                depth: evt.depth + 1,
+                                parent: evt.gid,
+                                ownerNodeId: rule.ownerNodeId,
+                                offMode: rule.action === 'mute' ? 2 : rule.action === 'bypass' ? 4 : undefined
                             });
                         }
                     }
-                }
 
-                // =========================================================
-                // 豁免判断：
-                // 只有当联动规则来自面板 P，
-                // 且父组在面板 P 中，
-                // 且目标组也在面板 P 中，
-                // 目标组在面板 P 中才可以豁免限制。
-                // =========================================================
-                const isExemptInPanel = (panel, groupName, state) => {
-                    if (!panel || !state || !Array.isArray(state.edges)) return false;
+                    // =====================================================
+                    // 如果这是一个开启事件，则执行 Max One / Always One 限制。
+                    // 被限制关闭的组也会进入队列，因此也会触发 When Group OFF。
+                    // =====================================================
+                    if (evt.active) {
+                        for (const panel of allAdvNodesGlobal) {
+                            if (!panelHasGroup(panel, evt.gid)) continue;
 
-                    return state.edges.some(edge => {
-                        return edge.ownerId === panel._gsaId &&
-                               panelHasGroup(panel, edge.parent) &&
-                               panelHasGroup(panel, groupName);
-                    });
-                };
+                            const panelRestriction = panel.properties?.toggleRestriction || 'unlimited';
+                            if (panelRestriction !== 'always_one' && panelRestriction !== 'max_one') continue;
 
-                // =========================================================
-                // 先应用联动结果
-                // =========================================================
-                for (const [name, state] of Object.entries(finalStates)) {
-                    let targetMode = 0;
+                            const filteredIds = getPanelFilteredIds(panel);
+                            if (!filteredIds.has(evt.gid)) continue;
 
-                    if (state.action === 'active') targetMode = 0;
-                    else if (state.action === 'mute') targetMode = 2;
-                    else if (state.action === 'bypass') targetMode = 4;
+                            if (isEventExemptInPanel(evt, panel)) continue;
 
-                    setGroupModeByGid(name, targetMode, true);
-                }
+                            const groupCfgs = (panel.properties?.groups || []).filter(g => filteredIds.has(g.group_name));
 
-                // =========================================================
-                // 再按面板执行 Max One Active / Always One Active 限制
-                // =========================================================
-                for (const panel of allAdvNodesGlobal) {
-                    const panelRestriction = panel.properties?.toggleRestriction || 'unlimited';
+                            for (const cfg of groupCfgs) {
+                                const otherGid = cfg.group_name;
+                                if (otherGid === evt.gid) continue;
 
-                    if (panelRestriction !== 'always_one' && panelRestriction !== 'max_one') {
-                        continue;
-                    }
+                                if (!getActive(otherGid)) continue;
 
-                    const filteredIds = getPanelFilteredIds(panel);
+                                const metas = activeMetas.get(otherGid) || [];
+                                const otherExempt = metas.some(m => isMetaExemptInPanel(m, panel, otherGid));
 
-                    const activeFinalInPanel = Object.entries(finalStates).filter(([name, state]) => {
-                        return state.action === 'active' &&
-                               filteredIds.has(name) &&
-                               panelHasGroup(panel, name);
-                    });
+                                if (otherExempt) continue;
 
-                    const nonExemptActives = activeFinalInPanel.filter(([name, state]) => {
-                        return !isExemptInPanel(panel, name, state);
-                    });
-
-                    // 如果没有“非豁免”的激活组，则不强制限制。
-                    // 这样同面板联动可以保持豁免。
-                    if (!nonExemptActives.length) {
-                        continue;
-                    }
-
-                    const allowedIds = new Set();
-
-                    // 同面板豁免组允许保留
-                    const exemptActives = activeFinalInPanel.filter(([name, state]) => {
-                        return isExemptInPanel(panel, name, state);
-                    });
-
-                    exemptActives.forEach(([name]) => {
-                        allowedIds.add(name);
-                    });
-
-                    // 非豁免组中只保留一个，深度浅的优先
-                    nonExemptActives.sort((a, b) => a[1].depth - b[1].depth);
-                    allowedIds.add(nonExemptActives[0][0]);
-
-                    const offMode = offModeForPanel(panel);
-
-                    const enabledOthers = (panel.properties?.groups || []).filter(g => {
-                        return g.enabled &&
-                               filteredIds.has(g.group_name) &&
-                               !allowedIds.has(g.group_name);
-                    });
-
-                    for (const other of enabledOthers) {
-                        setGroupModeByGid(other.group_name, offMode, true);
+                                requestState(otherGid, false, {
+                                    depth: evt.depth + 1,
+                                    parent: evt.gid,
+                                    ownerNodeId: panel._gsaId,
+                                    offMode: offModeForPanel(panel),
+                                    skipRestriction: false
+                                });
+                            }
+                        }
                     }
                 }
+            };
 
-                // =========================================================
-                // Always One Active 保底：
-                // 只对本次受影响的面板执行，不再全局所有面板保底。
-                // =========================================================
-                if (!opts.fromRestriction) {
-                    for (const panel of touchedPanels) {
-                        runAlwaysOneFallback(
-                            panel,
-                            (!enable && panel === this) ? uniqueId : undefined
+            // =====================================================
+            // 初始状态请求：当前组手动开启 / 关闭。
+            // =====================================================
+            const sourceOffMode = ((this.properties?.switchMode || 'bypass') === 'bypass') ? 4 : 2;
+
+            requestState(uniqueId, enable, {
+                depth: 0,
+                parent: null,
+                ownerNodeId: this._gsaId,
+                offMode: sourceOffMode,
+                skipRestriction: !!opts.skipRestriction
+            });
+
+            processQueue();
+
+            // =====================================================
+            // Always One Active 保底：
+            // 只对本次受影响的面板执行。
+            // 保底开启默认组时，也会触发 When Group ON。
+            // =====================================================
+            const fallbackDone = new Set();
+            let fallbackIterations = 0;
+
+            while (fallbackIterations < 10) {
+                fallbackIterations++;
+
+                let anyFallback = false;
+
+                for (const panel of Array.from(touchedPanels)) {
+                    if ((panel.properties?.toggleRestriction || 'unlimited') !== 'always_one') continue;
+                    if (fallbackDone.has(panel._gsaId)) continue;
+
+                    const filteredGroups = panel.filterGroups(panel.getAllGroupsFlat()) || [];
+                    if (!filteredGroups.length) continue;
+
+                    const anyActive = filteredGroups.some(g => getActive(g._pwUniqueId));
+
+                    if (!anyActive) {
+                        let targetGroup = filteredGroups.find(
+                            g => g._pwUniqueId === panel.properties.defaultGroup
                         );
+
+                        if (!targetGroup) {
+                            targetGroup = filteredGroups.find(g => g._pwUniqueId !== uniqueId);
+                        }
+
+                        if (!targetGroup) {
+                            targetGroup = filteredGroups[0];
+                        }
+
+                        if (!targetGroup) continue;
+
+                        fallbackDone.add(panel._gsaId);
+
+                        const changed = requestState(targetGroup._pwUniqueId, true, {
+                            depth: 1,
+                            parent: null,
+                            ownerNodeId: panel._gsaId,
+                            skipRestriction: false
+                        });
+
+                        if (changed) anyFallback = true;
                     }
                 }
 
-            } else {
-                // skipLinkage 时，仅对当前面板执行必要保底
-                if (!opts.skipRestriction && !opts.fromRestriction) {
-                    runAlwaysOneFallback(this, (!enable) ? uniqueId : undefined);
-                }
+                if (!anyFallback) break;
+
+                processQueue();
             }
 
-            // =========================================================
-            // 刷新 UI
-            // =========================================================
             if (!opts.skipUIUpdate) {
                 for (const panel of touchedPanels) {
                     panel.refreshWidgets?.();
