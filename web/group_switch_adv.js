@@ -261,6 +261,8 @@ app.registerExtension({
             this.properties.showNavigate = this.properties.showNavigate !== false;
 
             this.groupReferences = new WeakMap();
+            this._lockedGroupRefs = new Map();
+
             this.size = [300, 400];
 
             this.createMinimalUI();
@@ -304,6 +306,7 @@ app.registerExtension({
                     .gsa-item button:hover, .gsa-header button:hover, .gsa-dialog button:hover { background: #e9ecef; border-color: #adb5bd; }
                     .gsa-item.active button.gsa-toggle { background: #4caf50; border-color: #388e3c; color: #fff; }
                     .gsa-item button.gsa-link-active { background: #4caf50; border-color: #388e3c; color: #fff; }
+                    .gsa-item button.gsa-lock.locked { background: #fff3cd; border-color: #ffe69c; }
                     .gsa-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #ffffff; border: 1px solid #ced4da; padding: 16px 20px; z-index: 10000; color: #333; min-width: 420px; max-width: 500px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); border-radius: 8px; display: flex; flex-direction: column; }
                     .gsa-dialog h3 { margin: 0 0 16px 0; font-size: 15px; border-bottom: 2px solid #e9ecef; padding-bottom: 10px; color: #212529; font-weight: 600; }
                     .gsa-dialog label { display: block; margin: 10px 0 4px; font-size: 11px; color: #6c757d; font-weight: 500; }
@@ -437,6 +440,8 @@ app.registerExtension({
         };
 
         nodeType.prototype.filterGroups = function (groups) {
+            let filtered = groups;
+
             if (this.properties.matchMode === 'title' && this.properties.titleKeywords) {
                 const kws = this.properties.titleKeywords
                     .split(',')
@@ -444,18 +449,38 @@ app.registerExtension({
                     .filter(Boolean);
 
                 if (kws.length) {
-                    groups = groups.filter(g =>
+                    filtered = filtered.filter(g =>
                         kws.some(k => (g._pwDisplayName || g.title || '').toLowerCase().includes(k))
                     );
                 }
             } else if (this.properties.matchMode === 'colors' && this.properties.selectedColorFilter) {
                 let targetHex = this.getHexColor(this.properties.selectedColorFilter);
                 if (targetHex) {
-                    groups = groups.filter(g => this.getHexColor(g.color) === targetHex);
+                    filtered = filtered.filter(g => this.getHexColor(g.color) === targetHex);
                 }
             }
 
-            return groups;
+            // =====================================================
+            // 锁定组永远保留在当前面板中，不受过滤器影响。
+            // =====================================================
+            const lockedIds = new Set(
+                (this.properties.groups || [])
+                    .filter(g => g.locked)
+                    .map(g => g.group_name)
+            );
+
+            if (lockedIds.size) {
+                const filteredIds = new Set(filtered.map(g => g._pwUniqueId));
+                const extraLockedGroups = groups.filter(g =>
+                    lockedIds.has(g._pwUniqueId) && !filteredIds.has(g._pwUniqueId)
+                );
+
+                if (extraLockedGroups.length) {
+                    filtered = filtered.concat(extraLockedGroups);
+                }
+            }
+
+            return filtered;
         };
 
         nodeType.prototype.getHexColor = function (colorName) {
@@ -490,10 +515,29 @@ app.registerExtension({
             const allGroups = this.getAllGroupsFlat();
             const idMap = new Map(allGroups.map(g => [g._pwUniqueId, g]));
 
+            if (!this._lockedGroupRefs) {
+                this._lockedGroupRefs = new Map();
+            }
+
             const findBySnapshot = (title, path) =>
                 allGroups.find(g => g.title === title && (g._pwPath || '') === (path || ''));
 
             for (const cfg of this.properties.groups) {
+
+                // =====================================================
+                // 锁定组强化跟踪：
+                // 即使组的稳定 ID 发生异常变化，只要原始 group 对象还在，
+                // 也可以通过运行时引用重新找回它。
+                // =====================================================
+                if (cfg.locked && this._lockedGroupRefs.has(cfg.group_name)) {
+                    const ref = this._lockedGroupRefs.get(cfg.group_name);
+                    const refMatch = allGroups.find(g => g._pwOriginalGroup === ref);
+
+                    if (refMatch) {
+                        cfg.group_name = refMatch._pwUniqueId;
+                    }
+                }
+
                 if (cfg.group_name && !idMap.has(cfg.group_name)) {
                     const match = findBySnapshot(cfg.group_title, cfg.group_path);
                     if (match) {
@@ -505,6 +549,10 @@ app.registerExtension({
                 if (currentGroup) {
                     cfg.group_title = currentGroup.title;
                     cfg.group_path = currentGroup._pwPath;
+
+                    if (cfg.locked) {
+                        this._lockedGroupRefs.set(cfg.group_name, currentGroup._pwOriginalGroup);
+                    }
                 }
 
                 if (cfg.linkage) {
@@ -530,13 +578,20 @@ app.registerExtension({
             }
 
             if (this.properties.groupOrder && Array.isArray(this.properties.groupOrder)) {
-                this.properties.groupOrder = this.properties.groupOrder.filter(id => idMap.has(id));
+                this.properties.groupOrder = this.properties.groupOrder.filter(id => {
+                    return idMap.has(id) ||
+                        this.properties.groups.some(c => c.group_name === id && c.locked);
+                });
             }
         };
 
         nodeType.prototype.refreshWidgets = function () {
             const list = this.ui?.querySelector('#gsa-list');
             if (!list) return;
+
+            if (!this._lockedGroupRefs) {
+                this._lockedGroupRefs = new Map();
+            }
 
             this.repairBrokenLinks();
 
@@ -554,6 +609,7 @@ app.registerExtension({
                         group_title: group.title,
                         group_path: group._pwPath,
                         enabled: isEnabled,
+                        locked: false,
                         linkage: { on_enable: [], on_disable: [] }
                     };
                     this.properties.groups.push(cfg);
@@ -562,16 +618,26 @@ app.registerExtension({
                     cfg.group_title = group.title;
                     cfg.group_path = group._pwPath;
                 }
+
+                if (cfg.locked) {
+                    this._lockedGroupRefs.set(cfg.group_name, group._pwOriginalGroup);
+                }
             });
 
             const validIds = new Set(groups.map(g => g._pwUniqueId));
-            this.properties.groups = this.properties.groups.filter(c => validIds.has(c.group_name));
+
+            // 锁定组即使当前不可见，也保留配置，防止跟踪丢失。
+            this.properties.groups = this.properties.groups.filter(c => {
+                return validIds.has(c.group_name) || c.locked;
+            });
 
             let index = 0;
 
             for (const group of groups) {
                 const cfg = this.properties.groups.find(g => g.group_name === group._pwUniqueId);
                 const isEnabled = cfg ? cfg.enabled : false;
+                const isLocked = cfg ? !!cfg.locked : false;
+
                 const hasLinkage = cfg && cfg.linkage && (
                     (cfg.linkage.on_enable && cfg.linkage.on_enable.length > 0) ||
                     (cfg.linkage.on_disable && cfg.linkage.on_disable.length > 0)
@@ -596,6 +662,15 @@ app.registerExtension({
                         toggleBtn.classList.toggle('active', isEnabled);
                         toggleBtn.textContent = isEnabled ? 'ON' : 'OFF';
                         item.classList.toggle('active', isEnabled);
+                    }
+                }
+
+                const lockBtn = item.querySelector('.gsa-lock');
+                if (lockBtn) {
+                    const wasLocked = lockBtn.classList.contains('locked');
+                    if (wasLocked !== isLocked) {
+                        lockBtn.classList.toggle('locked', isLocked);
+                        lockBtn.textContent = isLocked ? '🔒' : '🔓';
                     }
                 }
 
@@ -639,14 +714,44 @@ app.registerExtension({
                 (cfg.linkage.on_disable && cfg.linkage.on_disable.length > 0)
             );
 
+            const isLocked = !!cfg.locked;
+
             item.innerHTML = `
                 <span class="gsa-drag-handle" style="cursor:grab; color:#adb5bd;">⠿</span>
                 <span class="gsa-color-indicator" style="width:10px; height:10px; background:${colorHex}; border:1px solid #adb5bd; border-radius:2px; display:inline-block;"></span>
                 <span class="gsa-title" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${group._pwDisplayName}">${group._pwDisplayName}</span>
+                <button class="gsa-lock ${isLocked ? 'locked' : ''}" title="Lock / Unlock">${isLocked ? '🔒' : '🔓'}</button>
                 <button class="gsa-toggle ${cfg.enabled ? 'active' : ''}">${cfg.enabled ? 'ON' : 'OFF'}</button>
                 <button class="gsa-link ${hasLinkage ? 'gsa-link-active' : ''}" title="Linkage">🔗</button>
                 <button class="gsa-nav" title="Navigate" style="display: ${this.properties.showNavigate ? '' : 'none'}">→</button>
             `;
+
+            item.querySelector('.gsa-lock').onclick = (e) => {
+                e.stopPropagation();
+
+                const currentCfg = this.properties.groups.find(g => g.group_name === group._pwUniqueId);
+                if (!currentCfg) return;
+
+                currentCfg.locked = !currentCfg.locked;
+
+                if (!this._lockedGroupRefs) {
+                    this._lockedGroupRefs = new Map();
+                }
+
+                if (currentCfg.locked) {
+                    const currentGroup = this.getAllGroupsFlat().find(g => g._pwUniqueId === group._pwUniqueId);
+                    const ref = currentGroup?._pwOriginalGroup || group._pwOriginalGroup;
+
+                    if (ref) {
+                        this._lockedGroupRefs.set(currentCfg.group_name, ref);
+                    }
+                } else {
+                    this._lockedGroupRefs.delete(currentCfg.group_name);
+                }
+
+                this.refreshWidgets();
+                app.graph.setDirtyCanvas(true, true);
+            };
 
             item.querySelector('.gsa-toggle').onclick = (e) => {
                 e.stopPropagation();
@@ -764,15 +869,6 @@ app.registerExtension({
                 return allGroupsFlat.find(g => g._pwUniqueId === gid);
             };
 
-            // =========================================================
-            // 优先级系统：
-            // 1. 用户主动开关
-            // 2. 主动开关触发的 linkage
-            // 3. Max One / Always One 限制本身
-            // 4. 被限制关闭的组触发的 linkage
-            // 5. Always One 保底
-            // 6. 保底触发的 linkage
-            // =========================================================
             const PRIORITY = {
                 MANUAL: 1000,
                 RESTRICTION: 950,
@@ -897,12 +993,6 @@ app.registerExtension({
                 return isMetaExemptInPanel(req, panel, req.gid);
             };
 
-            // =========================================================
-            // 修复豁免机制：
-            // 如果一个组已经在请求队列中被“同面板 linkage”请求激活，
-            // 那么即使这个激活请求还没有正式执行，
-            // 当前 Max One / Always One 限制也不应该关闭它。
-            // =========================================================
             const hasPendingExemptActive = (gid, panel) => {
                 const currentPriority = statePriority.get(gid) ?? 0;
 
@@ -915,7 +1005,6 @@ app.registerExtension({
             };
 
             const getRestrictionMeta = (req) => {
-                // 主动操作或主动操作 linkage 引发的限制关闭，优先级较高。
                 if (req.priority >= PRIORITY.MANUAL || req.linkagePriority >= PRIORITY.LINKAGE_MANUAL) {
                     return {
                         priority: PRIORITY.RESTRICTION,
@@ -923,7 +1012,6 @@ app.registerExtension({
                     };
                 }
 
-                // 被限制关闭的组再次触发 linkage 后，如果又引发限制关闭。
                 if (req.linkagePriority >= PRIORITY.LINKAGE_RESTRICTION) {
                     return {
                         priority: PRIORITY.LINKAGE_RESTRICTION + 50,
@@ -931,7 +1019,6 @@ app.registerExtension({
                     };
                 }
 
-                // Always One 保底链。
                 if (req.linkagePriority >= PRIORITY.LINKAGE_FALLBACK) {
                     return {
                         priority: PRIORITY.FALLBACK - 50,
@@ -961,8 +1048,6 @@ app.registerExtension({
                     const currentPriority = statePriority.get(req.gid) ?? 0;
                     const currentDepth = stateDepth.get(req.gid) ?? Number.MAX_SAFE_INTEGER;
 
-                    // 如果目标状态和当前状态一致，不触发 linkage，
-                    // 但可以用更高优先级“确认”该状态，防止被低优先级联动关闭。
                     if (req.active === current) {
                         const shouldStrengthen =
                             req.priority > currentPriority ||
@@ -984,10 +1069,8 @@ app.registerExtension({
                         continue;
                     }
 
-                    // 低优先级请求不能覆盖高优先级状态。
                     if (req.priority < currentPriority) continue;
 
-                    // 同优先级下，深度更浅的优先；如果当前已有同优先级状态，后来的同优先级请求不覆盖。
                     if (req.priority === currentPriority && currentPriority > 0 && req.depth >= currentDepth) {
                         continue;
                     }
@@ -1003,9 +1086,6 @@ app.registerExtension({
                         activeMetas.delete(req.gid);
                     }
 
-                    // =====================================================
-                    // 状态真正发生切换后，触发 When Group ON / OFF。
-                    // =====================================================
                     if (!opts.skipLinkage) {
                         const rules = globalRules[req.gid]?.[req.active ? 'on_enable' : 'on_disable'] || [];
 
@@ -1023,9 +1103,6 @@ app.registerExtension({
                         }
                     }
 
-                    // =====================================================
-                    // 如果这是一个开启事件，则执行 Max One / Always One 限制。
-                    // =====================================================
                     if (req.active && !req.skipRestriction) {
                         for (const panel of allAdvNodesGlobal) {
                             if (!panelHasGroup(panel, req.gid)) continue;
@@ -1071,9 +1148,6 @@ app.registerExtension({
                 }
             };
 
-            // =====================================================
-            // 初始状态请求：当前组手动开启 / 关闭。
-            // =====================================================
             const sourceOffMode = ((this.properties?.switchMode || 'bypass') === 'bypass') ? 4 : 2;
 
             requestState(uniqueId, enable, {
@@ -1088,10 +1162,6 @@ app.registerExtension({
 
             processRequests();
 
-            // =====================================================
-            // Always One Active 保底：
-            // 只对本次受影响的面板执行。
-            // =====================================================
             const fallbackDone = new Set();
             let fallbackIterations = 0;
 
@@ -1598,6 +1668,10 @@ app.registerExtension({
             if (info.toggleRestriction !== undefined) this.properties.toggleRestriction = info.toggleRestriction;
             if (info.defaultGroup !== undefined) this.properties.defaultGroup = info.defaultGroup;
             if (info.showNavigate !== undefined) this.properties.showNavigate = info.showNavigate;
+
+            if (!this._lockedGroupRefs) {
+                this._lockedGroupRefs = new Map();
+            }
 
             const migrateId = (oldId, allGroups) => {
                 if (!oldId) return oldId;
