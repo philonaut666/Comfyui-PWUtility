@@ -19,15 +19,17 @@ async def crop_image(request):
         data = await request.json()
         original_filename = data.get("filename")
         image_data_url = data.get("image")
+        subfolder_input = data.get("subfolder", "")
         
         if not original_filename or not image_data_url:
             return web.json_response({"error": "Missing data"}, status=400)
             
+        original_filename = original_filename.split("/")[-1]
+            
         subfolder = ""
-        if "/" in original_filename:
-            parts = original_filename.split("/")
-            subfolder = "/".join(parts[:-1])
-            original_filename = parts[-1]
+        if subfolder_input:
+            safe_parts = [p.strip() for p in subfolder_input.replace("\\", "/").split("/") if p and p != ".."]
+            subfolder = "/".join(safe_parts)
             
         header, encoded = image_data_url.split(",", 1)
         binary_data = base64.b64decode(encoded)
@@ -44,13 +46,13 @@ async def crop_image(request):
             ext = ".png"
             
         base = re.sub(r'_cropped_\d+.*$', '', base)
-        new_filename = f"{base}_cropped_{int(time.time())}{ext}"
+        new_filename = f"{base}_cropped_{int(time.time())}.png"
         
         save_path = os.path.join(save_dir, new_filename)
         
         counter = 1
         while os.path.exists(save_path):
-            new_filename = f"{base}_cropped_{int(time.time())}_{counter}{ext}"
+            new_filename = f"{base}_cropped_{int(time.time())}_{counter}.png"
             save_path = os.path.join(save_dir, new_filename)
             counter += 1
             
@@ -72,6 +74,7 @@ class ImageLoaderPW:
         return {
             "required": {
                 "image_paths": ("STRING", {"default": "", "multiline": True}),
+                "input/": ("STRING", {"default": "", "multiline": False}),
                 "scale_mode": (["none", "scale dimensions", "scale longer", "scale shorter"],),
                 "width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1}),
                 "height": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1}),
@@ -82,12 +85,12 @@ class ImageLoaderPW:
                 "pad_color": ("STRING", {"default": "0,0,0"}),
                 "crop_position": (["center", "top", "bottom", "left", "right"],),
                 "multiple_of": ("INT", {"default": 32, "min": 0, "max": 512, "step": 1}),
-                "img_compression": ("INT", {"default": 18, "min": 0, "max": 100, "step": 1}),
+                "img_compression": ("INT", {"default": 0, "min": 0, "max": 100, "step": 1}),
             },
         }
 
     RETURN_TYPES = ("IMAGE",) * 51
-    RETURN_NAMES = ("image_list",) + tuple(f"image_{i+1}" for i in range(50))
+    RETURN_NAMES = ("image_P-list",) + tuple(f"image_{i+1}" for i in range(50))
     OUTPUT_IS_LIST = (True,) + (False,) * 50 
     FUNCTION = "load_images"
     CATEGORY = "🔮PWUtility/Image"
@@ -179,9 +182,9 @@ class ImageLoaderPW:
 
         if resize_method == 'pad':
             if pad_left > 0 or pad_right > 0 or pad_top > 0 or pad_bottom > 0:
-                B, C, H_new, W_new = outputs.shape
-                H_target = H_new + pad_top + pad_bottom
-                W_target = W_new + pad_left + pad_right
+                B, C, H_New, W_New = outputs.shape
+                H_target = H_New + pad_top + pad_bottom
+                W_target = W_New + pad_left + pad_right
                 
                 r, g, b = pad_color
                 background = torch.zeros((B, C, H_target, W_target), device=outputs.device, dtype=outputs.dtype)
@@ -189,7 +192,7 @@ class ImageLoaderPW:
                 background[:, 1, :, :] = g
                 background[:, 2, :, :] = b
                 
-                background[:, :, pad_top:pad_top+H_new, pad_left:pad_left+W_new] = outputs
+                background[:, :, pad_top:pad_top+H_New, pad_left:pad_left+W_New] = outputs
                 outputs = background
 
         outputs = outputs.permute(0, 2, 3, 1)
@@ -211,10 +214,39 @@ class ImageLoaderPW:
 
         return outputs
 
-    def load_images(self, image_paths, scale_mode, width, height, longer_size, shorter_size, interpolation, resize_method, pad_color, crop_position, multiple_of, img_compression):
+    def load_images(self, **kwargs):
+        image_paths = kwargs.get("image_paths", "")
+        input_subfolder = kwargs.get("input/", "")
+        scale_mode = kwargs.get("scale_mode", "none")
+        width = kwargs.get("width", 0)
+        height = kwargs.get("height", 0)
+        longer_size = kwargs.get("longer_size", 1024)
+        shorter_size = kwargs.get("shorter_size", 1024)
+        interpolation = kwargs.get("interpolation", "lanczos")
+        resize_method = kwargs.get("resize_method", "keep proportion")
+        pad_color = kwargs.get("pad_color", "0,0,0")
+        crop_position = kwargs.get("crop_position", "center")
+        multiple_of = kwargs.get("multiple_of", 32)
+        img_compression = kwargs.get("img_compression", 0)
+
         results = []
-        metadata_list = []  # Store metadata for each image
+        metadata_list = []
         valid_paths = [p.strip() for p in image_paths.split("\n") if p.strip()]
+
+        # 判断是否需要保存处理后的图片
+        need_save_processed = (scale_mode != "none" or img_compression > 0)
+
+        # 准备保存目录
+        input_dir = folder_paths.get_input_directory()
+        save_subfolder = ""
+        if input_subfolder:
+            safe_parts = [p.strip() for p in input_subfolder.replace("\\", "/").split("/") if p and p != ".."]
+            save_subfolder = "/".join(safe_parts)
+        
+        save_dir = input_dir
+        if save_subfolder:
+            save_dir = os.path.join(input_dir, save_subfolder)
+            os.makedirs(save_dir, exist_ok=True)
 
         def align_to_multiple(val, multiple):
             if multiple <= 1:
@@ -238,8 +270,8 @@ class ImageLoaderPW:
         for path in valid_paths:
             try:
                 full_path = path
-                if not os.path.exists(full_path):
-                     full_path = os.path.join(folder_paths.get_input_directory(), path)
+                if not os.path.isabs(full_path):
+                    full_path = os.path.join(folder_paths.get_input_directory(), path)
                     
                 if not os.path.exists(full_path):
                     print(f"Warning: Image path not found: {path}")
@@ -247,13 +279,10 @@ class ImageLoaderPW:
 
                 image = Image.open(full_path)
                 
-                # Read metadata from the image file
                 image_metadata = {}
                 if hasattr(image, 'info') and image.info:
-                    # Convert metadata to a serializable format
                     for key, value in image.info.items():
                         try:
-                            # Try to convert to string for serialization
                             image_metadata[str(key)] = str(value)
                         except Exception:
                             pass
@@ -266,7 +295,6 @@ class ImageLoaderPW:
                 
                 _, oh, ow, _ = image_tensor.shape
                 
-                # When scale_mode is "none", skip all resizing and keep the original dimensions
                 if scale_mode != "none":
                     target_w, target_h = width, height
                     actual_resize_method = resize_method
@@ -311,10 +339,35 @@ class ImageLoaderPW:
                     img_pil = Image.fromarray(img_np)
                     img_byte_arr = io.BytesIO()
                     img_pil.save(img_byte_arr, format="JPEG", quality=max(1, 100 - img_compression))
+                    img_byte_arr.seek(0)
                     img_pil = Image.open(img_byte_arr)
                     image_tensor = torch.from_numpy(np.array(img_pil).astype(np.float32) / 255.0)[None,]
 
-                # Attach metadata to the tensor
+                # === 核心修改：处理完成后，将最终图片保存为 PNG ===
+                if need_save_processed:
+                    try:
+                        img_np = (image_tensor[0].numpy() * 255).clip(0, 255).astype(np.uint8)
+                        img_pil = Image.fromarray(img_np)
+                        
+                        # 获取原始文件名（不含路径）
+                        original_name = os.path.basename(path)
+                        base_name = os.path.splitext(original_name)[0]
+                        save_filename = f"{base_name}.png"
+                        save_path = os.path.join(save_dir, save_filename)
+                        
+                        # 如果文件已存在则覆盖
+                        img_pil.save(save_path, format="PNG")
+                        
+                        # 更新路径为保存后的相对路径
+                        if save_subfolder:
+                            new_relative_path = f"{save_subfolder}/{save_filename}"
+                        else:
+                            new_relative_path = save_filename
+                        
+                        print(f"[ImageLoaderPW] Saved processed image: {new_relative_path}")
+                    except Exception as save_e:
+                        print(f"[ImageLoaderPW] Error saving processed image: {save_e}")
+
                 if image_metadata:
                     image_tensor._metadata = image_metadata
                 
@@ -331,9 +384,8 @@ class ImageLoaderPW:
         if not image_list:
             image_list = [] 
 
-        padded_results = results + [torch.zeros((1, 64, 64, 3))] * (50 - len(results))
+        padded_results = results + [None] * (50 - len(results))
 
-        # Prepare UI data with metadata
         ui_data = {
             "metadata": metadata_list
         }
