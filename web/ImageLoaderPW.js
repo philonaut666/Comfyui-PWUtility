@@ -1,6 +1,19 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
+// --- 辅助函数：生成正确的 ComfyUI 图片预览 URL ---
+function getViewUrl(path) {
+    if (!path) return "";
+    // 如果路径包含 "/"，说明有子文件夹，需要拆分为 filename 和 subfolder
+    if (path.includes("/")) {
+        const parts = path.split("/");
+        const fname = parts.pop();
+        const sub = parts.join("/");
+        return `/api/view?filename=${encodeURIComponent(fname)}&subfolder=${encodeURIComponent(sub)}&type=input`;
+    }
+    return `/api/view?filename=${encodeURIComponent(path)}&type=input`;
+}
+
 // --- CSS Injections ---
 function injectGalleryStyles() {
     if (document.getElementById('pw-gallery-styles')) return;
@@ -20,6 +33,13 @@ function injectGalleryStyles() {
         .pw-gallery-item .pw-crop-btn:hover {
             background: rgba(0, 122, 204, 0.9) !important;
             transform: translate(-50%, -50%) scale(1.1) !important;
+        }
+        .pw-gallery-item .pw-local-badge {
+            position: absolute; top: 4px; left: 4px;
+            background: rgba(255, 165, 0, 0.85); color: #000;
+            font-size: 9px; font-weight: bold; padding: 2px 5px;
+            border-radius: 3px; z-index: 6; pointer-events: none;
+            font-family: sans-serif; letter-spacing: 0.5px;
         }
     `;
     document.head.appendChild(style);
@@ -63,7 +83,7 @@ function injectEditorStyles() {
 }
 
 // --- Image Editor Logic ---
-function openImageEditorPW(originalPath, onCropSaved) {
+function openImageEditorPW(displayName, subfolder, onCropSaved, imageUrlOrDataUrl) {
     injectEditorStyles();
     let isSaving = false;
     const overlay = document.createElement("div");
@@ -85,7 +105,7 @@ function openImageEditorPW(originalPath, onCropSaved) {
     headerBar.className = "pw-image-editor-header";
     const title = document.createElement("div");
     title.className = "pw-image-editor-title";
-    title.innerText = `Edit ${originalPath.split('/').pop()}`;
+    title.innerText = `Edit ${displayName}`;
     const closeButton = document.createElement("div");
     closeButton.className = "pw-image-editor-close";
     closeButton.innerHTML = "×";
@@ -98,7 +118,7 @@ function openImageEditorPW(originalPath, onCropSaved) {
     footer.className = "pw-image-editor-footer";
     const info = document.createElement("div");
     info.className = "pw-image-editor-info";
-    info.innerText = "Loading original image...";
+    info.innerText = "Loading image...";
     body.appendChild(info);
 
     panel.appendChild(headerBar);
@@ -427,8 +447,7 @@ function openImageEditorPW(originalPath, onCropSaved) {
         img.src = imageUrl;
     }
 
-    const imageUrl = `/view?filename=${encodeURIComponent(originalPath)}&type=input`;
-    renderCropper(imageUrl);
+    renderCropper(imageUrlOrDataUrl);
 
     addListener(saveButton, "click", async () => {
         if (!cropState || isSaving) return;
@@ -438,15 +457,7 @@ function openImageEditorPW(originalPath, onCropSaved) {
         updateSaveState(false);
         saveButton.innerText = "Saving...";
         try {
-            const resp = await fetch("/ImageLoaderPW/crop", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ filename: originalPath, image: cropped.dataUrl })
-            });
-            const data = await resp.json();
-            if (data.error) throw new Error(data.error);
-            
-            onCropSaved(data.filename);
+            onCropSaved(cropped.dataUrl);
             closeEditor();
         } catch (error) {
             console.error("Save crop failed:", error);
@@ -455,6 +466,100 @@ function openImageEditorPW(originalPath, onCropSaved) {
             updateSaveState(true);
         }
     });
+}
+
+// 注册拦截器：在运行工作流前，将所有的本地预览图片正式上传到服务器
+if (!window._pwQueuePromptHooked) {
+    window._pwQueuePromptHooked = true;
+    const originalAppQueuePrompt = app.queuePrompt;
+    app.queuePrompt = async function() {
+        console.log("[ImageLoaderPW] Intercepting app.queuePrompt...");
+        const nodes = app.graph._nodes || [];
+        for (const graphNode of nodes) {
+            if (graphNode.type === "ImageLoaderPW" || graphNode.comfyClass === "ImageLoaderPW") {
+                if (!graphNode._pendingImages || Object.keys(graphNode._pendingImages).length === 0) continue;
+
+                const pathsWidget = graphNode.widgets.find(w => w.name === "image_paths");
+                if (!pathsWidget) continue;
+
+                const paths = pathsWidget.value.split('\n').map(s => s.trim()).filter(s => s);
+                let updated = false;
+
+                const subfolderWidget = graphNode.widgets.find(w => w.name === "input/");
+                const currentSubfolder = subfolderWidget ? subfolderWidget.value.trim() : "";
+
+                for (let i = 0; i < paths.length; i++) {
+                    const path = paths[i];
+                    if (path.startsWith("local://")) {
+                        const localId = path.substring(8);
+                        const pendingImg = graphNode._pendingImages[localId];
+                        if (pendingImg) {
+                            try {
+                                console.log(`[ImageLoaderPW] Uploading original: ${pendingImg.originalName}`);
+                                
+                                const img = new Image();
+                                img.src = pendingImg.dataUrl;
+                                await new Promise((resolve, reject) => {
+                                    img.onload = resolve;
+                                    img.onerror = reject;
+                                });
+                                
+                                const canvas = document.createElement("canvas");
+                                canvas.width = img.naturalWidth;
+                                canvas.height = img.naturalHeight;
+                                const ctx = canvas.getContext("2d");
+                                ctx.drawImage(img, 0, 0);
+                                const pngDataUrl = canvas.toDataURL("image/png");
+                                
+                                const res = await fetch(pngDataUrl);
+                                const blob = await res.blob();
+                                
+                                let fileName = pendingImg.originalName;
+                                if (!fileName.toLowerCase().endsWith(".png")) {
+                                    fileName = fileName.replace(/\.[^/.]+$/, "") + ".png";
+                                }
+                                
+                                const file = new File([blob], fileName, { type: "image/png" });
+
+                                const body = new FormData();
+                                body.append("image", file);
+                                if (currentSubfolder) {
+                                    body.append("subfolder", currentSubfolder);
+                                }
+                                body.append("overwrite", "true");
+
+                                const uploadResp = await api.fetchApi("/upload/image", { method: "POST", body });
+                                if (uploadResp.status === 200) {
+                                    const data = await uploadResp.json();
+                                    let realPath = data.name;
+                                    if (data.subfolder) realPath = data.subfolder + "/" + data.name;
+
+                                    paths[i] = realPath;
+                                    updated = true;
+                                    delete graphNode._pendingImages[localId];
+                                    console.log(`[ImageLoaderPW] Uploaded: ${realPath}`);
+                                } else {
+                                    throw new Error("Upload failed");
+                                }
+                            } catch (e) {
+                                console.error("Failed to upload pending image:", e);
+                                alert(`Failed to upload image: ${pendingImg.originalName}. Workflow aborted.`);
+                                throw new Error(`Upload aborted`);
+                            }
+                        }
+                    }
+                }
+
+                if (updated) {
+                    const newPathStr = paths.join('\n');
+                    pathsWidget.value = newPathStr;
+                    if (graphNode._refreshGallery) graphNode._refreshGallery();
+                }
+            }
+        }
+        console.log("[ImageLoaderPW] Continuing with original app.queuePrompt...");
+        return originalAppQueuePrompt.apply(this, arguments);
+    };
 }
 
 app.registerExtension({
@@ -481,8 +586,6 @@ app.registerExtension({
         }
 
         const container = document.createElement("div");
-        // NOTE: removed fixed "min-height: 250px" to prevent overflow after refresh.
-        // The minimum gallery height is now enforced through the node sizing logic instead.
         container.style.cssText = `
             width: 100%;
             min-width: 100px; 
@@ -519,6 +622,7 @@ app.registerExtension({
         removeAllBtn.onmouseenter = () => { removeAllBtn.style.background = "#ff3333"; };
         removeAllBtn.onmouseleave = () => { removeAllBtn.style.background = "#cc2222"; };
         removeAllBtn.onclick = () => {
+            node._pendingImages = {}; 
             setWidgetValue([], false);
         };
 
@@ -618,7 +722,6 @@ app.registerExtension({
                 }
             };
 
-            // When "none" is selected, hide all resize-related fields
             setHidden(widthWidget, isNone || mode !== "scale dimensions");
             setHidden(heightWidget, isNone || mode !== "scale dimensions");
             setHidden(longerWidget, isNone || mode !== "scale longer");
@@ -798,7 +901,6 @@ app.registerExtension({
                 app.graph.setDirtyCanvas(true, true);
             }
 
-            // Clamp the gallery height so it never exceeds the node's bottom edge
             const availableGalleryHeight = Math.max(targetH - galleryY - paddingBottom, 60);
             container.style.height = availableGalleryHeight + "px";
 
@@ -923,8 +1025,16 @@ app.registerExtension({
                     justify-content: center;
                 `;
 
+                const isLocal = path.startsWith("local://");
+                const localId = isLocal ? path.substring(8) : null;
+                const pendingImg = isLocal && node._pendingImages ? node._pendingImages[localId] : null;
+
                 const img = document.createElement("img");
-                img.src = `/api/view?filename=${encodeURIComponent(path)}&type=input`;
+                if (isLocal && pendingImg) {
+                    img.src = pendingImg.dataUrl; // 本地预览
+                } else {
+                    img.src = getViewUrl(path); // 服务器图片使用正确 URL
+                }
                 img.style.cssText = "max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: auto; display: block;";
                 img.draggable = false; 
                 
@@ -948,6 +1058,9 @@ app.registerExtension({
                 
                 del.onclick = (e) => {
                     e.stopPropagation();
+                    if (isLocal && node._pendingImages) {
+                        delete node._pendingImages[localId]; 
+                    }
                     const newPaths = paths.filter((_, i) => i !== index);
                     setWidgetValue(newPaths, false);
                 };
@@ -961,6 +1074,13 @@ app.registerExtension({
                     z-index: 5;
                 `;
                 numBadge.innerText = (index + 1).toString();
+
+                if (isLocal) {
+                    const localBadge = document.createElement("div");
+                    localBadge.className = "pw-local-badge";
+                    localBadge.innerText = "LOCAL";
+                    item.appendChild(localBadge);
+                }
 
                 const cropBtn = document.createElement("div");
                 cropBtn.className = "pw-crop-btn";
@@ -978,11 +1098,38 @@ app.registerExtension({
 
                 cropBtn.onclick = (e) => {
                     e.stopPropagation();
-                    openImageEditorPW(path, (newFilename) => {
+                    const subfolderWidget = node.widgets.find(w => w.name === "input/");
+                    const subfolderVal = subfolderWidget ? subfolderWidget.value.trim() : "";
+                    
+                    let imageSource = null;
+                    if (isLocal && pendingImg) {
+                        imageSource = pendingImg.dataUrl;
+                    } else {
+                        imageSource = getViewUrl(path);
+                    }
+                    
+                    const displayName = isLocal ? (pendingImg?.originalName || "local_image") : path.split('/').pop();
+
+                    openImageEditorPW(displayName, subfolderVal, (croppedDataUrl) => {
+                        const newId = `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        if (!node._pendingImages) node._pendingImages = {};
+                        
+                        node._pendingImages[newId] = {
+                            id: newId,
+                            dataUrl: croppedDataUrl,
+                            originalName: `cropped_${displayName}`,
+                            subfolder: subfolderVal 
+                        };
+                        
                         const currentPaths = (pathsWidget?.value || "").split("\n").map(s => s.trim()).filter(s => s);
-                        const updatedPaths = currentPaths.map(p => p === path ? newFilename : p);
+                        const updatedPaths = currentPaths.map(p => p === path ? `local://${newId}` : p);
+                        
+                        if (isLocal) {
+                            delete node._pendingImages[localId];
+                        }
+                        
                         setWidgetValue(updatedPaths, false);
-                    });
+                    }, imageSource);
                 };
 
                 item.addEventListener("contextmenu", (e) => {
@@ -1073,24 +1220,38 @@ app.registerExtension({
             }
         }
 
+        node._refreshGallery = () => refreshGallery();
+
         async function handleFiles(files) {
-            const uploaded = [];
+            const subfolderWidget = node.widgets.find(w => w.name === "input/");
+            const subfolderVal = subfolderWidget ? subfolderWidget.value.trim() : "";
+
+            if (!node._pendingImages) node._pendingImages = {};
+
+            const newLocalPaths = [];
+            
             for (const file of files) {
-                const body = new FormData();
-                body.append("image", file);
-                try {
-                    const resp = await api.fetchApi("/upload/image", { method: "POST", body });
-                    if (resp.status === 200) {
-                        const data = await resp.json();
-                        let name = data.name;
-                        if (data.subfolder) name = data.subfolder + "/" + name;
-                        uploaded.push(name);
-                    }
-                } catch (e) { console.error("Upload error", e); }
+                const reader = new FileReader();
+                const dataUrl = await new Promise((resolve, reject) => {
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(file);
+                });
+                
+                const localId = `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                node._pendingImages[localId] = {
+                    id: localId,
+                    dataUrl: dataUrl,
+                    originalName: file.name,
+                    subfolder: subfolderVal
+                };
+                
+                newLocalPaths.push(`local://${localId}`);
             }
-            if (uploaded.length > 0) {
+            
+            if (newLocalPaths.length > 0) {
                 const current = (pathsWidget?.value || "").trim();
-                const allPaths = current ? current.split('\n').concat(uploaded) : uploaded;
+                const allPaths = current ? current.split('\n').concat(newLocalPaths) : newLocalPaths;
                 setWidgetValue(allPaths, false);
             }
         }
@@ -1173,6 +1334,7 @@ app.registerExtension({
         node.onRemoved = function() {
             document.removeEventListener("paste", pasteHandler, { capture: true });
             resizeObserver.disconnect();
+            node._pendingImages = {}; 
             if (origOnRemoved) origOnRemoved.apply(this, arguments);
         };
 
@@ -1203,9 +1365,6 @@ app.registerExtension({
             }
         };
 
-        // --- FIX: Re-sync layout after the graph is fully loaded (browser refresh) ---
-        // During deserialization the gallery widget's last_y is not yet finalized,
-        // which previously caused the gallery container to overflow the node bounds.
         node._pwUpdateLayout = () => updateLayout();
         if (!window._pwImageLoaderGraphHooked) {
             window._pwImageLoaderGraphHooked = true;
@@ -1222,7 +1381,6 @@ app.registerExtension({
                 }, 100);
             };
         }
-        // Additional delayed re-syncs to cover late layout finalization
         [200, 500, 900].forEach(delay => setTimeout(() => updateLayout(), delay));
 
         setTimeout(() => refreshGallery(), 100);
