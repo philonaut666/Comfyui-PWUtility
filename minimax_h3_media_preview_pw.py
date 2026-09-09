@@ -104,7 +104,7 @@ class MiniMaxH3MediaPreviewPW:
     RETURN_TYPES = ("PW_MEDIA_PACK",)
     RETURN_NAMES = ("media pack",)
     FUNCTION = "preview_and_pack"
-    CATEGORY = "🔮PWUtility/Preview"
+    CATEGORY = "🔮PWUtility/Media"
     OUTPUT_NODE = True
 
     # ---------- 解析与分类 ----------
