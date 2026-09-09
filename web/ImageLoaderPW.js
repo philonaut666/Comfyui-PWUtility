@@ -4,7 +4,6 @@ import { api } from "../../scripts/api.js";
 // --- 辅助函数：生成正确的 ComfyUI 图片预览 URL ---
 function getViewUrl(path) {
     if (!path) return "";
-    // 如果路径包含 "/"，说明有子文件夹，需要拆分为 filename 和 subfolder
     if (path.includes("/")) {
         const parts = path.split("/");
         const fname = parts.pop();
@@ -844,13 +843,63 @@ app.registerExtension({
 
         let v3EventsAttached = false;
 
+        // ==========================================
+        // [FIX] 基于 DOM 测量的布局指标与高度钳制
+        // 解决刷新浏览器后 last_y 未定导致画廊溢出节点面板的问题
+        // ==========================================
+        function getGalleryMetrics() {
+            const isV3 = checkIsV3();
+            const paddingBottom = isV3 ? 15 : 25;
+            let galleryY = galleryWidget.last_y || 40;
+            let nodeH = (node.size && node.size[1]) ? node.size[1] : 0;
+
+            // 在新版前端中，直接测量 DOM 的真实位置，避免 last_y 不准
+            if (isV3 && v3NodeElement) {
+                try {
+                    const nodeRect = v3NodeElement.getBoundingClientRect();
+                    const contRect = container.getBoundingClientRect();
+                    if (nodeRect.height > 0 && contRect.top >= nodeRect.top) {
+                        const domGalleryY = contRect.top - nodeRect.top;
+                        if (domGalleryY > 0) galleryY = domGalleryY;
+                        nodeH = nodeRect.height;
+                    }
+                } catch (e) {}
+            }
+            return { isV3, paddingBottom, galleryY, nodeH };
+        }
+
+        function clampContainerHeight() {
+            const m = getGalleryMetrics();
+            if (m.nodeH <= 0) return;
+            const available = Math.max(m.nodeH - m.galleryY - m.paddingBottom, 60);
+            const current = parseInt(container.style.height, 10) || 0;
+            if (Math.abs(current - available) > 2) {
+                container.style.height = available + "px";
+            }
+        }
+
+        let nodeResizeObserver = null;
+        function attachNodeObserver() {
+            if (nodeResizeObserver) return;
+            if (checkIsV3() && v3NodeElement) {
+                nodeResizeObserver = new ResizeObserver(() => {
+                    clampContainerHeight();
+                });
+                nodeResizeObserver.observe(v3NodeElement);
+            }
+        }
+
+        const winResizeHandler = () => clampContainerHeight();
+        window.addEventListener("resize", winResizeHandler);
+        // ==========================================
+
         function enforceV3CSS() {
             const isV3 = checkIsV3();
             if (isV3 && v3NodeElement) {
-                const paddingBottom = 15;
-                const galleryY = galleryWidget.last_y || 40;
+                attachNodeObserver();
+                const m = getGalleryMetrics();
                 const minOutputsHeight = (node.outputs ? node.outputs.length : 1) * 20;
-                const absoluteMinHeight = Math.max(galleryY + 250 + paddingBottom, minOutputsHeight + 40);
+                const absoluteMinHeight = Math.max(m.galleryY + 250 + m.paddingBottom, minOutputsHeight + 40);
 
                 v3NodeElement.style.removeProperty('min-width');
                 v3NodeElement.style.setProperty('min-height', absoluteMinHeight + 'px', 'important');
@@ -880,16 +929,15 @@ app.registerExtension({
             if (isLayouting) return;
             isLayouting = true;
 
-            const isV3 = checkIsV3();
-            const minW = isV3 ? 100 : 200; 
-            const paddingBottom = isV3 ? 15 : 25; 
+            const m = getGalleryMetrics();
+            const minW = m.isV3 ? 100 : 200; 
 
-            const galleryY = galleryWidget.last_y || 40; 
             const minOutputsHeight = (node.outputs ? node.outputs.length : 1) * 20;
-            const absoluteMinHeight = Math.max(galleryY + 250 + paddingBottom, minOutputsHeight + 40);
+            const absoluteMinHeight = Math.max(m.galleryY + 250 + m.paddingBottom, minOutputsHeight + 40);
 
             node.min_size = [minW, absoluteMinHeight];
             enforceV3CSS();
+            attachNodeObserver();
 
             let targetW = Math.max(node.size[0], minW);
             let targetH = forceShrink ? absoluteMinHeight : node.size[1];
@@ -901,21 +949,19 @@ app.registerExtension({
                 app.graph.setDirtyCanvas(true, true);
             }
 
-            const availableGalleryHeight = Math.max(targetH - galleryY - paddingBottom, 60);
-            container.style.height = availableGalleryHeight + "px";
+            // [FIX] 使用 DOM 测量钳制高度
+            clampContainerHeight();
 
             isLayouting = false;
         }
 
         const origOnResize = node.onResize;
         node.onResize = function(size) {
-            const isV3 = checkIsV3();
-            const minW = isV3 ? 100 : 220; 
-            const paddingBottom = isV3 ? 15 : 25; 
+            const m = getGalleryMetrics();
+            const minW = m.isV3 ? 100 : 220; 
 
-            const galleryY = galleryWidget.last_y || 40;
             const minOutputsHeight = (this.outputs ? this.outputs.length : 1) * 20;
-            const absoluteMinHeight = Math.max(galleryY + 250 + paddingBottom, minOutputsHeight + 40);
+            const absoluteMinHeight = Math.max(m.galleryY + 250 + m.paddingBottom, minOutputsHeight + 40);
             
             size[0] = Math.max(size[0], minW);
             size[1] = Math.max(size[1], absoluteMinHeight);
@@ -925,21 +971,18 @@ app.registerExtension({
             
             node.min_size = [minW, absoluteMinHeight];
             enforceV3CSS(); 
-            
-            const availableGalleryHeight = Math.max(size[1] - galleryY - paddingBottom, 60);
-            container.style.height = availableGalleryHeight + "px";
+            attachNodeObserver();
+            clampContainerHeight();
         };
 
         const origComputeSize = node.computeSize;
         node.computeSize = function(out) {
-            const isV3 = checkIsV3();
-            const minW = isV3 ? 100 : 220; 
-            const paddingBottom = isV3 ? 15 : 25; 
+            const m = getGalleryMetrics();
+            const minW = m.isV3 ? 100 : 220; 
 
             let res = origComputeSize ? origComputeSize.apply(this, arguments) : [minW, 250];
-            const galleryY = galleryWidget.last_y || 40; 
             const minOutputsHeight = (this.outputs ? this.outputs.length : 1) * 20;
-            const absoluteMinHeight = Math.max(galleryY + 250 + paddingBottom, minOutputsHeight + 40);
+            const absoluteMinHeight = Math.max(m.galleryY + 250 + m.paddingBottom, minOutputsHeight + 40);
      
             this.min_size = [minW, absoluteMinHeight];
             res[0] = Math.max(res[0], minW);
@@ -951,13 +994,11 @@ app.registerExtension({
 
         const origSetSize = node.setSize;
         node.setSize = function(size) {
-            const isV3 = checkIsV3();
-            const minW = isV3 ? 100 : 220;
-            const paddingBottom = isV3 ? 15 : 25; 
+            const m = getGalleryMetrics();
+            const minW = m.isV3 ? 100 : 220;
 
-            const galleryY = galleryWidget.last_y || 40;
             const minOutputsHeight = (this.outputs ? this.outputs.length : 1) * 20;
-            const absoluteMinHeight = Math.max(galleryY + 250 + paddingBottom, minOutputsHeight + 40);
+            const absoluteMinHeight = Math.max(m.galleryY + 250 + m.paddingBottom, minOutputsHeight + 40);
 
             size[0] = Math.max(size[0], minW);
             size[1] = Math.max(size[1], absoluteMinHeight);
@@ -968,6 +1009,7 @@ app.registerExtension({
                 this.size = size;
             }
             enforceV3CSS();
+            if (!isLayouting) clampContainerHeight();
         };
 
         let lastObservedWidth = 0;
@@ -987,6 +1029,7 @@ app.registerExtension({
                     }
                 }
             }
+            clampContainerHeight();
         });
         resizeObserver.observe(gridWrapper);
 
@@ -1031,9 +1074,9 @@ app.registerExtension({
 
                 const img = document.createElement("img");
                 if (isLocal && pendingImg) {
-                    img.src = pendingImg.dataUrl; // 本地预览
+                    img.src = pendingImg.dataUrl;
                 } else {
-                    img.src = getViewUrl(path); // 服务器图片使用正确 URL
+                    img.src = getViewUrl(path);
                 }
                 img.style.cssText = "max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: auto; display: block;";
                 img.draggable = false; 
@@ -1333,7 +1376,9 @@ app.registerExtension({
         const origOnRemoved = node.onRemoved;
         node.onRemoved = function() {
             document.removeEventListener("paste", pasteHandler, { capture: true });
+            window.removeEventListener("resize", winResizeHandler);
             resizeObserver.disconnect();
+            if (nodeResizeObserver) nodeResizeObserver.disconnect();
             node._pendingImages = {}; 
             if (origOnRemoved) origOnRemoved.apply(this, arguments);
         };
@@ -1381,7 +1426,11 @@ app.registerExtension({
                 }, 100);
             };
         }
-        [200, 500, 900].forEach(delay => setTimeout(() => updateLayout(), delay));
+        // [FIX] 延长并增加延迟重同步，覆盖刷新后布局最终确定的时机
+        [200, 500, 900, 1500, 2500].forEach(delay => setTimeout(() => {
+            updateLayout();
+            clampContainerHeight();
+        }, delay));
 
         setTimeout(() => refreshGallery(), 100);
     }
