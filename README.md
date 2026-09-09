@@ -93,14 +93,15 @@ split_info拥有最高优先级，当有分割信息输入时，会忽略该节�
 分割为两段时，固定前一段为front, 后段为generate。
 分割为三段时，固定第一段为front, 第二段为generate, 第三段为back。split_back_point_idx输入后端的分割点，支持输入负数作为倒数多少帧，切割起来更方便些。
 
-## video_audio_simple_uploader_pw（新增）
-将视频与音频单独上传到input下的特定文件夹中。便于进行项目管理。
-input/ 默认不填写就是上传到input文件夹中，填写一个子文件夹就会上传到该文件夹，如无该文件夹则会新建一个。
-Upload Media可选择视频或者音频。info后面可接show any之类的节点用于驱动运行。视频和音频在运行前只会以预览方式存在，并带有local标签。运行后才会上传，并且local标签消失。
-鼠标移动到视频/音频预览会显示剪辑图标。进入剪辑，将可以快速切掉头尾后进行上传。在运行前，剪辑也是暂存在本地的，也非真实剪辑而是记录剪辑状态，local旁边会有个剪辑标签，上传后标签消失。
+## video_audio_simple_uploader_pw
+将视频与音频单独上传到input下的特定文件夹中。便于进行项目管理。用于快速粗略地上传素材，并进行简单的实现缩放，裁剪和剪辑。
+- input/ 默认不填写就是上传到input文件夹中，填写一个子文件夹就会上传到该文件夹，如无该文件夹则会新建一个。
+- Upload Media可选择视频或者音频。info后面可接show any之类的节点用于驱动运行。视频和音频在运行前只会以预览方式存在，并带有local标签。运行后才会上传，并且local标签消失。
+- 鼠标移动到视频/音频预览会显示剪辑图标。进入剪辑，将可以快速切掉头尾后进行上传。在运行前，剪辑也是暂存在本地的，也非真实剪辑而是记录剪辑状态，local旁边会有个剪辑标签，上传后标签消失。
 
 ## Audio Loader PW
-可以与[local media manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager)联合使用
+可以与[local media manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager)联合使用。
+功能用法和Video Loader PW相似。
 
 ## Audio detector PW
 该节点可用于检测音频中拥有有效声音的片段，并输出该段的时间范围(以字符进行输出：开始秒数-结束秒数)。常用在将无背景的语音中检测语音从何时开始和结束。
@@ -110,10 +111,10 @@ Upload Media可选择视频或者音频。info后面可接show any之类的节�
 
 ## minimax_h3_media_preview PW
 配合local Media Manager的快速多选，通过paths获取需要的图片，视频，音频来满足MiniMax H3的需求。
-将节点连接到paths，在Local Media Manager中多选混选，运行这个节点，就能看到选择的媒体分类出现在预览的格子中(按照分类和选择顺序进行排列，视频音频可进行播放）。以此快速选择和快速预览要喂给H3模型的素材。
-按照MiniMax H3的要求，image最多9张，Video最多3段，Audio最多3段。如果超了，会弹出提示。
-输出会将选择好的这些素材全部打包为media pack。然后由media unpack pw节点进行解包。
-
+- 将节点连接到paths，在Local Media Manager中多选混选，运行这个节点，就能看到选择的媒体分类出现在预览的格子中(按照分类和选择顺序进行排列，视频音频可进行播放）。以此快速选择和快速预览要喂给H3模型的素材。
+- 按照MiniMax H3的要求，image最多9张，Video最多3段，Audio最多3段。如果超了，会弹出提示。
+- 输出会将选择好的这些素材全部打包为media pack。然后由media unpack pw节点进行解包。
+- Preview关闭就无预览，只剩下将素材打包为media pack的功能。
 
 ## Text Bridge PW
 用于文本的获取、预览和修改。
