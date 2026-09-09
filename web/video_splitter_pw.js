@@ -10,23 +10,22 @@ app.registerExtension({
                 const node = this;
 
                 const splitCountWidget = this.widgets.find(w => w.name === "split_count");
-                const alignWidget = this.widgets.find(w => w.name === "align_8n_1");
+                const alignWidget = this.widgets.find(w => w.name === "align_frames");
                 const splitFrontWidget = this.widgets.find(w => w.name === "split_front_point_idx");
                 const splitBackWidget = this.widgets.find(w => w.name === "split_back_point_idx");
 
                 function updateVisibility() {
                     const count = splitCountWidget ? splitCountWidget.value : 0;
 
-                    // 控制 align_8n_1 的显隐
+                    // 控制 align_frames 的显隐
                     if (alignWidget) {
                         alignWidget.hidden = count < 1;
                         if (count < 1) {
                             alignWidget.type = "hidden";
                             alignWidget.computeSize = () => [0, -4];
                         } else {
-                            alignWidget.type = "toggle"; // BOOLEAN 在 ComfyUI 中对应 toggle
+                            alignWidget.type = "combo";
                             delete alignWidget.computeSize;
-                            alignWidget.label = "align_8n+1"; // 美化显示名称
                         }
                     }
 
