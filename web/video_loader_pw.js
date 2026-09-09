@@ -12,6 +12,13 @@ app.registerExtension({
 
             nodeType.prototype.onConfigure = function (info) {
                 if (onConfigure) onConfigure.apply(this, arguments);
+
+                if (info && info.properties && info.properties.uploadSubfolder !== undefined) {
+                    this.properties = this.properties || {};
+                    this.properties.uploadSubfolder = info.properties.uploadSubfolder;
+                    if (this._uploadFolderInput) this._uploadFolderInput.value = info.properties.uploadSubfolder;
+                }
+
                 if (this.syncFramesFromTime) this.syncFramesFromTime();
                 if (this.toggleWidgetVisibility) this.toggleWidgetVisibility();
                 if (this.syncToggleVisual) this.syncToggleVisual();
@@ -19,7 +26,7 @@ app.registerExtension({
                     const pathWidget = this.widgets.find(w => w.name === "path");
                     if (pathWidget && pathWidget.value && this.updatePreview) {
                         this._lastLoadedVideoPath = pathWidget.value;
-                        this.updatePreview(pathWidget.value);
+                        this.updatePreview(pathWidget.value, true);
                     }
                 }
             };
@@ -61,6 +68,9 @@ app.registerExtension({
                 node._pwTimingInitialized = false;
                 node._pwSourceDuration = 0;
                 node._pwFullFrameCount = 0;
+
+                node.properties = node.properties || {};
+                if (node.properties.uploadSubfolder === undefined) node.properties.uploadSubfolder = "";
 
                 const pathWidget = this.widgets.find((w) => w.name === "path");
                 const frameRateWidget = this.widgets.find((w) => w.name === "frame_rate");
@@ -146,7 +156,7 @@ app.registerExtension({
                 };
 
                 const clampSplitValues = () => {
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 24.0 : 24.0;
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
                     const s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
                     let e_f = endFrameWidget ? parseInt(endFrameWidget.value) || 0 : 0;
@@ -190,7 +200,7 @@ app.registerExtension({
                 node.syncFramesFromTime = function () {
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
-                    const fr = parseFloat(frameRateWidget.value) || 25.0;
+                    const fr = parseFloat(frameRateWidget.value) || 24.0;
                     if (startTimeWidget && startFrameWidget) startFrameWidget.value = Math.max(0, Math.round(startTimeWidget.value * fr));
                     if (endTimeWidget && endFrameWidget) {
                         if (endTimeWidget.value > 0) {
@@ -213,7 +223,7 @@ app.registerExtension({
                 node.syncTimeFromFrames = function () {
                     if (isSyncing || !frameRateWidget) return;
                     isSyncing = true;
-                    const fr = parseFloat(frameRateWidget.value) || 25.0;
+                    const fr = parseFloat(frameRateWidget.value) || 24.0;
                     if (startTimeWidget && startFrameWidget) startTimeWidget.value = parseFloat(Math.max(0, startFrameWidget.value / fr).toFixed(3));
                     if (endTimeWidget && endFrameWidget) {
                         if (endFrameWidget.value > 0) {
@@ -262,7 +272,7 @@ app.registerExtension({
                     splitCountWidget.callback = function () {
                         if (orig) orig.apply(this, arguments);
                         const mode = splitCountWidget.value;
-                        const fr = parseFloat(frameRateWidget.value) || 25.0;
+                        const fr = parseFloat(frameRateWidget.value) || 24.0;
                         if (mode >= 1 && splitPurpleIdxWidget) {
                             let s_f = startFrameWidget ? parseInt(startFrameWidget.value) || 0 : 0;
                             splitPurpleIdxWidget.value = s_f + 1;
@@ -278,14 +288,51 @@ app.registerExtension({
                     };
                 }
 
-                node.updatePreview = function (filename) {
+                node.updatePreview = function (filename, force = false) {
                     if (!filename) return;
                     let url;
                     const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
                     if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
                     else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
-                    if (videoPreview && videoPreview.src !== url) {
+
+                    if (!videoPreview) return;
+
+                    if (videoPreview.src !== url) {
                         videoPreview.src = url;
+                    } else if (force) {
+                        videoPreview.load();
+                    }
+                };
+
+                const probeVideoInfo = async (p) => {
+                    if (!p) return;
+                    try {
+                        const resp = await api.fetchApi(`/video_ui_video_info?filename=${encodeURIComponent(p)}`, { method: "GET" });
+                        if (!resp || resp.status !== 200) return;
+
+                        const info = await resp.json();
+
+                        if (info.source_fps !== undefined && typeof fpsDisplay !== "undefined" && fpsDisplay) {
+                            fpsDisplay.textContent = `source_fps: ${info.source_fps}`;
+                        }
+
+                        if (info.duration !== undefined && parseFloat(info.duration) > 0) {
+                            duration = parseFloat(info.duration);
+                            node._pwSourceDuration = duration;
+
+                            const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 24.0 : 24.0;
+                            node.accurateDuration = duration;
+                            node._pwFullFrameCount = getFullFrameCountFromDuration(duration, fr);
+                            node.accurateFrameCount = node._pwFullFrameCount;
+
+                            initializeTimingWidgetsFromSource(false);
+
+                            updateRuler();
+                            updateUI(true);
+                            updateCropUI();
+                        }
+                    } catch (e) {
+                        console.error("Failed to probe video info", e);
                     }
                 };
 
@@ -327,7 +374,7 @@ app.registerExtension({
                     const subTicks = 4;
                     const totalTicks = (numMajorTicks - 1) * subTicks;
                     const isFrames = displayModeWidget && displayModeWidget.value === "frames";
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 24.0 : 24.0;
                     for (let i = 0; i <= totalTicks; i++) {
                         const pct = i / totalTicks;
                         const t = activeDur * pct;
@@ -363,7 +410,7 @@ app.registerExtension({
                     endHandle.style.left = `${pEnd}%`;
                     const currentDur = parseFloat((visualEnd - s).toFixed(2));
                     const isFrames = displayModeWidget && displayModeWidget.value === "frames";
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 24.0 : 24.0;
                     trimLength.textContent = isFrames ? `Trimmed: ${Math.round(currentDur * fr)} frames` : `Trimmed: ${formatTime(currentDur)}`;
                     if (syncPlayer && duration > 0) videoPreview.currentTime = s;
                     const toPct = (val) => Math.max(0, Math.min(100, (val / activeDur) * 100));
@@ -427,7 +474,7 @@ app.registerExtension({
                 const initializeTimingWidgetsFromSource = (force = false) => {
                     if (node._pwTimingInitialized && !force) return;
 
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 24.0 : 24.0;
                     const dur = node._pwSourceDuration > 0 ? node._pwSourceDuration : duration;
 
                     if (dur > 0) {
@@ -446,7 +493,7 @@ app.registerExtension({
                     updateUI(true);
                 };
 
-                const applyVideoPath = (rawPath) => {
+                const applyVideoPath = (rawPath, opts = {}) => {
                     if (!rawPath || !rawPath.trim()) return;
 
                     const p = rawPath.trim();
@@ -459,14 +506,15 @@ app.registerExtension({
                     }
 
                     if (pathWidget) pathWidget.value = p;
-                    if (node.updatePreview) node.updatePreview(p);
+                    if (node.updatePreview) node.updatePreview(p, !!opts.forcePreview);
+                    if (opts.probe) probeVideoInfo(p);
                 };
 
                 if (pathWidget) {
                     const originalCallback = pathWidget.callback;
                     pathWidget.callback = function () {
                         if (originalCallback) originalCallback.apply(this, arguments);
-                        applyVideoPath(this.value);
+                        applyVideoPath(this.value, { forcePreview: true, probe: true });
                     };
                 }
 
@@ -474,7 +522,7 @@ app.registerExtension({
                     if (!output) return;
 
                     if (output.video_path && output.video_path.length > 0) {
-                        applyVideoPath(output.video_path[0]);
+                        applyVideoPath(output.video_path[0], { forcePreview: false, probe: false });
                     }
 
                     if (output.video_info) {
@@ -487,8 +535,8 @@ app.registerExtension({
                             }
 
                             const fr = info.loaded_fps !== undefined
-                                ? (parseFloat(info.loaded_fps) || 25.0)
-                                : (frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0);
+                                ? (parseFloat(info.loaded_fps) || 24.0)
+                                : (frameRateWidget ? parseFloat(frameRateWidget.value) || 24.0 : 24.0);
 
                             let fullDur = 0;
 
@@ -558,6 +606,51 @@ app.registerExtension({
                 fileInput.style.display = "none";
                 document.body.appendChild(fileInput);
 
+                const uploadFolderContainer = document.createElement("div");
+                Object.assign(uploadFolderContainer.style, {
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    width: "100%",
+                    marginTop: "2px",
+                    boxSizing: "border-box"
+                });
+
+                const uploadFolderLabel = document.createElement("span");
+                uploadFolderLabel.textContent = "upload to input/";
+                Object.assign(uploadFolderLabel.style, {
+                    fontSize: "12px",
+                    color: "#38bdf8",
+                    fontWeight: "bold",
+                    whiteSpace: "nowrap"
+                });
+
+                const uploadFolderInput = document.createElement("input");
+                uploadFolderInput.type = "text";
+                uploadFolderInput.placeholder = "subfolder (optional)";
+                Object.assign(uploadFolderInput.style, {
+                    flex: "1",
+                    background: "rgba(0,0,0,0.5)",
+                    color: "#fff",
+                    border: "1px solid #555",
+                    borderRadius: "3px",
+                    fontSize: "12px",
+                    padding: "2px 6px",
+                    outline: "none"
+                });
+
+                uploadFolderInput.value = node.properties.uploadSubfolder || "";
+                uploadFolderInput.addEventListener("input", () => {
+                    node.properties.uploadSubfolder = uploadFolderInput.value;
+                });
+
+                uploadFolderContainer.appendChild(uploadFolderLabel);
+                uploadFolderContainer.appendChild(uploadFolderInput);
+
+                node._uploadFolderInput = uploadFolderInput;
+                const uploadFolderWidget = node.addDOMWidget("uploadFolder", "div", uploadFolderContainer);
+                uploadFolderWidget.computeSize = function () { return [400, 30]; };
+
                 const btnWidget = this.addWidget("button", "choose file to upload", null, () => { fileInput.click(); });
 
                 const uploadFile = async (file) => {
@@ -565,39 +658,61 @@ app.registerExtension({
                         if (errorMsg) errorMsg.style.display = "none";
                         btnWidget.name = "Uploading...";
                         node.setDirtyCanvas(true, false);
+
+                        let uploadSubfolder = "";
+                        if (uploadFolderInput && uploadFolderInput.value.trim()) {
+                            uploadSubfolder = uploadFolderInput.value.trim();
+                        } else if (node.properties && node.properties.uploadSubfolder) {
+                            uploadSubfolder = String(node.properties.uploadSubfolder).trim();
+                        }
+                        uploadSubfolder = uploadSubfolder.replace(/^\/+/, "");
+
                         const CHUNK_SIZE = 10 * 1024 * 1024;
+
                         if (file.path) {
-                            applyVideoPath(file.path);
+                            applyVideoPath(file.path, { forcePreview: true, probe: true });
                             return;
                         }
+
                         if (file.size > CHUNK_SIZE) {
                             const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
                             const safeFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
                             const safeName = Date.now() + "_" + safeFileName;
+
                             for (let i = 0; i < totalChunks; i++) {
                                 btnWidget.name = `Uploading... ${Math.round((i / totalChunks) * 100)}%`;
                                 node.setDirtyCanvas(true, false);
+
                                 const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
                                 const formData = new FormData();
                                 formData.append("file", chunk);
                                 formData.append("filename", safeName);
                                 formData.append("chunk_index", i);
                                 formData.append("total_chunks", totalChunks);
+                                formData.append("subfolder", uploadSubfolder);
+
                                 const resp = await api.fetchApi("/video_ui_upload_chunk", { method: "POST", body: formData });
                                 if (resp.status !== 200) throw new Error("Chunk upload failed");
+
                                 if (i === totalChunks - 1) {
                                     const data = await resp.json();
-                                    applyVideoPath(data.name);
+                                    applyVideoPath(data.name, { forcePreview: true, probe: true });
                                 }
                             }
                         } else {
                             const body = new FormData();
                             body.append("image", file);
+                            body.append("type", "input");
+                            if (uploadSubfolder) body.append("subfolder", uploadSubfolder);
+
                             const resp = await api.fetchApi("/upload/image", { method: "POST", body: body });
                             if (resp.status === 413) throw new Error("File too large.");
+
                             if (resp.status === 200) {
                                 const data = await resp.json();
-                                applyVideoPath(data.name);
+                                let returnedPath = data.name || "";
+                                if (data.subfolder) returnedPath = `${data.subfolder}/${returnedPath}`;
+                                applyVideoPath(returnedPath, { forcePreview: true, probe: true });
                             } else {
                                 throw new Error(`Upload failed: ${resp.statusText}`);
                             }
@@ -968,7 +1083,7 @@ app.registerExtension({
                     if (!splitPurpleHandle || !splitGreenHandle) return;
                     const activeDur = getActiveDuration();
                     const sc = splitCountWidget ? splitCountWidget.value : 0;
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 24.0 : 24.0;
                     let s = startTimeWidget ? parseFloat(startTimeWidget.value) || 0 : 0;
                     let e = endTimeWidget ? parseFloat(endTimeWidget.value) || 0 : 0;
                     if (e === 0) e = activeDur;
@@ -1122,7 +1237,7 @@ app.registerExtension({
                 };
 
                 const setPurpleVal = (val_sec) => {
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 24.0 : 24.0;
                     if (splitPurpleIdxWidget) splitPurpleIdxWidget.value = Math.round(val_sec * fr);
                     if (splitPurpleWidget) splitPurpleWidget.value = parseFloat(val_sec.toFixed(3));
                     clampSplitValues();
@@ -1130,7 +1245,7 @@ app.registerExtension({
                 };
 
                 const setGreenVal = (val_sec) => {
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 24.0 : 24.0;
                     if (splitGreenIdxWidget) splitGreenIdxWidget.value = Math.round(val_sec * fr);
                     if (splitGreenWidget) splitGreenWidget.value = parseFloat(val_sec.toFixed(3));
                     clampSplitValues();
@@ -1179,7 +1294,7 @@ app.registerExtension({
                         node._pwSourceDuration = newDuration;
                     }
 
-                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 25.0 : 25.0;
+                    const fr = frameRateWidget ? parseFloat(frameRateWidget.value) || 24.0 : 24.0;
 
                     node.accurateDuration = node._pwSourceDuration > 0 ? node._pwSourceDuration : newDuration;
                     node._pwFullFrameCount = getFullFrameCountFromDuration(node.accurateDuration, fr);
@@ -1281,7 +1396,9 @@ app.registerExtension({
                     }
                 });
 
-                if (pathWidget && pathWidget.value) applyVideoPath(pathWidget.value);
+                if (pathWidget && pathWidget.value) {
+                    applyVideoPath(pathWidget.value, { forcePreview: true, probe: true });
+                }
 
                 return r;
             };
