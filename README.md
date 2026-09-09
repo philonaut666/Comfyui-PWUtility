@@ -31,14 +31,19 @@ P.S. 如果使用了rgthee插件的relay+repeat组合，与Group Switch产生矛
 模式中有always one和max one两种。max one允许组全关，always one必须设置default group，但是使用always one可能有时候会遇到逻辑问题，大多数时候使用max one是比较好的选择。
 
 ## Image Loader PW：
-本地上传图片(可多图），并调整尺寸。
+本地上传图片(可多图批量），可指定上传的文件夹，可调整尺寸再上传，可裁切后再上传， 可执行图片压缩。
+
+### input/ 
+默认不填写就是上传到input文件夹中，填写一个子文件夹就会上传到该文件夹，如无该文件夹则会新建一个。
 
 ### Upload Images：本地上传图片，可多图批量上传。
 - 支持拖拽上传。
 - 支持拖拽改变顺序。
 - 图片中心出现✂️图案可对图片进行手动crop。
+- 运行前，图片或者crop的图片都是暂存在本地，会有local标签。run后才会真正上传，local标签消失。
 
 ### scale mode: 选择缩放方式。
+一般为了保持原图，会选择none。
 #### scale dimensions：设置宽和高。
 - 长宽都为0则是保持原图尺寸。注意，此时是绕开multiple_of的，真正的原图不做任何修改直出！
 - 但是会遇到比例问题，通过下面的resize_method来进行计算，会将长和宽更快达到给定值的设置为给定值，另一边根据resize mothod的设定的方式重新进行计算。
@@ -54,6 +59,11 @@ P.S. 如果使用了rgthee插件的relay+repeat组合，与Group Switch产生矛
 用于加载视频，并包含视频长度调整，视频分割标记等功能。可以与[local media manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager)联合使用
 <img width="892" height="1000" alt="VideoLoaderPW" src="https://github.com/user-attachments/assets/bb87dd29-1c40-41cf-8e6a-eb04628197f3" />
 
+### 上传和加载视频：
+上传：可以前先在upload to input/中设置子文件夹，将视频上传到此处，留空默认为input文件夹。然后用choose file to upload或者直接拖入到预览窗口上传视频，上传后会立即加载到节点中进行使用。这里上传就是立刻上传，而非像video audio simple uploader那样会先留在本地。
+通过Path加载视频：可用Path连接local media manager。
+P.S. **当path连接或有数据输入是，优先使用外部传入的path。**
+
 ### 预览窗口
 预览窗口中，可以用蓝色滑块切掉视频前段和后端，显示time,frames, 源视频的fps以及crop。
 - crop可以对视频进行画面裁切，点击开始显示蓝色，并进行crop操作，再次点击恢复白色，crop无效。
@@ -67,11 +77,14 @@ P.S. 如果使用了rgthee插件的relay+repeat组合，与Group Switch产生矛
 分割点的这一帧属于其右侧这段视频，是作为该段视频的首帧。
 使用分割后，split_info节点将输出分割信息，可使用Video Splitter PW节点进行视频和音频的同步分割。Video Loader PW仅提供分割点的标记信息不提供分割。
 
-### align_8n+1
-开启则将视频强制延长以符合LTX 需要8N+1的效果。
-当它开启并且split_count=0时，将重复复制最后一帧到最后来补全不够的帧，并且repeat_last_frame_count将输出补全的帧数(差额，最后一帧复制了多少份),同时如果视频是带有音频的，就会用空音频接在后方进行补全。可以在生成后用remove_video_from_end节点将这几帧进行切除。
-分为两段，则向front段或者back段获取需要的帧数以确保split_generate符合8n+1，而分为三段时，是向back段获取需要的帧数。
-符合8n+1的也符合4n+1，就不再添加4n+1了。
+### align_frames
+可将视频延长到视频模型要求的帧数。
+支持none，MiniMax H3-17n+5, LTX2.3-8N+1(符合8n+1的也符合4n+1，就不再添加4n+1)。
+
+根据视频是否有分割，会有不同的延长方式：
+- 当它开启并且split_count=0时(没有分割），将重复复制最后一帧到最后来补全不够的帧，并且align_added_frames将输出补全的帧数(差额，最后一帧复制了多少份),同时如果视频是带有音频的，就会用空音频接在后方进行补全。可以在生成后用remove_video_from_end节点将这几帧进行切除。这也是基础的方式。
+- 分为两段，则向front段或者back段获取需要的帧数以确保split_generate符合对齐要求。
+- 分为三段时，是向back段获取需要的帧数。
 
 ## video_splitter_pw
 执行视频分割的节点。
@@ -79,6 +92,12 @@ split_info拥有最高优先级，当有分割信息输入时，会忽略该节�
 本身的分割同样是设置分割点。分割点属于下一段视频，为下段视频的首帧。
 分割为两段时，固定前一段为front, 后段为generate。
 分割为三段时，固定第一段为front, 第二段为generate, 第三段为back。split_back_point_idx输入后端的分割点，支持输入负数作为倒数多少帧，切割起来更方便些。
+
+## video_audio_simple_uploader_pw（新增）
+将视频与音频单独上传到input下的特定文件夹中。便于进行项目管理。
+input/ 默认不填写就是上传到input文件夹中，填写一个子文件夹就会上传到该文件夹，如无该文件夹则会新建一个。
+Upload Media可选择视频或者音频。info后面可接show any之类的节点用于驱动运行。视频和音频在运行前只会以预览方式存在，并带有local标签。运行后才会上传，并且local标签消失。
+鼠标移动到视频/音频预览会显示剪辑图标。进入剪辑，将可以快速切掉头尾后进行上传。在运行前，剪辑也是暂存在本地的，也非真实剪辑而是记录剪辑状态，local旁边会有个剪辑标签，上传后标签消失。
 
 ## Audio Loader PW
 可以与[local media manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager)联合使用
@@ -88,6 +107,13 @@ split_info拥有最高优先级，当有分割信息输入时，会忽略该节�
 - threshold (阈值)：判断音频波形是否发生“起伏”的标准。如果音频底噪较大，可以适当调高此值；如果声音较小，可以调低。音频如果用提取人声先进行处理，则不用改这个值保持默认。
 - min_silence_ignore (最小静音间隔)：如果两段起伏之间的空白直线段（静音）短于这个时间，它们会被合并成一段输出而忽略设定值的空音频。这可以防止因为发音中正常的极短停顿（如单词之间的换气）而把一句话切得稀碎。
 - window_size_ms (窗口大小)：算法将音频切片成多少毫秒的块来检测。20.0ms 是语音检测中的黄金标准，能够平滑掉极短的毛刺。
+
+## minimax_h3_media_preview PW
+配合local Media Manager的快速多选，通过paths获取需要的图片，视频，音频来满足MiniMax H3的需求。
+将节点连接到paths，在Local Media Manager中多选混选，运行这个节点，就能看到选择的媒体分类出现在预览的格子中(按照分类和选择顺序进行排列，视频音频可进行播放）。以此快速选择和快速预览要喂给H3模型的素材。
+按照MiniMax H3的要求，image最多9张，Video最多3段，Audio最多3段。如果超了，会弹出提示。
+输出会将选择好的这些素材全部打包为media pack。然后由media unpack pw节点进行解包。
+
 
 ## Text Bridge PW
 用于文本的获取、预览和修改。
