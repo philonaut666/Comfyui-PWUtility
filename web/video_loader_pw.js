@@ -5,6 +5,35 @@ app.registerExtension({
     name: "Comfy.VideoLoaderPW",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name === "VideoLoaderPW") {
+            const normalizeVideoPath = (value) => {
+                if (value === null || value === undefined) return "";
+
+                if (Array.isArray(value)) {
+                    value = value[0];
+                }
+
+                if (typeof value === "string") {
+                    return value.trim();
+                }
+
+                if (typeof value === "number" || typeof value === "boolean") {
+                    return String(value).trim();
+                }
+
+                if (value && typeof value === "object") {
+                    const candidate =
+                        value.path !== undefined ? value.path :
+                        value.filename !== undefined ? value.filename :
+                        value.name !== undefined ? value.name :
+                        undefined;
+
+                    if (typeof candidate === "string") return candidate.trim();
+                    if (typeof candidate === "number") return String(candidate).trim();
+                }
+
+                return "";
+            };
+
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             const onConfigure = nodeType.prototype.onConfigure;
             const onResize = nodeType.prototype.onResize;
@@ -22,11 +51,14 @@ app.registerExtension({
                 if (this.syncFramesFromTime) this.syncFramesFromTime();
                 if (this.toggleWidgetVisibility) this.toggleWidgetVisibility();
                 if (this.syncToggleVisual) this.syncToggleVisual();
+
                 if (this.widgets) {
                     const pathWidget = this.widgets.find(w => w.name === "path");
-                    if (pathWidget && pathWidget.value && this.updatePreview) {
-                        this._lastLoadedVideoPath = pathWidget.value;
-                        this.updatePreview(pathWidget.value, true);
+                    const safePath = normalizeVideoPath(pathWidget ? pathWidget.value : "");
+
+                    if (safePath && this.updatePreview) {
+                        this._lastLoadedVideoPath = safePath;
+                        this.updatePreview(safePath, true);
                     }
                 }
             };
@@ -289,11 +321,17 @@ app.registerExtension({
                 }
 
                 node.updatePreview = function (filename, force = false) {
-                    if (!filename) return;
+                    const p = normalizeVideoPath(filename);
+                    if (!p) return;
+
                     let url;
-                    const isAbsolute = (filename.length >= 2 && filename[1] === ':') || filename.startsWith('/');
-                    if (isAbsolute) url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(filename)}`);
-                    else url = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input`);
+                    const isAbsolute = (p.length >= 2 && p[1] === ':') || p.startsWith('/');
+
+                    if (isAbsolute) {
+                        url = api.apiURL(`/video_ui_custom_view?filename=${encodeURIComponent(p)}`);
+                    } else {
+                        url = api.apiURL(`/view?filename=${encodeURIComponent(p)}&type=input`);
+                    }
 
                     if (!videoPreview) return;
 
@@ -304,8 +342,10 @@ app.registerExtension({
                     }
                 };
 
-                const probeVideoInfo = async (p) => {
+                const probeVideoInfo = async (rawPath) => {
+                    const p = normalizeVideoPath(rawPath);
                     if (!p) return;
+
                     try {
                         const resp = await api.fetchApi(`/video_ui_video_info?filename=${encodeURIComponent(p)}`, { method: "GET" });
                         if (!resp || resp.status !== 200) return;
@@ -494,9 +534,9 @@ app.registerExtension({
                 };
 
                 const applyVideoPath = (rawPath, opts = {}) => {
-                    if (!rawPath || !rawPath.trim()) return;
+                    const p = normalizeVideoPath(rawPath);
+                    if (!p) return;
 
-                    const p = rawPath.trim();
                     const isNewFile = (p !== node._lastLoadedVideoPath);
 
                     if (isNewFile) {
@@ -937,7 +977,6 @@ app.registerExtension({
                         videoPreview.pause();
                         videoPreview.controls = false;
                     } else {
-                        // 关闭 Crop：恢复原画面，清空裁切参数
                         if (cropXWidget) cropXWidget.value = 0.0;
                         if (cropYWidget) cropYWidget.value = 0.0;
                         if (cropWWidget) cropWWidget.value = 1.0;
