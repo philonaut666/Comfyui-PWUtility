@@ -1,4 +1,5 @@
 import os
+import re
 import torch
 import numpy as np
 import folder_paths
@@ -9,6 +10,61 @@ import gc
 from server import PromptServer
 from aiohttp import web
 import comfy.utils
+
+
+def _safe_input_subfolder(subfolder):
+    """
+    Sanitize user-provided subfolder under input directory.
+    Allows nested folders like AAA/BBB.
+    Blocks path traversal.
+    """
+    if not subfolder:
+        return ""
+
+    subfolder = str(subfolder).strip().replace("\\", "/")
+    parts = []
+
+    for part in subfolder.split("/"):
+        part = part.strip()
+        if not part or part in (".", ".."):
+            continue
+
+        cleaned = re.sub(r"[^\w\-. ]+", "_", part).strip()
+        if cleaned:
+            parts.append(cleaned)
+
+    return "/".join(parts)
+
+
+def _resolve_video_path_any(video_to_load, raise_error=True):
+    if not video_to_load:
+        if raise_error:
+            raise FileNotFoundError("Video path is empty")
+        return ""
+
+    candidates = [video_to_load]
+
+    try:
+        candidates.append(folder_paths.get_annotated_filepath(video_to_load))
+    except Exception:
+        pass
+
+    try:
+        candidates.append(os.path.join(folder_paths.get_input_directory(), video_to_load))
+    except Exception:
+        pass
+
+    for c in candidates:
+        try:
+            if c and os.path.exists(c):
+                return os.path.abspath(c)
+        except Exception:
+            pass
+
+    if raise_error:
+        raise FileNotFoundError(f"Video file not found: {video_to_load}")
+
+    return video_to_load
 
 
 @PromptServer.instance.routes.get("/video_ui_custom_view")
@@ -26,17 +82,86 @@ async def upload_chunk(request):
     filename = post.get("filename")
     chunk_index = int(post.get("chunk_index"))
     total_chunks = int(post.get("total_chunks"))
+    subfolder = _safe_input_subfolder(post.get("subfolder", ""))
+
+    if not filename:
+        return web.json_response({"status": "error", "message": "filename is required"}, status=400)
+
+    filename = os.path.basename(str(filename))
 
     upload_dir = folder_paths.get_input_directory()
-    file_path = os.path.join(upload_dir, filename)
+
+    if subfolder:
+        target_dir = os.path.join(upload_dir, *subfolder.split("/"))
+    else:
+        target_dir = upload_dir
+
+    os.makedirs(target_dir, exist_ok=True)
+
+    file_path = os.path.join(target_dir, filename)
 
     mode = "ab" if chunk_index > 0 else "wb"
     with open(file_path, mode) as f:
         f.write(file.file.read())
 
     if chunk_index == total_chunks - 1:
-        return web.json_response({"name": filename})
+        returned_name = f"{subfolder}/{filename}" if subfolder else filename
+        return web.json_response({"name": returned_name})
+
     return web.json_response({"status": "ok"})
+
+
+@PromptServer.instance.routes.get("/video_ui_video_info")
+async def video_ui_video_info(request):
+    filename = request.query.get("filename", "")
+    if not filename:
+        return web.json_response({"error": "filename is required"}, status=400)
+
+    try:
+        video_path = _resolve_video_path_any(filename.strip(), raise_error=True)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=404)
+
+    try:
+        container = av.open(video_path)
+
+        video_stream = container.streams.video[0] if len(container.streams.video) > 0 else None
+
+        source_fps = 0.0
+        duration = 0.0
+        width = 0
+        height = 0
+        source_frame_count = 0
+
+        if video_stream:
+            avg_rate = getattr(video_stream, "average_rate", None) or getattr(video_stream, "guessed_rate", None)
+            if avg_rate:
+                source_fps = float(avg_rate)
+
+            if video_stream.duration and video_stream.time_base:
+                duration = float(video_stream.duration * video_stream.time_base)
+
+            width = int(video_stream.codec_context.width)
+            height = int(video_stream.codec_context.height)
+            source_frame_count = int(getattr(video_stream, "frames", 0) or 0)
+
+        if duration <= 0 and getattr(container, "duration", None):
+            try:
+                duration = float(container.duration) / 1_000_000.0
+            except Exception:
+                pass
+
+        container.close()
+
+        return web.json_response({
+            "source_fps": round(source_fps, 3),
+            "duration": round(duration, 3),
+            "width": width,
+            "height": height,
+            "source_frame_count": source_frame_count,
+        })
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
 
 
 class VideoLoaderPW:
@@ -52,18 +177,30 @@ class VideoLoaderPW:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "path": ("STRING", {"default": "", "forceInput": True, "tooltip": "Path to the video file"}),
+                "path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Optional video path. Can be empty if using upload/drag inside the node."
+                }),
                 "start_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "end_time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100000.0, "step": 0.01}),
                 "start_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1}),
                 "end_frame": ("INT", {"default": 0, "min": 0, "max": 10000000, "step": 1, "tooltip": "0 means to the end"}),
-                "frame_rate": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 120.0, "step": 0.1, "tooltip": "Force the video to a specific frame rate for extraction."}),
+                "frame_rate": ("FLOAT", {
+                    "default": 24.0,
+                    "min": 1.0,
+                    "max": 120.0,
+                    "step": 0.1,
+                    "tooltip": "Force the video to a specific frame rate for extraction."
+                }),
                 "display_mode": (["seconds", "frames"], {"default": "frames"}),
                 "crop_x": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_y": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "crop_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
-                "align_8n+1": ("BOOLEAN", {"default": True, "tooltip": "Align generate segment to 8n+1 frames by adjusting split points or repeating end frames."}),
+                "align frames": (["none", "MH3-17n+5", "LTX2.3-8n+1"], {
+                    "default": "MH3-17n+5",
+                    "tooltip": "Alignment mode. none: no alignment. MH3-17n+5: align to 17n+5. LTX2.3-8n+1: align to 8n+1."
+                }),
                 "normalize": ("FLOAT", {
                     "default": -16.0,
                     "min": -100.0,
@@ -84,40 +221,13 @@ class VideoLoaderPW:
         }
 
     RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "FLOAT", "FLOAT", "STRING", "INT", "STRING")
-    RETURN_NAMES = ("images", "audio", "frame_count", "duration", "fps", "video_info", "align_8n+1_add_frames", "split_info")
+    RETURN_NAMES = ("images", "audio", "frame_count", "duration", "fps", "video_info", "align_added_frames", "split_info")
     FUNCTION = "load_video"
     CATEGORY = "🔮PWUtility/Video"
 
     @staticmethod
     def _resolve_video_path(video_to_load, raise_error=True):
-        if not video_to_load:
-            if raise_error:
-                raise FileNotFoundError("Video path is empty")
-            return ""
-
-        candidates = [video_to_load]
-
-        try:
-            candidates.append(folder_paths.get_annotated_filepath(video_to_load))
-        except Exception:
-            pass
-
-        try:
-            candidates.append(os.path.join(folder_paths.get_input_directory(), video_to_load))
-        except Exception:
-            pass
-
-        for c in candidates:
-            try:
-                if c and os.path.exists(c):
-                    return os.path.abspath(c)
-            except Exception:
-                pass
-
-        if raise_error:
-            raise FileNotFoundError(f"Video file not found: {video_to_load}")
-
-        return video_to_load
+        return _resolve_video_path_any(video_to_load, raise_error=raise_error)
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -131,7 +241,7 @@ class VideoLoaderPW:
             uid = "__global__"
         uid = str(uid)
 
-        path = kwargs.get("path", "")
+        path = kwargs.get("path", "") or ""
         if not path or not isinstance(path, str) or not path.strip():
             last = cls._node_last_path.get(uid, None)
             return f"{uid}|empty|{last is not None and last != ''}"
@@ -461,15 +571,52 @@ class VideoLoaderPW:
 
         return audio_dict
 
+    @staticmethod
+    def _align_target_frames(total_frames, fr, align_mode):
+        """
+        Return aligned frame count.
+
+        - none: no change
+        - LTX2.3-8n+1: 8n+1
+        - MH3-17n+5:
+            max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17
+            where a is segment duration in seconds.
+        """
+        total_frames = int(max(0, total_frames))
+        if total_frames <= 0 or align_mode == "none":
+            return total_frames
+
+        if align_mode == "LTX2.3-8n+1":
+            if (total_frames - 1) % 8 == 0:
+                return total_frames
+            return math.ceil((total_frames - 1) / 8) * 8 + 1
+
+        if align_mode == "MH3-17n+5":
+            if fr <= 0:
+                fr = 24.0
+
+            duration_sec = float(total_frames) / float(fr)
+            base = max(5, int(math.floor(duration_sec * 24.0 + 0.5)))
+            target = base + ((5 - (base % 17)) % 17)
+
+            # Never shrink frames. If non-24 frame_rate makes formula target smaller,
+            # align current total_frames upward to 17n+5 instead.
+            if target < total_frames:
+                target = total_frames + ((5 - (total_frames % 17)) % 17)
+
+            return max(total_frames, target)
+
+        return total_frames
+
     def load_video(
         self,
-        path,
-        frame_rate,
-        display_mode,
-        start_time,
-        end_time,
-        start_frame,
-        end_frame,
+        path="",
+        frame_rate=24.0,
+        display_mode="frames",
+        start_time=0.0,
+        end_time=0.0,
+        start_frame=0,
+        end_frame=0,
         crop_x=0.0,
         crop_y=0.0,
         crop_w=1.0,
@@ -483,7 +630,17 @@ class VideoLoaderPW:
         select_generate="blue",
         **kwargs
     ):
-        align_8n_plus_1 = kwargs.get("align_8n+1", True)
+        raw_align = kwargs.get("align frames", kwargs.get("align_8n+1", "MH3-17n+5"))
+
+        # Backward compatibility for old boolean True/False workflows.
+        if isinstance(raw_align, bool):
+            align_mode = "LTX2.3-8n+1" if raw_align else "none"
+        else:
+            align_mode = str(raw_align)
+
+        if align_mode not in ("none", "MH3-17n+5", "LTX2.3-8n+1"):
+            align_mode = "MH3-17n+5"
+
         unique_id = kwargs.get("unique_id", "__global__")
         if unique_id is None:
             unique_id = "__global__"
@@ -535,7 +692,7 @@ class VideoLoaderPW:
         source_duration = float(cache.get("duration", 0.0))
         source_frame_count = int(cache.get("source_frame_count", 0))
 
-        fr = float(frame_rate) if frame_rate > 0 else 25.0
+        fr = float(frame_rate) if frame_rate > 0 else 24.0
 
         manual_crop_left = int(orig_w * crop_x)
         manual_crop_top = int(orig_h * crop_y)
@@ -666,29 +823,29 @@ class VideoLoaderPW:
         split_info_dict = {}
 
         if split_count == 0:
-            total_frames = g_end_local + 1
+            if align_mode != "none":
+                total_frames = g_end_local + 1
+                new_total_frames = self._align_target_frames(total_frames, fr, align_mode)
+                repeat_last_frame_count = max(0, int(new_total_frames - total_frames))
 
-            if align_8n_plus_1 and (total_frames - 1) % 8 != 0:
-                new_total_frames = math.ceil((total_frames - 1) / 8) * 8 + 1
-                repeat_last_frame_count = new_total_frames - total_frames
+                if repeat_last_frame_count > 0:
+                    if image_tensor is not None and image_tensor.shape[0] > 0:
+                        last_frame = image_tensor[-1:]
+                        repeat_frames = last_frame.repeat(repeat_last_frame_count, 1, 1, 1)
+                        image_tensor = torch.cat([image_tensor, repeat_frames], dim=0)
 
-                if image_tensor is not None and image_tensor.shape[0] > 0 and repeat_last_frame_count > 0:
-                    last_frame = image_tensor[-1:]
-                    repeat_frames = last_frame.repeat(repeat_last_frame_count, 1, 1, 1)
-                    image_tensor = torch.cat([image_tensor, repeat_frames], dim=0)
+                    if audio_dict and "waveform" in audio_dict and audio_dict["waveform"].shape[-1] > 0:
+                        sample_rate = audio_dict.get("sample_rate", 44100)
+                        samples_to_add = int(round(repeat_last_frame_count / fr * sample_rate))
 
-                if audio_dict and "waveform" in audio_dict and audio_dict["waveform"].shape[-1] > 0 and repeat_last_frame_count > 0:
-                    sample_rate = audio_dict.get("sample_rate", 44100)
-                    samples_to_add = int(round(repeat_last_frame_count / fr * sample_rate))
+                        if samples_to_add > 0:
+                            waveform = audio_dict["waveform"]
+                            padding = torch.zeros((*waveform.shape[:-1], samples_to_add), dtype=waveform.dtype, device=waveform.device)
+                            audio_dict["waveform"] = torch.cat([waveform, padding], dim=-1)
 
-                    if samples_to_add > 0:
-                        waveform = audio_dict["waveform"]
-                        padding = torch.zeros((*waveform.shape[:-1], samples_to_add), dtype=waveform.dtype, device=waveform.device)
-                        audio_dict["waveform"] = torch.cat([waveform, padding], dim=-1)
-
-                g_end_local = new_total_frames - 1
-                frame_count = new_total_frames
-                final_duration_sec = round(float(frame_count / fr), 2)
+                    g_end_local = new_total_frames - 1
+                    frame_count = new_total_frames
+                    final_duration_sec = round(float(frame_count / fr), 2)
 
         elif split_count == 1:
             p_abs_0 = max(0, split_purple_point_idx)
@@ -702,14 +859,14 @@ class VideoLoaderPW:
 
             select_gen = (select_generate == "purple")
 
-            if align_8n_plus_1:
+            if align_mode != "none":
                 if not select_gen:
                     N = g_end_local - p_local + 1
-                    target_N = math.ceil((N - 1) / 8) * 8 + 1
+                    target_N = self._align_target_frames(N, fr, align_mode)
                     p_local = max(1, g_end_local - target_N + 1)
                 else:
                     N = p_local
-                    target_N = math.ceil((N - 1) / 8) * 8 + 1
+                    target_N = self._align_target_frames(N, fr, align_mode)
                     p_local = min(g_end_local - 1, target_N)
 
             if not select_gen:
@@ -736,11 +893,11 @@ class VideoLoaderPW:
             if g_local > g_end_local - 1:
                 g_local = g_end_local - 1
 
-            if align_8n_plus_1:
+            if align_mode != "none":
                 N = g_local - p_local
                 if N < 1:
                     N = 1
-                target_N = math.ceil((N - 1) / 8) * 8 + 1
+                target_N = self._align_target_frames(N, fr, align_mode)
                 g_local = min(g_end_local - 1, p_local + target_N)
 
             split_info_dict["split_front"] = calc_segment(0, p_local - 1)
