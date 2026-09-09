@@ -341,12 +341,10 @@ class LMMSelectImagePW:
         if tensor.dim() == 2:
             tensor = tensor.unsqueeze(-1).unsqueeze(0)
         elif tensor.dim() == 3:
-            # 兼容 CHW / HWC
             if tensor.shape[0] in (1, 3, 4) and tensor.shape[-1] not in (1, 3, 4):
                 tensor = tensor.permute(1, 2, 0)
             tensor = tensor.unsqueeze(0)
         elif tensor.dim() == 4:
-            # 兼容 B, C, H, W
             if tensor.shape[1] in (1, 3, 4) and tensor.shape[-1] not in (1, 3, 4):
                 tensor = tensor.permute(0, 2, 3, 1)
         else:
@@ -367,7 +365,6 @@ class LMMSelectImagePW:
         if tensor.dim() != 4:
             return None
 
-        # 通道处理
         if tensor.shape[-1] == 1:
             tensor = tensor.repeat(1, 1, 1, 3)
         elif tensor.shape[-1] == 2:
@@ -411,7 +408,6 @@ class LMMSelectImagePW:
         if not s:
             return False
 
-        # 过长或包含换行，通常是 prompt，不视为路径
         if len(s) > 512 or "\n" in s or "\r" in s:
             return False
 
@@ -425,16 +421,6 @@ class LMMSelectImagePW:
             return False
 
     def _normalize_metadata_item(self, md):
-        """
-        将单个 metadata 规范化为 dict。
-        支持：
-        - dict
-        - JSON 字符串
-        - A1111 parameters 字符串
-        - 普通 positive prompt 字符串
-        - int/float 作为 seed
-        - [positive, negative, seed] 形式
-        """
         if md is None:
             return {}
 
@@ -446,7 +432,6 @@ class LMMSelectImagePW:
             if not s:
                 return {}
 
-            # 尝试 JSON metadata / workflow
             if s.startswith('{') or s.startswith('['):
                 try:
                     obj = json.loads(s)
@@ -457,11 +442,9 @@ class LMMSelectImagePW:
                 except Exception:
                     pass
 
-            # A1111 / WebUI parameters
             if re.search(r'Negative prompt:|Steps:|Sampler:|CFG scale:|Seed:', s, re.IGNORECASE):
                 return {"parameters": s}
 
-            # 普通正向提示词
             return {"positive_prompt": s}
 
         if isinstance(md, (int, float)) and not isinstance(md, bool):
@@ -471,7 +454,6 @@ class LMMSelectImagePW:
             if len(md) == 0:
                 return {}
 
-            # 支持 [positive, negative, seed]
             if len(md) <= 3 and all(not isinstance(x, (dict, list, tuple, torch.Tensor, np.ndarray, Image.Image)) for x in md):
                 positive = md[0] if len(md) > 0 else ""
                 negative = md[1] if len(md) > 1 else ""
@@ -487,9 +469,6 @@ class LMMSelectImagePW:
         return {}
 
     def _looks_like_prompt_triple(self, seq, allow_list=False):
-        """
-        判断是否像 [positive, negative, seed] 或 (positive, negative, seed)。
-        """
         if not isinstance(seq, (list, tuple)):
             return False
 
@@ -509,20 +488,14 @@ class LMMSelectImagePW:
             return False
 
         if len(seq) == 2:
-            # list of two strings 更可能是两个 metadata item，不视为 triple
             return isinstance(seq, tuple)
 
-        # len == 3
         if isinstance(seq[2], (int, float)) and not isinstance(seq[2], bool):
             return True
 
         return isinstance(seq, tuple) and isinstance(seq[2], str)
 
     def _normalize_metadata_sequence(self, seq):
-        """
-        规范化 metadata list。
-        返回值一定是 list[dict] 或 None。
-        """
         if seq is None:
             return None
 
@@ -530,7 +503,6 @@ class LMMSelectImagePW:
             return [self._normalize_metadata_item(seq)]
 
         if isinstance(seq, (list, tuple)):
-            # 如果是明显的 prompt triple，则视为单个 metadata
             if self._looks_like_prompt_triple(seq, allow_list=True):
                 return [self._normalize_metadata_item(seq)]
 
@@ -539,9 +511,6 @@ class LMMSelectImagePW:
         return [self._normalize_metadata_item(seq)]
 
     def _looks_like_metadata_payload(self, obj):
-        """
-        判断一个对象是否更像 metadata，而不是图片对象。
-        """
         if isinstance(obj, dict):
             return True
 
@@ -561,19 +530,15 @@ class LMMSelectImagePW:
             if self._looks_like_prompt_triple(obj, allow_list=True):
                 return True
 
-            # 如果全是路径字符串，更像图片列表，不是 metadata list
             if all(isinstance(x, str) and self._looks_like_path_string(x) for x in obj):
                 return False
 
-            # 含图片对象，不是 metadata
             if any(isinstance(x, (torch.Tensor, np.ndarray, Image.Image, os.PathLike)) for x in obj):
                 return False
 
-            # 全是 dict / str / number，视为 metadata list
             if all(isinstance(x, (dict, str, int, float)) and not isinstance(x, bool) for x in obj):
                 return True
 
-            # 含 dict，且没有图片对象，也视为 metadata list
             if any(isinstance(x, dict) for x in obj):
                 return True
 
@@ -582,18 +547,12 @@ class LMMSelectImagePW:
         return False
 
     def _extract_metadata_from_dict(self, data):
-        """
-        从 dict 中拆分：
-        - single metadata
-        - metadata list
-        """
         if not isinstance(data, dict):
             return self._normalize_metadata_item(data), None
 
         single = {}
         meta_list = None
 
-        # 直接写在 dict 里的 metadata 字段
         direct = {}
         direct_keys = (
             "positive_prompt", "positive", "pos", "positivePrompt",
@@ -608,7 +567,6 @@ class LMMSelectImagePW:
         if direct:
             single = self._merge_metadata(single, self._normalize_metadata_item(direct))
 
-        # 单个 metadata 字段
         for key in ("metadata", "meta", "info", "image_metadata"):
             if key in data and data[key] is not None:
                 val = data[key]
@@ -618,7 +576,6 @@ class LMMSelectImagePW:
                 if s_list is not None:
                     meta_list = s_list if meta_list is None else meta_list + s_list
 
-        # 明确的 metadata list 字段
         for key in (
             "metadatas", "metas", "infos",
             "image_metadatas", "metadata_list", "metadatas_list", "metadata_items"
@@ -631,11 +588,6 @@ class LMMSelectImagePW:
         return single, meta_list
 
     def _split_metadata_payload(self, payload):
-        """
-        将一个 metadata payload 分成:
-        - single metadata dict
-        - metadata list
-        """
         if isinstance(payload, dict):
             return self._extract_metadata_from_dict(payload)
 
@@ -651,10 +603,6 @@ class LMMSelectImagePW:
         return self._normalize_metadata_item(payload), None
 
     def _extract_attached_metadata(self, obj):
-        """
-        读取对象上挂载的 metadata。
-        例如 ImageLoaderPW 会给每张图的 tensor 设置 _metadata。
-        """
         if obj is None:
             return {}, None
 
@@ -673,7 +621,6 @@ class LMMSelectImagePW:
             except Exception:
                 pass
 
-        # PIL.Image 的 info 也作为 metadata 兜底
         if val is None and isinstance(obj, Image.Image):
             try:
                 info = getattr(obj, "info", None)
@@ -688,10 +635,6 @@ class LMMSelectImagePW:
         return self._split_metadata_payload(val)
 
     def _extract_prompts_and_seed_from_metadata(self, metadata):
-        """
-        从 metadata 中提取 positive_prompt / negative_prompt / seed。
-        优先使用显式字段，其次回退到原有 extract_prompts_and_seed。
-        """
         md = self._normalize_metadata_item(metadata)
         if not isinstance(md, dict) or not md:
             return "", "", 0
@@ -718,7 +661,6 @@ class LMMSelectImagePW:
                 except Exception:
                     seed = None
 
-        # 复用原有解析逻辑，处理 parameters / workflow / prompt JSON
         g_positive, g_negative, g_seed = extract_prompts_and_seed(md)
 
         if positive is None:
@@ -778,7 +720,6 @@ class LMMSelectImagePW:
                 except Exception:
                     pass
 
-                # 文件内 metadata 作为底，外部传入 metadata 优先覆盖
                 merged_metadata = self._merge_metadata(file_metadata, provided_metadata)
                 return image_tensor, merged_metadata
 
@@ -800,7 +741,6 @@ class LMMSelectImagePW:
         if tensor is None or tensor.shape[0] == 0:
             return empty_return
 
-        # 保持单张图片输出
         if tensor.shape[0] > 1:
             tensor = tensor[0:1]
 
@@ -811,25 +751,19 @@ class LMMSelectImagePW:
         return (tensor, W_orig, H_orig, positive_prompt, negative_prompt, seed,)
 
     def _iter_image_items(self, image_input, metadata=None, metadata_list=None, depth=0):
-        """
-        将 image(list) 输入展平为单张图片序列，并尽量为每张图片绑定对应 metadata。
-        """
         if depth > 8 or image_input is None:
             return
 
         base_md = self._normalize_metadata_item(metadata)
         meta_list = self._normalize_metadata_sequence(metadata_list) if metadata_list is not None else None
 
-        # 读取对象自身挂载的 metadata，例如 tensor._metadata
         attached_single, attached_list = self._extract_attached_metadata(image_input)
         if attached_single:
-            # 外部传入 metadata 优先于 attached metadata
             base_md = self._merge_metadata(attached_single, base_md)
 
         if attached_list is not None and meta_list is None:
             meta_list = attached_list
 
-        # dict 包装结构
         if isinstance(image_input, dict):
             single_md, container_meta_list = self._extract_metadata_from_dict(image_input)
             base_md = self._merge_metadata(base_md, single_md)
@@ -858,7 +792,6 @@ class LMMSelectImagePW:
 
             return
 
-        # (payload, metadata) 结构
         if (
             isinstance(image_input, (list, tuple))
             and len(image_input) == 2
@@ -876,7 +809,6 @@ class LMMSelectImagePW:
             yield from self._iter_image_items(image_input[0], base_md, meta_list, depth + 1)
             return
 
-        # torch.Tensor：单张或 batch
         if isinstance(image_input, torch.Tensor):
             normalized = self._normalize_image_tensor(image_input)
             if normalized is None or normalized.shape[0] == 0:
@@ -893,7 +825,6 @@ class LMMSelectImagePW:
                 yield normalized[i:i + 1], item_md
             return
 
-        # 路径字符串 / PathLike
         if isinstance(image_input, (str, os.PathLike)):
             path = image_input if isinstance(image_input, str) else os.fspath(image_input)
 
@@ -910,7 +841,6 @@ class LMMSelectImagePW:
                     yield tensor[i:i + 1], item_md
             return
 
-        # list / tuple / 其它可迭代对象
         seq = None
         if isinstance(image_input, (list, tuple)):
             seq = image_input
@@ -921,7 +851,6 @@ class LMMSelectImagePW:
                 seq = None
 
         if seq is not None:
-            # 单元素容器直接展开，避免 ComfyUI 把 list 再包一层导致 index / metadata 错位
             if len(seq) == 1:
                 yield from self._iter_image_items(seq[0], base_md, meta_list, depth + 1)
                 return
@@ -938,7 +867,6 @@ class LMMSelectImagePW:
                 yield from self._iter_image_items(item, item_md, None, depth + 1)
             return
 
-        # 单张图片对象 / ndarray / PIL.Image 等
         md = base_md
         if meta_list and len(meta_list) > 0:
             md = self._merge_metadata(base_md, meta_list[0])
@@ -967,17 +895,14 @@ class LMMSelectImagePW:
     def get_original_image(self, index, paths=None, **kwargs):
         index = self._normalize_index(index)
 
-        # 防止某些情况下 paths 被包成 list
         if isinstance(paths, (list, tuple)):
             paths = paths[0] if len(paths) > 0 else None
 
         image_input = kwargs.get("image(list)", None)
 
-        # image(list) 优先级更高：只要该端口有有效输入，就忽略 paths
         if image_input is not None and not self._is_empty_image_input(image_input):
             return self._get_image_from_image_input(image_input, index)
 
-        # 回退到 paths 模式
         selected_item = parse_selection_and_get_item(paths, index, "image")
         empty_return = self._empty_return()
 
@@ -1137,9 +1062,15 @@ class LMMSelectAudioPW:
                 "duration": ("FLOAT", {"default": 25.00, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Duration of the main audio to keep (0 = keep until end)"}),
                 "pre_silence": ("FLOAT", {"default": 0.00, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Add silence to the beginning of the main audio (in seconds)"}),
                 "post_silence": ("FLOAT", {"default": 0.00, "min": 0.0, "max": 100000.0, "step": 0.01, "tooltip": "Add silence to the end of the main audio (in seconds)"}),
-                "fps": ("FLOAT", {"default": 25.0, "min": 0.0, "max": 1000.0, "step": 0.1, "tooltip": "Frames per second, used to convert seconds to frames"}),
+                "fps": ("FLOAT", {"default": 24.000, "min": 0.0, "max": 1000.0, "step": 0.001, "tooltip": "Frames per second, used to convert seconds to frames"}),
                 "normalize": ("FLOAT", {"default": -16.0, "min": -100.0, "max": 100.0, "step": 0.1, "tooltip": "Target Peak dBFS for audio normalization"}),
-                "align_8n+1": ("BOOLEAN", {"default": False, "tooltip": "Align final main audio length to 8n+1 video frames by appending silence"}),
+                "align frames": (
+                    ["none", "MH3-17n+5", "LTX2.3-8n+1"],
+                    {
+                        "default": "MH3-17n+5",
+                        "tooltip": "Align final main audio length to target video frame formula by appending silence"
+                    }
+                ),
             },
             "optional": {
                 "paths": ("LMM_ALL_PATHS",),
@@ -1165,7 +1096,23 @@ class LMMSelectAudioPW:
         audio=None,
         **kwargs
     ):
-        align_8n_plus_1 = kwargs.get("align_8n+1", False)
+        align_frames_mode = kwargs.get("align frames", "MH3-17n+5")
+
+        if isinstance(align_frames_mode, (list, tuple)):
+            align_frames_mode = align_frames_mode[0] if len(align_frames_mode) > 0 else "MH3-17n+5"
+
+        if isinstance(align_frames_mode, bool):
+            align_frames_mode = "LTX2.3-8n+1" if align_frames_mode else "none"
+        elif align_frames_mode not in ("none", "MH3-17n+5", "LTX2.3-8n+1"):
+            align_frames_mode = "MH3-17n+5"
+
+        if isinstance(fps, (list, tuple)):
+            fps = fps[0] if len(fps) > 0 else 24.0
+
+        try:
+            fps = float(fps)
+        except Exception:
+            fps = 24.0
 
         original_waveform = None
         sample_rate = 44100
@@ -1202,7 +1149,6 @@ class LMMSelectAudioPW:
         # duration 为 0 表示不限制（取到末尾），否则取指定长度
         if duration > 0:
             duration_samples = int(round(duration * sample_rate))
-            # 确保不超过剩余长度
             duration_samples = min(duration_samples, total_samples - front_samples)
         else:
             duration_samples = total_samples - front_samples
@@ -1241,7 +1187,7 @@ class LMMSelectAudioPW:
         trimed_front_audio = {'waveform': front_waveform, 'sample_rate': sample_rate}
         trimed_back_audio = {'waveform': back_waveform, 'sample_rate': sample_rate}
 
-        # 4. 对主音频应用 pre_silence, post_silence, align_8n+1
+        # 4. 对主音频应用 pre_silence, post_silence, align frames
         waveform = main_waveform
 
         if pre_silence > 0:
@@ -1256,10 +1202,12 @@ class LMMSelectAudioPW:
                 post_tensor = torch.zeros(1, channels, post_samples, dtype=waveform.dtype, device=waveform.device)
                 waveform = torch.cat([waveform, post_tensor], dim=-1)
 
-        if align_8n_plus_1:
+        if align_frames_mode == "LTX2.3-8n+1":
             current_samples = waveform.shape[-1]
             current_duration_sec = current_samples / sample_rate
-            current_frames = current_duration_sec * fps
+
+            ltx_fps = fps if fps > 0 else 24.0
+            current_frames = current_duration_sec * ltx_fps
             rounded_frames = round(current_frames)
 
             if (rounded_frames - 1) % 8 != 0:
@@ -1270,13 +1218,30 @@ class LMMSelectAudioPW:
                     n += 1
                     target_frames = 8 * n + 1
 
-                target_duration_sec = target_frames / fps
+                target_duration_sec = target_frames / ltx_fps
                 target_samples = int(round(target_duration_sec * sample_rate))
 
                 if target_samples > current_samples:
                     pad_samples = target_samples - current_samples
                     pad_tensor = torch.zeros(1, channels, pad_samples, dtype=waveform.dtype, device=waveform.device)
                     waveform = torch.cat([waveform, pad_tensor], dim=-1)
+
+        elif align_frames_mode == "MH3-17n+5":
+            current_samples = waveform.shape[-1]
+            current_duration_sec = current_samples / sample_rate
+
+            # 按用户指定公式计算，公式中的帧率固定为 24
+            mh_fps = 24.0
+            base_frames = max(5, int(round(current_duration_sec * mh_fps)))
+            target_frames = base_frames + ((5 - (base_frames % 17)) % 17)
+
+            target_duration_sec = target_frames / mh_fps
+            target_samples = int(round(target_duration_sec * sample_rate))
+
+            if target_samples > current_samples:
+                pad_samples = target_samples - current_samples
+                pad_tensor = torch.zeros(1, channels, pad_samples, dtype=waveform.dtype, device=waveform.device)
+                waveform = torch.cat([waveform, pad_tensor], dim=-1)
 
         final_audio = {'waveform': waveform, 'sample_rate': sample_rate}
 
