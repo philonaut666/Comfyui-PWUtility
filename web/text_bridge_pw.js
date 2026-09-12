@@ -25,20 +25,18 @@ app.registerExtension({
             nodeType.prototype.onNodeCreated = function () {
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
                 
-                // 1. 找到 update_trigger 并在 UI 上将其隐藏
                 const triggerWidget = this.widgets.find(w => w.name === "update_trigger");
                 if (triggerWidget) {
+                    // 核心修复：只设置 hidden 和 computeSize
+                    // 不要修改 triggerWidget.type！
+                    // 之前设置 type = "hidden" 导致前端序列化时跳过该参数
                     triggerWidget.hidden = true;
-                    triggerWidget.type = "hidden";
-                    // 覆盖尺寸计算方法，使其在节点上不占任何高度
                     triggerWidget.computeSize = function() { return [0, -4]; };
                 }
 
-                // 2. 添加 Update from Input 按钮
                 const widget = this.addWidget("button", "Update from Input", null, () => {
                     if (triggerWidget) {
                         triggerWidget.value = (triggerWidget.value || 0) + 1;
-                        // 核心修复：强制触发 callback，确保 ComfyUI 前端感知到值的变化并收集它
                         if (triggerWidget.callback) {
                             triggerWidget.callback(triggerWidget.value);
                         }
@@ -47,10 +45,7 @@ app.registerExtension({
                     const nodeIdStr = String(this.id);
                     try {
                         if (typeof app.queuePrompt === 'function') {
-                            // 局部执行：只运行当前节点及上游依赖，严格只执行 1 次
                             app.queuePrompt(0, 1, [nodeIdStr]);
-                        } else if (app.api && typeof app.api.queuePrompt === 'function') {
-                            app.api.queuePrompt(0, 1, [nodeIdStr]);
                         }
                     } catch (e) {
                         console.error("PWUtility: Failed to queue prompt", e);
