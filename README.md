@@ -30,6 +30,8 @@ P.S. 如果使用了rgthee插件的relay+repeat组合，与Group Switch产生矛
 
 模式中有always one和max one两种。max one允许组全关，always one必须设置default group，但是使用always one可能有时候会遇到逻辑问题，大多数时候使用max one是比较好的选择。
 
+P.S> 当复制该节点和对应的组到其它工作流，linkage可能无法正确显示，只要刷新浏览器即可重新显示出正确配置。
+
 ## Image Loader PW：
 本地上传图片(可多图批量），可指定上传的文件夹，可调整尺寸再上传，可裁切后再上传， 可执行图片压缩。
 
