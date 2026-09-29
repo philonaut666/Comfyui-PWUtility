@@ -12,6 +12,23 @@ import re
 from server import PromptServer
 from aiohttp import web
 
+
+# ==========================================
+# 路径解析：空 -> input 目录；绝对路径 -> 原样；相对路径 -> 相对 input
+# ==========================================
+def resolve_upload_dir_pw(upload_path):
+    input_dir = folder_paths.get_input_directory()
+    if upload_path is None:
+        return input_dir
+    p = str(upload_path).strip()
+    if not p:
+        return input_dir
+    p = os.path.expanduser(p)
+    if not os.path.isabs(p):
+        p = os.path.join(input_dir, p)
+    return os.path.normpath(p)
+
+
 # --- Crop Endpoint Registration ---
 @PromptServer.instance.routes.post("/ImageLoaderPW/crop")
 async def crop_image(request):
@@ -68,13 +85,85 @@ async def crop_image(request):
         print(f"Error cropping image: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
+
+# ==========================================
+# 自定义上传端点：支持任意目标路径（绝对/相对/input 缺省）
+# ==========================================
+@PromptServer.instance.routes.post("/ImageLoaderPW/upload")
+async def upload_image_pw(request):
+    try:
+        data = await request.json()
+        filename = data.get("filename")
+        image_data_url = data.get("image")
+        target_dir = data.get("target_dir", "")
+        overwrite = data.get("overwrite", True)
+
+        if not image_data_url:
+            return web.json_response({"error": "Missing image data"}, status=400)
+
+        save_dir = resolve_upload_dir_pw(target_dir)
+        os.makedirs(save_dir, exist_ok=True)
+
+        safe_name = os.path.basename(str(filename).replace("\\", "/")) if filename else ""
+        if not safe_name:
+            safe_name = f"image_{int(time.time())}.png"
+        base, ext = os.path.splitext(safe_name)
+        if not ext:
+            ext = ".png"
+        safe_name = f"{base}{ext}"
+
+        header, encoded = image_data_url.split(",", 1)
+        binary_data = base64.b64decode(encoded)
+
+        save_path = os.path.join(save_dir, safe_name)
+        if os.path.exists(save_path) and not overwrite:
+            safe_name = f"{base}_{int(time.time())}{ext}"
+            save_path = os.path.join(save_dir, safe_name)
+
+        with open(save_path, "wb") as f:
+            f.write(binary_data)
+
+        abs_path = os.path.abspath(save_path).replace(os.sep, "/")
+        input_dir = os.path.abspath(folder_paths.get_input_directory())
+        rel = os.path.relpath(os.path.abspath(save_path), input_dir)
+        input_relative = None
+        if not rel.startswith("..") and not os.path.isabs(rel):
+            input_relative = rel.replace(os.sep, "/")
+
+        return web.json_response({
+            "path": abs_path,
+            "input_relative": input_relative
+        })
+    except Exception as e:
+        print(f"Error uploading image (PW): {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+# ==========================================
+# 自定义预览端点：用于预览 input 目录之外的图片
+# ==========================================
+@PromptServer.instance.routes.get("/ImageLoaderPW/view")
+async def view_image_pw(request):
+    try:
+        path = request.rel_url.query.get("path", "")
+        if not path:
+            return web.Response(status=400)
+        full = os.path.abspath(os.path.expanduser(path))
+        if not os.path.exists(full) or not os.path.isfile(full):
+            return web.Response(status=404)
+        return web.FileResponse(full)
+    except Exception as e:
+        print(f"Error viewing image (PW): {e}")
+        return web.Response(status=500)
+
+
 class ImageLoaderPW:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
                 "image_paths": ("STRING", {"default": "", "multiline": True}),
-                "input/": ("STRING", {"default": "", "multiline": False}),
+                "upload_path": ("STRING", {"default": "", "multiline": False}),
                 "scale_mode": (["none", "scale dimensions", "scale longer", "scale shorter"],),
                 "width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1}),
                 "height": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 1}),
@@ -216,7 +305,7 @@ class ImageLoaderPW:
 
     def load_images(self, **kwargs):
         image_paths = kwargs.get("image_paths", "")
-        input_subfolder = kwargs.get("input/", "")
+        upload_path = kwargs.get("upload_path", "")
         scale_mode = kwargs.get("scale_mode", "none")
         width = kwargs.get("width", 0)
         height = kwargs.get("height", 0)
@@ -236,17 +325,9 @@ class ImageLoaderPW:
         # 判断是否需要保存处理后的图片
         need_save_processed = (scale_mode != "none" or img_compression > 0)
 
-        # 准备保存目录
-        input_dir = folder_paths.get_input_directory()
-        save_subfolder = ""
-        if input_subfolder:
-            safe_parts = [p.strip() for p in input_subfolder.replace("\\", "/").split("/") if p and p != ".."]
-            save_subfolder = "/".join(safe_parts)
-        
-        save_dir = input_dir
-        if save_subfolder:
-            save_dir = os.path.join(input_dir, save_subfolder)
-            os.makedirs(save_dir, exist_ok=True)
+        # 准备保存目录（空 -> input；绝对路径 -> 原样；相对路径 -> 相对 input）
+        save_dir = resolve_upload_dir_pw(upload_path)
+        os.makedirs(save_dir, exist_ok=True)
 
         def align_to_multiple(val, multiple):
             if multiple <= 1:
@@ -343,28 +424,19 @@ class ImageLoaderPW:
                     img_pil = Image.open(img_byte_arr)
                     image_tensor = torch.from_numpy(np.array(img_pil).astype(np.float32) / 255.0)[None,]
 
-                # === 核心修改：处理完成后，将最终图片保存为 PNG ===
+                # === 处理完成后，将最终图片保存为 PNG 到 upload_path 解析出的目录 ===
                 if need_save_processed:
                     try:
                         img_np = (image_tensor[0].numpy() * 255).clip(0, 255).astype(np.uint8)
                         img_pil = Image.fromarray(img_np)
                         
-                        # 获取原始文件名（不含路径）
                         original_name = os.path.basename(path)
                         base_name = os.path.splitext(original_name)[0]
                         save_filename = f"{base_name}.png"
                         save_path = os.path.join(save_dir, save_filename)
                         
-                        # 如果文件已存在则覆盖
                         img_pil.save(save_path, format="PNG")
-                        
-                        # 更新路径为保存后的相对路径
-                        if save_subfolder:
-                            new_relative_path = f"{save_subfolder}/{save_filename}"
-                        else:
-                            new_relative_path = save_filename
-                        
-                        print(f"[ImageLoaderPW] Saved processed image: {new_relative_path}")
+                        print(f"[ImageLoaderPW] Saved processed image: {save_path}")
                     except Exception as save_e:
                         print(f"[ImageLoaderPW] Error saving processed image: {save_e}")
 
