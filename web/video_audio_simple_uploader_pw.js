@@ -177,7 +177,6 @@ function openVideoPreviewPW(videoSrc, title, onSave, isAudio) {
     const timeline = document.createElement("div");
     timeline.className = "pw-video-trim-timeline";
 
-    // 波形画布（底层）
     const waveCanvas = document.createElement("canvas");
     waveCanvas.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;pointer-events:none;";
     timeline.appendChild(waveCanvas);
@@ -222,7 +221,6 @@ function openVideoPreviewPW(videoSrc, title, onSave, isAudio) {
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
 
-    // 异步加载并绘制波形（视频/音频通用）
     pwLoadAndDrawWaveform(waveCanvas, videoSrc);
 
     let duration = 0;
@@ -325,7 +323,6 @@ function openVideoPreviewPW(videoSrc, title, onSave, isAudio) {
         updateUI();
     });
 
-    // Save & Close：保存完成后自动关闭
     if (saveBtn) {
         addListener(saveBtn, "click", () => {
             if (duration <= 0) return;
@@ -703,7 +700,8 @@ app.registerExtension({
                         isAudio = pwIsAudioPath(displayName);
                     }
                 } else {
-                    previewSrc = `/view?filename=${encodeURIComponent(path)}&type=input`;
+                    // 已上传文件：通过自定义 media 端点播放（兼容 input 相对路径与绝对路径）
+                    previewSrc = `/VideoAudioSimpleUploaderPW/media?path=${encodeURIComponent(path)}`;
                     displayName = path.split('/').pop();
                     isAudio = pwIsAudioPath(path);
                 }
@@ -944,8 +942,8 @@ app.registerExtension({
         node._pwUploadLocalVideos = async function() {
             if (!node._pwLocalFiles || Object.keys(node._pwLocalFiles).length === 0) return;
 
-            const subfolderWidget = node.widgets.find(w => w.name === "input/");
-            const subfolderValue = subfolderWidget ? (subfolderWidget.value || "").trim() : "";
+            const uploadPathWidget = node.widgets.find(w => w.name === "upload_path");
+            const uploadPathValue = uploadPathWidget ? (uploadPathWidget.value || "").trim() : "";
 
             const lines = (pathsWidget?.value || "").split("\n").map(s => s.trim()).filter(s => s);
             const newLines = [];
@@ -969,13 +967,13 @@ app.registerExtension({
 
                         try {
                             if (hasTrim) {
-                                // 有剪辑：走剪辑端点（服务端会处理 .aac->mp3 与 metadata）
+                                // 有剪辑：走剪辑端点（服务端处理路径、.aac->mp3 与 metadata）
                                 const body = new FormData();
                                 body.append("file", entry.file);
                                 body.append("start", String(entry.trim.start));
                                 body.append("end", String(entry.trim.end));
                                 body.append("filename", entry.name);
-                                if (subfolderValue) body.append("subfolder", subfolderValue);
+                                if (uploadPathValue) body.append("upload_path", uploadPathValue);
                                 const resp = await api.fetchApi("/VideoAudioSimpleUploaderPW/trim_upload", { method: "POST", body });
                                 if (resp.status === 200) {
                                     const data = await resp.json();
@@ -997,7 +995,7 @@ app.registerExtension({
                                 body.append("start", "0");
                                 body.append("end", String(FULL_RANGE_END));
                                 body.append("filename", entry.name);
-                                if (subfolderValue) body.append("subfolder", subfolderValue);
+                                if (uploadPathValue) body.append("upload_path", uploadPathValue);
                                 const resp = await api.fetchApi("/VideoAudioSimpleUploaderPW/trim_upload", { method: "POST", body });
                                 if (resp.status === 200) {
                                     const data = await resp.json();
@@ -1013,19 +1011,23 @@ app.registerExtension({
                                     newLines.push(line);
                                 }
                             } else {
-                                // 未剪辑、非 .aac：直接上传原文件
+                                // 未剪辑、非 .aac：原样保存到目标路径（尊重自定义路径）
                                 const body = new FormData();
-                                body.append("image", entry.file);
-                                if (subfolderValue) body.append("subfolder", subfolderValue);
-                                const resp = await api.fetchApi("/upload/image", { method: "POST", body });
+                                body.append("file", entry.file);
+                                body.append("mode", "save");
+                                body.append("filename", entry.name);
+                                if (uploadPathValue) body.append("upload_path", uploadPathValue);
+                                const resp = await api.fetchApi("/VideoAudioSimpleUploaderPW/trim_upload", { method: "POST", body });
                                 if (resp.status === 200) {
                                     const data = await resp.json();
-                                    let name = data.name;
-                                    if (data.subfolder) name = data.subfolder + "/" + name;
-                                    newLines.push(name);
-                                    if (entry.blobUrl) URL.revokeObjectURL(entry.blobUrl);
-                                    delete node._pwLocalFiles[localId];
-                                    changed = true;
+                                    if (data && data.name) {
+                                        newLines.push(data.name);
+                                        if (entry.blobUrl) URL.revokeObjectURL(entry.blobUrl);
+                                        delete node._pwLocalFiles[localId];
+                                        changed = true;
+                                    } else {
+                                        newLines.push(line);
+                                    }
                                 } else {
                                     newLines.push(line);
                                 }
