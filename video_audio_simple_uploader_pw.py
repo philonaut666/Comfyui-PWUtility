@@ -75,6 +75,22 @@ def _get_audio_bitrate(path):
     return None
 
 
+def _resolve_upload_dir(path_str):
+    path_str = (path_str or "").strip()
+    input_dir = folder_paths.get_input_directory()
+    if not path_str:
+        return input_dir, True
+    if os.path.isabs(path_str):
+        return path_str, False
+    return os.path.join(input_dir, path_str), True
+
+
+def _make_return_name(out_path, under_input, input_dir):
+    if under_input:
+        return os.path.relpath(out_path, input_dir).replace(os.sep, "/")
+    return out_path.replace(os.sep, "/")
+
+
 def _trim_video_ffmpeg(ffmpeg_path, input_path, output_path, start_sec, end_sec):
     duration = max(0.01, end_sec - start_sec)
     cmd = [
@@ -423,6 +439,30 @@ async def get_video_thumbnail(request):
         return web.Response(status=500, text=str(e))
 
 
+@PromptServer.instance.routes.get("/VideoAudioSimpleUploaderPW/media")
+async def serve_media(request):
+    try:
+        path = request.query.get("path", "")
+        if not path:
+            return web.Response(status=400, text="No path")
+
+        file_path = None
+        if os.path.isabs(path) and os.path.exists(path) and os.path.isfile(path):
+            file_path = path
+        else:
+            cand = os.path.join(folder_paths.get_input_directory(), path)
+            if os.path.exists(cand) and os.path.isfile(cand):
+                file_path = cand
+
+        if not file_path:
+            return web.Response(status=404, text="Not found")
+
+        return web.FileResponse(file_path)
+    except Exception as e:
+        print(f"[VideoAudioSimpleUploaderPW] media serve error: {e}")
+        return web.Response(status=500, text=str(e))
+
+
 @PromptServer.instance.routes.post("/VideoAudioSimpleUploaderPW/trim_upload")
 async def trim_upload_video(request):
     tmp_path = None
@@ -431,6 +471,38 @@ async def trim_upload_video(request):
         file = post.get("file")
         if file is None or not hasattr(file, "file"):
             return web.json_response({"error": "未提供文件"}, status=400)
+
+        filename = str(post.get("filename", "") or "").strip() or "media"
+        upload_path = str(post.get("upload_path", "") or "").strip()
+        mode = str(post.get("mode", "trim") or "trim").strip().lower()
+
+        filename = os.path.basename(filename)
+        base = os.path.splitext(filename)[0] or "media"
+        base = re.sub(r'[^\w\-. ]+', '_', base).strip() or "media"
+        src_ext = os.path.splitext(filename)[1].lower()
+
+        out_dir, under_input = _resolve_upload_dir(upload_path)
+        os.makedirs(out_dir, exist_ok=True)
+        input_dir = folder_paths.get_input_directory()
+
+        if mode == "save":
+            out_ext = src_ext or ".mp4"
+            out_name = f"{base}{out_ext}"
+            out_path = os.path.join(out_dir, out_name)
+            counter = 1
+            while os.path.exists(out_path):
+                out_name = f"{base}_{counter}{out_ext}"
+                out_path = os.path.join(out_dir, out_name)
+                counter += 1
+            with open(out_path, "wb") as f:
+                while True:
+                    chunk = file.file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            return_name = _make_return_name(out_path, under_input, input_dir)
+            return web.json_response({"name": return_name})
+
         try:
             start_sec = float(post.get("start", 0))
         except Exception:
@@ -439,19 +511,11 @@ async def trim_upload_video(request):
             end_sec = float(post.get("end", 0))
         except Exception:
             end_sec = 0.0
-        filename = str(post.get("filename", "") or "").strip() or "trimmed_media.mp4"
-        subfolder = str(post.get("subfolder", "") or "").strip()
 
         if end_sec <= start_sec:
             return web.json_response({"error": "剪辑区间无效"}, status=400)
 
-        filename = os.path.basename(filename)
-        base = os.path.splitext(filename)[0] or "trimmed_media"
-        base = re.sub(r'[^\w\-. ]+', '_', base).strip() or "trimmed_media"
-
-        src_ext = os.path.splitext(filename)[1].lower() or ".mp4"
         is_audio = src_ext in PW_AUDIO_EXTS
-
         if src_ext == ".aac":
             out_ext = ".mp3"
         elif is_audio:
@@ -459,7 +523,7 @@ async def trim_upload_video(request):
         else:
             out_ext = ".mp4"
 
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=src_ext)
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=src_ext or ".mp4")
         tmp_path = tmp_file.name
         with tmp_file as tmp:
             while True:
@@ -473,13 +537,6 @@ async def trim_upload_video(request):
             audio_bitrate = _get_audio_bitrate(tmp_path)
             if audio_bitrate:
                 audio_bitrate = max(32000, min(320000, audio_bitrate))
-
-        input_dir = folder_paths.get_input_directory()
-        if subfolder:
-            out_dir = os.path.join(input_dir, subfolder)
-            os.makedirs(out_dir, exist_ok=True)
-        else:
-            out_dir = input_dir
 
         out_name = f"{base}{out_ext}"
         out_path = os.path.join(out_dir, out_name)
@@ -498,9 +555,8 @@ async def trim_upload_video(request):
             pass
         tmp_path = None
 
-        rel = f"{subfolder}/{out_name}" if subfolder else out_name
-        rel = rel.replace(os.sep, "/")
-        return web.json_response({"name": rel})
+        return_name = _make_return_name(out_path, under_input, input_dir)
+        return web.json_response({"name": return_name})
     except Exception as e:
         try:
             if tmp_path and os.path.exists(tmp_path):
@@ -517,10 +573,10 @@ class VideoAudioSimpleUploaderPW:
         return {
             "required": {
                 "video_paths": ("STRING", {"default": "", "multiline": True}),
-                "input/": ("STRING", {
+                "upload_path": ("STRING", {
                     "default": "",
                     "multiline": False,
-                    "tooltip": "Upload sub-folder under input/ for uploaded videos"
+                    "tooltip": "Upload destination path (absolute, or relative to input/). Leave empty to use the input folder."
                 }),
             },
         }
@@ -539,6 +595,7 @@ class VideoAudioSimpleUploaderPW:
             return ("ℹ️ 当前节点中没有媒体。",)
 
         ready = 0
+        ready_paths = []
         problems = []
         for path in valid_paths:
             if path.startswith("local://"):
@@ -546,15 +603,20 @@ class VideoAudioSimpleUploaderPW:
                 continue
             if os.path.exists(path):
                 ready += 1
+                ready_paths.append(path)
                 continue
             candidate = os.path.join(input_dir, path)
             if os.path.exists(candidate):
                 ready += 1
+                ready_paths.append(candidate)
             else:
                 problems.append((path, "missing"))
 
         if not problems:
-            info = f"✅ 上传成功：{ready} / {total} 个媒体全部上传并就绪。"
+            lines = [f"✅ 上传成功：{ready} / {total} 个媒体全部上传并就绪。"]
+            for rp in ready_paths:
+                lines.append(f"  📁 {rp}")
+            info = "\n".join(lines)
         else:
             lines = [f"⚠️ 上传未完全成功：就绪 {ready} / 共 {total}。"]
             for path, kind in problems:
