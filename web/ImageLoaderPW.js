@@ -1,9 +1,19 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
-// --- 辅助函数：生成正确的 ComfyUI 图片预览 URL ---
+// --- 辅助函数：判断是否为绝对路径 ---
+function isAbsPathPW(p) {
+    return /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(p);
+}
+
+// --- 辅助函数：生成正确的图片预览 URL ---
 function getViewUrl(path) {
     if (!path) return "";
+    // 绝对路径（input 目录之外）使用自定义预览端点
+    if (isAbsPathPW(path)) {
+        return `/ImageLoaderPW/view?path=${encodeURIComponent(path)}`;
+    }
+    // input 目录内的相对路径
     if (path.includes("/")) {
         const parts = path.split("/");
         const fname = parts.pop();
@@ -467,7 +477,7 @@ function openImageEditorPW(displayName, subfolder, onCropSaved, imageUrlOrDataUr
     });
 }
 
-// 注册拦截器：在运行工作流前，将所有的本地预览图片正式上传到服务器
+// 注册拦截器：在运行工作流前，将所有的本地预览图片正式上传到 upload_path 指定的目录
 if (!window._pwQueuePromptHooked) {
     window._pwQueuePromptHooked = true;
     const originalAppQueuePrompt = app.queuePrompt;
@@ -484,8 +494,8 @@ if (!window._pwQueuePromptHooked) {
                 const paths = pathsWidget.value.split('\n').map(s => s.trim()).filter(s => s);
                 let updated = false;
 
-                const subfolderWidget = graphNode.widgets.find(w => w.name === "input/");
-                const currentSubfolder = subfolderWidget ? subfolderWidget.value.trim() : "";
+                const uploadPathWidget = graphNode.widgets.find(w => w.name === "upload_path");
+                const currentUploadPath = uploadPathWidget ? uploadPathWidget.value.trim() : "";
 
                 for (let i = 0; i < paths.length; i++) {
                     const path = paths[i];
@@ -510,28 +520,27 @@ if (!window._pwQueuePromptHooked) {
                                 ctx.drawImage(img, 0, 0);
                                 const pngDataUrl = canvas.toDataURL("image/png");
                                 
-                                const res = await fetch(pngDataUrl);
-                                const blob = await res.blob();
-                                
                                 let fileName = pendingImg.originalName;
                                 if (!fileName.toLowerCase().endsWith(".png")) {
                                     fileName = fileName.replace(/\.[^/.]+$/, "") + ".png";
                                 }
-                                
-                                const file = new File([blob], fileName, { type: "image/png" });
 
-                                const body = new FormData();
-                                body.append("image", file);
-                                if (currentSubfolder) {
-                                    body.append("subfolder", currentSubfolder);
-                                }
-                                body.append("overwrite", "true");
-
-                                const uploadResp = await api.fetchApi("/upload/image", { method: "POST", body });
+                                // 使用自定义上传端点，支持任意目标路径
+                                const uploadResp = await fetch("/ImageLoaderPW/upload", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                        filename: fileName,
+                                        image: pngDataUrl,
+                                        target_dir: currentUploadPath,
+                                        overwrite: true
+                                    })
+                                });
                                 if (uploadResp.status === 200) {
                                     const data = await uploadResp.json();
-                                    let realPath = data.name;
-                                    if (data.subfolder) realPath = data.subfolder + "/" + data.name;
+                                    if (data.error) throw new Error(data.error);
+                                    // input 目录内使用相对路径，之外使用绝对路径
+                                    const realPath = data.input_relative ? data.input_relative : data.path;
 
                                     paths[i] = realPath;
                                     updated = true;
@@ -845,7 +854,6 @@ app.registerExtension({
 
         // ==========================================
         // [FIX] 基于 DOM 测量的布局指标与高度钳制
-        // 解决刷新浏览器后 last_y 未定导致画廊溢出节点面板的问题
         // ==========================================
         function getGalleryMetrics() {
             const isV3 = checkIsV3();
@@ -853,7 +861,6 @@ app.registerExtension({
             let galleryY = galleryWidget.last_y || 40;
             let nodeH = (node.size && node.size[1]) ? node.size[1] : 0;
 
-            // 在新版前端中，直接测量 DOM 的真实位置，避免 last_y 不准
             if (isV3 && v3NodeElement) {
                 try {
                     const nodeRect = v3NodeElement.getBoundingClientRect();
@@ -949,7 +956,6 @@ app.registerExtension({
                 app.graph.setDirtyCanvas(true, true);
             }
 
-            // [FIX] 使用 DOM 测量钳制高度
             clampContainerHeight();
 
             isLayouting = false;
@@ -1141,8 +1147,8 @@ app.registerExtension({
 
                 cropBtn.onclick = (e) => {
                     e.stopPropagation();
-                    const subfolderWidget = node.widgets.find(w => w.name === "input/");
-                    const subfolderVal = subfolderWidget ? subfolderWidget.value.trim() : "";
+                    const uploadPathWidget = node.widgets.find(w => w.name === "upload_path");
+                    const uploadPathVal = uploadPathWidget ? uploadPathWidget.value.trim() : "";
                     
                     let imageSource = null;
                     if (isLocal && pendingImg) {
@@ -1153,7 +1159,7 @@ app.registerExtension({
                     
                     const displayName = isLocal ? (pendingImg?.originalName || "local_image") : path.split('/').pop();
 
-                    openImageEditorPW(displayName, subfolderVal, (croppedDataUrl) => {
+                    openImageEditorPW(displayName, uploadPathVal, (croppedDataUrl) => {
                         const newId = `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
                         if (!node._pendingImages) node._pendingImages = {};
                         
@@ -1161,7 +1167,7 @@ app.registerExtension({
                             id: newId,
                             dataUrl: croppedDataUrl,
                             originalName: `cropped_${displayName}`,
-                            subfolder: subfolderVal 
+                            uploadPath: uploadPathVal 
                         };
                         
                         const currentPaths = (pathsWidget?.value || "").split("\n").map(s => s.trim()).filter(s => s);
@@ -1266,8 +1272,8 @@ app.registerExtension({
         node._refreshGallery = () => refreshGallery();
 
         async function handleFiles(files) {
-            const subfolderWidget = node.widgets.find(w => w.name === "input/");
-            const subfolderVal = subfolderWidget ? subfolderWidget.value.trim() : "";
+            const uploadPathWidget = node.widgets.find(w => w.name === "upload_path");
+            const uploadPathVal = uploadPathWidget ? uploadPathWidget.value.trim() : "";
 
             if (!node._pendingImages) node._pendingImages = {};
 
@@ -1286,7 +1292,7 @@ app.registerExtension({
                     id: localId,
                     dataUrl: dataUrl,
                     originalName: file.name,
-                    subfolder: subfolderVal
+                    uploadPath: uploadPathVal
                 };
                 
                 newLocalPaths.push(`local://${localId}`);
@@ -1426,7 +1432,6 @@ app.registerExtension({
                 }, 100);
             };
         }
-        // [FIX] 延长并增加延迟重同步，覆盖刷新后布局最终确定的时机
         [200, 500, 900, 1500, 2500].forEach(delay => setTimeout(() => {
             updateLayout();
             clampContainerHeight();
