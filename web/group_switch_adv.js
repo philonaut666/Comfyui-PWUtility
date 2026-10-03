@@ -44,6 +44,19 @@ function t(key) {
     return i18n[getLocale()][key] || i18n['en'][key] || key;
 }
 
+// ==========================================
+// 【核心修复】：安全深拷贝函数
+// 彻底剥离 Vue Proxy 响应式包装，防止 ComfyUI 0.38.0+ 的 structuredClone 报错
+// ==========================================
+function safeClone(obj) {
+    if (obj === null || typeof obj !== 'object') return obj;
+    try {
+        return JSON.parse(JSON.stringify(obj));
+    } catch (e) {
+        return Array.isArray(obj) ? [] : {};
+    }
+}
+
 function reduceNodesDepthFirst(nodeOrNodes, reduceFn, reduceTo) {
     const nodes = Array.isArray(nodeOrNodes) ? nodeOrNodes : [nodeOrNodes];
     const stack = nodes.map((node) => ({ node }));
@@ -118,6 +131,24 @@ function getNodesInGroupGlobal(groupInfo) {
     }
 
     return children.filter((c) => c instanceof LGraphNode);
+}
+
+// ==========================================
+// 运行时状态隔离：使用全局 WeakMap 存储不可被 structuredClone 序列化的对象
+// (包括 DOM 引用, 函数, WeakMap, 包含复杂对象的 Map)
+// ==========================================
+const GSA_RUNTIME_STATE = new WeakMap();
+
+function getRuntime(node) {
+    if (!GSA_RUNTIME_STATE.has(node)) {
+        GSA_RUNTIME_STATE.set(node, {
+            groupReferences: new WeakMap(),
+            lockedGroupRefs: new Map(),
+            evtHandler: null,
+            uiElement: null
+        });
+    }
+    return GSA_RUNTIME_STATE.get(node);
 }
 
 class GroupSwitchService {
@@ -216,10 +247,12 @@ app.registerExtension({
         if (LGraphGroupClass && !LGraphGroupClass.prototype._pwHooked) {
             const origSerialize = LGraphGroupClass.prototype.serialize;
             LGraphGroupClass.prototype.serialize = function () {
-                const info = origSerialize
+                let info = origSerialize
                     ? origSerialize.apply(this, arguments)
                     : { title: this.title, bounding: this.bounding, color: this.color, font_size: this.font_size };
 
+                // 确保 Group 序列化出来的也是纯对象，防止 Proxy 污染
+                info = safeClone(info);
                 if (this._pwStableId) info._pwStableId = this._pwStableId;
 
                 return info;
@@ -260,18 +293,16 @@ app.registerExtension({
             this.properties.defaultGroup = this.properties.defaultGroup || '';
             this.properties.showNavigate = this.properties.showNavigate !== false;
 
-            this.groupReferences = new WeakMap();
-            this._lockedGroupRefs = new Map();
+            const rt = getRuntime(this);
 
             this.size = [300, 400];
-
             this.createMinimalUI();
 
-            this._evtHandler = (e) => {
+            rt.evtHandler = (e) => {
                 if (e.detail && e.detail.sourceId !== this._gsaId) this.refreshWidgets();
             };
 
-            window.addEventListener('group-mute-changed', this._evtHandler);
+            window.addEventListener('group-mute-changed', rt.evtHandler);
 
             return r;
         };
@@ -286,9 +317,12 @@ app.registerExtension({
         nodeType.prototype.onRemoved = function () {
             GSA_SERVICE.removeNode(this);
 
-            if (this._evtHandler) {
-                window.removeEventListener('group-mute-changed', this._evtHandler);
+            const rt = getRuntime(this);
+            if (rt.evtHandler) {
+                window.removeEventListener('group-mute-changed', rt.evtHandler);
             }
+            
+            GSA_RUNTIME_STATE.delete(this);
 
             onRemoved?.apply(this, arguments);
         };
@@ -355,16 +389,19 @@ app.registerExtension({
 
             this.addDOMWidget("gsa_ui", "div", container);
 
-            this.ui = container;
-            this.ui.querySelector('#gsa-btn-set').onclick = () => this.showSettings();
-            this.ui.querySelector('#gsa-btn-ref').onclick = () => this.refreshWidgets();
+            const rt = getRuntime(this);
+            rt.uiElement = container;
+
+            container.querySelector('#gsa-btn-set').onclick = () => this.showSettings();
+            container.querySelector('#gsa-btn-ref').onclick = () => this.refreshWidgets();
 
             this.updateModeText();
             this.refreshWidgets();
         };
 
         nodeType.prototype.updateModeText = function () {
-            const el = this.ui?.querySelector('#gsa-mode');
+            const rt = getRuntime(this);
+            const el = rt.uiElement?.querySelector('#gsa-mode');
             if (el) el.textContent = this.properties.switchMode === 'bypass' ? t('modeBypass') : t('modeDisable');
         };
 
@@ -460,9 +497,6 @@ app.registerExtension({
                 }
             }
 
-            // =====================================================
-            // 锁定组永远保留在当前面板中，不受过滤器影响。
-            // =====================================================
             const lockedIds = new Set(
                 (this.properties.groups || [])
                     .filter(g => g.locked)
@@ -515,8 +549,9 @@ app.registerExtension({
             const allGroups = this.getAllGroupsFlat();
             const idMap = new Map(allGroups.map(g => [g._pwUniqueId, g]));
 
-            if (!this._lockedGroupRefs) {
-                this._lockedGroupRefs = new Map();
+            const rt = getRuntime(this);
+            if (!rt.lockedGroupRefs) {
+                rt.lockedGroupRefs = new Map();
             }
 
             const findBySnapshot = (title, path) =>
@@ -524,13 +559,8 @@ app.registerExtension({
 
             for (const cfg of this.properties.groups) {
 
-                // =====================================================
-                // 锁定组强化跟踪：
-                // 即使组的稳定 ID 发生异常变化，只要原始 group 对象还在，
-                // 也可以通过运行时引用重新找回它。
-                // =====================================================
-                if (cfg.locked && this._lockedGroupRefs.has(cfg.group_name)) {
-                    const ref = this._lockedGroupRefs.get(cfg.group_name);
+                if (cfg.locked && rt.lockedGroupRefs.has(cfg.group_name)) {
+                    const ref = rt.lockedGroupRefs.get(cfg.group_name);
                     const refMatch = allGroups.find(g => g._pwOriginalGroup === ref);
 
                     if (refMatch) {
@@ -551,7 +581,7 @@ app.registerExtension({
                     cfg.group_path = currentGroup._pwPath;
 
                     if (cfg.locked) {
-                        this._lockedGroupRefs.set(cfg.group_name, currentGroup._pwOriginalGroup);
+                        rt.lockedGroupRefs.set(cfg.group_name, currentGroup._pwOriginalGroup);
                     }
                 }
 
@@ -586,11 +616,12 @@ app.registerExtension({
         };
 
         nodeType.prototype.refreshWidgets = function () {
-            const list = this.ui?.querySelector('#gsa-list');
+            const rt = getRuntime(this);
+            const list = rt.uiElement?.querySelector('#gsa-list');
             if (!list) return;
 
-            if (!this._lockedGroupRefs) {
-                this._lockedGroupRefs = new Map();
+            if (!rt.lockedGroupRefs) {
+                rt.lockedGroupRefs = new Map();
             }
 
             this.repairBrokenLinks();
@@ -620,13 +651,12 @@ app.registerExtension({
                 }
 
                 if (cfg.locked) {
-                    this._lockedGroupRefs.set(cfg.group_name, group._pwOriginalGroup);
+                    rt.lockedGroupRefs.set(cfg.group_name, group._pwOriginalGroup);
                 }
             });
 
             const validIds = new Set(groups.map(g => g._pwUniqueId));
 
-            // 锁定组即使当前不可见，也保留配置，防止跟踪丢失。
             this.properties.groups = this.properties.groups.filter(c => {
                 return validIds.has(c.group_name) || c.locked;
             });
@@ -734,8 +764,9 @@ app.registerExtension({
 
                 currentCfg.locked = !currentCfg.locked;
 
-                if (!this._lockedGroupRefs) {
-                    this._lockedGroupRefs = new Map();
+                const rt = getRuntime(this);
+                if (!rt.lockedGroupRefs) {
+                    rt.lockedGroupRefs = new Map();
                 }
 
                 if (currentCfg.locked) {
@@ -743,10 +774,10 @@ app.registerExtension({
                     const ref = currentGroup?._pwOriginalGroup || group._pwOriginalGroup;
 
                     if (ref) {
-                        this._lockedGroupRefs.set(currentCfg.group_name, ref);
+                        rt.lockedGroupRefs.set(currentCfg.group_name, ref);
                     }
                 } else {
-                    this._lockedGroupRefs.delete(currentCfg.group_name);
+                    rt.lockedGroupRefs.delete(currentCfg.group_name);
                 }
 
                 this.refreshWidgets();
@@ -1642,8 +1673,10 @@ app.registerExtension({
         nodeType.prototype.onSerialize = function (info) {
             const data = origOnSerialize?.apply?.(this, arguments);
 
-            info.groups = this.properties.groups || [];
-            info.groupOrder = this.properties.groupOrder || [];
+            // 【核心修复】：强制深拷贝，彻底剥离 Vue Proxy 响应式包装，防止 structuredClone 报错
+            info.groups = safeClone(this.properties.groups || []);
+            info.groupOrder = safeClone(this.properties.groupOrder || []);
+            
             info.switchMode = this.properties.switchMode || 'bypass';
             info.matchMode = this.properties.matchMode || 'none';
             info.selectedColorFilter = this.properties.selectedColorFilter || '';
@@ -1659,8 +1692,14 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function (info) {
             origOnConfigure?.apply?.(this, arguments);
 
-            if (info.groups && Array.isArray(info.groups)) this.properties.groups = info.groups;
-            if (info.groupOrder && Array.isArray(info.groupOrder)) this.properties.groupOrder = info.groupOrder;
+            // 【核心修复】：接收数据时强制深拷贝，切断与 Vue Proxy 的联系，防止污染 this.properties
+            if (info.groups && Array.isArray(info.groups)) {
+                this.properties.groups = safeClone(info.groups);
+            }
+            if (info.groupOrder && Array.isArray(info.groupOrder)) {
+                this.properties.groupOrder = safeClone(info.groupOrder);
+            }
+            
             if (info.switchMode !== undefined) this.properties.switchMode = info.switchMode;
             if (info.matchMode !== undefined) this.properties.matchMode = info.matchMode;
             if (info.selectedColorFilter !== undefined) this.properties.selectedColorFilter = info.selectedColorFilter;
@@ -1669,8 +1708,9 @@ app.registerExtension({
             if (info.defaultGroup !== undefined) this.properties.defaultGroup = info.defaultGroup;
             if (info.showNavigate !== undefined) this.properties.showNavigate = info.showNavigate;
 
-            if (!this._lockedGroupRefs) {
-                this._lockedGroupRefs = new Map();
+            const rt = getRuntime(this);
+            if (!rt.lockedGroupRefs) {
+                rt.lockedGroupRefs = new Map();
             }
 
             const migrateId = (oldId, allGroups) => {
@@ -1721,7 +1761,7 @@ app.registerExtension({
                 this.properties.groupOrder = this.properties.groupOrder.map(id => migrateId(id, allGroups));
             }
 
-            if (this.ui) {
+            if (rt.uiElement) {
                 setTimeout(() => {
                     this.updateModeText();
                     this.refreshWidgets();
