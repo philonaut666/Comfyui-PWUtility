@@ -717,14 +717,29 @@ app.registerExtension({
             
             const setHidden = (widget, isHidden) => {
                 if (!widget) return;
-                Object.defineProperty(widget, 'hidden', {
-                    get: () => isHidden,
-                    set: () => {},
-                    configurable: true
-                });
-                widget.computeSize = function() {
-                    return isHidden ? [0, 0] : [this.width || 200, 20];
-                };
+
+                // 首次处理时记录原始 type / computeSize，供恢复显示时使用
+                if (widget.__pwOrigType === undefined) {
+                    widget.__pwOrigType = widget.type;
+                    widget.__pwOrigComputeSize = widget.computeSize;
+                }
+
+                if (isHidden) {
+                    // 标准隐藏方式（与 VideoLoaderPW / BoolGroupSwitch 及本节点 image_paths 一致）：
+                    // type="hidden" 让前端真正跳过绘制；[0,-4] 抵消每个 widget 的 +4px 布局间距
+                    widget.type = "hidden";
+                    widget.hidden = true;
+                    widget.computeSize = () => [0, -4];
+                } else {
+                    widget.type = widget.__pwOrigType;
+                    widget.hidden = false;
+                    if (widget.__pwOrigComputeSize) {
+                        widget.computeSize = widget.__pwOrigComputeSize;
+                    } else {
+                        delete widget.computeSize;
+                    }
+                }
+
                 if (widget.element) {
                     widget.element.style.display = isHidden ? "none" : "";
                 }
