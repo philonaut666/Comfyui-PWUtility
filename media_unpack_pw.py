@@ -65,7 +65,13 @@ class MediaUnpackPW:
                                 results[i] = tensor
                         except Exception as e:
                             print(f"[MediaUnpackPW] Failed to load original image {path}: {e}")
-        
+                    else:
+                        # 内存资产回退：Media Repack PW 替换后的图片不落盘（path 为空），
+                        # 直接使用 pack 中的原分辨率 tensor_full
+                        tensor_full = img_item.get("tensor_full")
+                        if isinstance(tensor_full, torch.Tensor) and tensor_full.numel() > 0:
+                            results[i] = tensor_full
+
         # ==========================================
         # 2. 处理视频 video_imgs0~video_imgs2 和 video_audio0~video_audio2
         # ==========================================
