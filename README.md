@@ -130,6 +130,14 @@ split_info拥有最高优先级，当有分割信息输入时，会忽略该节�
 也可以选择直接接入图片、音频等，图片可提取图片中的prompt和seed值(如果有的话)。图片支持image list或者image batch,通过index获取其中的第几张图。
 利用Comfyui-impact-pack节点中的Queue Trigger，用count控制index可实现依次读入的批量生成。
 
+## Media repack
+对pack中的资产进行替换。由接口输入的对应的资产会被新输入的取代。其它资产保持原样。同时不会进行存盘，纯内存操作。
+
+## Media Resize
+对pack中的image和video进行resize操作。将统一缩放或者crop或者pad到相同尺寸，有利于避免参考图尺寸过大占用过多内存。
+video的开关若关闭，则仅对image进行resize，video保持原样。img_compression对video从来是不起作用的。
+audio会保持原样。
+
 ## License
 
 MIT
